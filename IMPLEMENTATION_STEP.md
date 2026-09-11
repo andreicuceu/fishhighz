@@ -1,152 +1,272 @@
-# Step 01: revise the package layout and validation workflow
+# Step 02: add quick reference validation and close review findings
 
-Revision: 4 (2026-09-11).
-State: changes requested after review of revision 3; ready for user dispatch.
+Revision: 3 (2026-09-11).
+State: revision implemented and independently reviewed; no outstanding findings,
+awaiting the user's next-step instruction.
 Implementation root: `lib/fishhighz`.
 
-Read [AGENTS.md](AGENTS.md), the
-[roadmap](../../FISHHIGHZ_IMPLEMENTATION_PLAN.md), and the
-[design](../../FISHHIGHZ_DESIGN.md). This is a revision of the existing scaffold
-step, not a new implementation stage. Preserve working behavior and complete
-only the changes and validation below.
+Review outcome: [revision-3 review](reviews/step-02-review-r3.md) passed. The
+requirements below are retained as the reviewed assignment, not a request to
+repeat implementation or validation. No Step 03 plan has been drafted.
 
-## Reviewed starting point
+Read [AGENTS.md](AGENTS.md), the [roadmap](../../FISHHIGHZ_IMPLEMENTATION_PLAN.md),
+the [design](../../FISHHIGHZ_DESIGN.md), the
+[revision-1 review](reviews/step-02-review-r1.md), and `../lyaforecast/AGENTS.md`.
+Implement only this revision when the user dispatches it; report and stop for
+review. Do not start Step 03.
 
-The revision-3 scaffold and [implementation report](reviews/step-01.md) were
-reviewed. All ten reported source/artifact hashes matched. The reviewer reran the
-check script from outside the checkout (one pytest test, Ruff lint, and format
-verification passed), installed both reported wheels in fresh offline environments,
-and verified isolated imports and source-archive runner permissions.
-See [review findings and evidence](reviews/step-01-review-r3.md).
+User decision for this revision: run quick checks by default. Execute the real
+full suite only when the user explicitly asks for that run. A general request
+to implement, test, review, or finish a step does not authorize full execution.
 
-Two items remain before this step can be accepted:
+## Starting point and scope
 
-- **User request:** use `fishhighz/` directly under the package repository root,
-  removing the extra `src/` directory. The previous layout followed revision 3
-  correctly; this is a changed preference, not a defect in that implementation.
-- **Reviewer finding:** repeated execution of the validation helper can reuse a
-  previous wheel installation. `python -m venv` does not empty an existing
-  environment, and pip can skip a changed wheel with the same version. Artifact
-  selection by the first glob result can also pick an older build if several
-  artifacts are present. The revision must eliminate this stale-evidence risk.
+The revision-1 implementation and [handoff](reviews/step-02.md) were reviewed.
+The reviewer verified the five reported implementation hashes and acceptance
+manifest hash, reran all 13 portable tests and Ruff checks, and checked the saved
+seven-case bundle plus repeat. Independent inspection confirmed that its stored
+grids/redshifts agree with configurations and both tool snapshots are intact.
+No real forecast was rerun during review.
 
-The current wheels themselves passed independent fresh-install checks. There
-is no request to redesign the scaffold or introduce scientific functionality.
+Preserve the existing working capture and its evidence at
+`.validation/baseline/20260911T184946Z-7a6a795d/`. Revise the maintained controller,
+worker only as needed, tests, README, and implementation report. Fix the four
+review findings below and add a quick validation mode. Reuse existing functions;
+avoid a new workflow framework or broad rewrite of the controller.
 
-## Required revision work
+Do not implement FishHighz numerics, add runtime scientific dependencies, modify
+neighboring packages/environments, alter authoritative science inputs, or commit
+and push. Preserve the accepted direct package layout and import checks. Leave
+planning/governance updates to the planning agent unless the user instructs
+otherwise. Retain the revision-1 handoff as `reviews/step-02-r1.md` before updating
+`reviews/step-02.md` for this revision.
 
-### 1. Move to the direct package layout
+## 1. Introduce explicit validation levels
 
-The resulting maintained structure should include:
+Implement this command contract with `--suite quick` as the capture default.
+Full execution requires an explicit `--suite full` option and, for agents, the
+user's explicit request. Preserve old bundle read/check compatibility, not the
+old expensive capture default:
 
-```text
-lib/fishhighz/
-    fishhighz/
-        __init__.py
-    tests/
-        test_import.py
-    scripts/
-        check.sh
-    pyproject.toml
-    MANIFEST.in
-    README.md
-    .gitignore
-    AGENTS.md
-    IMPLEMENTATION_STEP.md
-    reviews/
+```bash
+# Ordinary development checks: synthetic tests and lint only.
+./scripts/check.sh
+
+# Quick scientific reference check: exactly one full-resolution 15x2pt run.
+python scripts/lyaforecast_baseline.py capture --suite quick \
+  --baseline .validation/baseline/<existing-full-bundle> \
+  --reference-checkout ../lyaforecast \
+  --python ../lyaforecast/.validation/dev-env/bin/python
+
+# Complete reference capture: run only when explicitly requested by the user.
+python scripts/lyaforecast_baseline.py capture --suite full \
+  --reference-checkout ../lyaforecast \
+  --python ../lyaforecast/.validation/dev-env/bin/python
+
+# Offline integrity/result checks; never launch scientific workers.
+python scripts/lyaforecast_baseline.py check <bundle>
+python scripts/lyaforecast_baseline.py check <bundle> --require-suite full
 ```
 
-Move the existing minimal module into `fishhighz/__init__.py`, preserving its
-behavior. Remove the obsolete `src/` tree after verifying it contains only the
-moved source and generated package metadata/caches. If unexpected files are
-present, preserve them and report the discrepancy. Do not broadly delete other
-builds, environments, or review evidence to accomplish the move.
+### Quick mode
 
-Update setuptools discovery in `pyproject.toml` to use the repository root and
-explicitly include only `fishhighz` and its package descendants. Disable implicit
-namespace discovery or otherwise ensure tests, scripts, reviews, and generated
-validation directories cannot become import packages. Keep installed import name
-`fishhighz`, version `0.1.0.dev0`, Python >=3.11, empty runtime dependencies, and
-the existing small `dev` extra. No new scientific modules or dependencies.
+- Run only `lya_qso_lbg_lae_15x2pt.ini`, exactly once in a fresh process. Do not
+  run a second repeat or compute other cases. Preserve its complete scientific
+  settings, including CAMB, redshift/magnitude bins, k/mu grids, and all 15 pairs.
+- Require an explicit saved full baseline and validate it before launching the
+  forecast. Reject quick/incomplete/invalid bundles as baseline inputs.
+- Before the expensive run, check compatibility of the relevant reference
+  source, original 15x2pt INI, resolved input bytes, Python version, scientific
+  library versions, and thread settings. Compare content identities and relevant
+  environment fields, allowing location-only differences. Controller changes,
+  artifact directory names, and Python executable relocation alone must not make
+  an otherwise identical science baseline incompatible. Record the exact fields
+  compared; report mismatches and explain when a new full capture would be
+  needed. Never fall back to full mode automatically. Complete independent quick
+  checks and report any blocked comparison without launching a full capture.
+- Compare all fresh results with the saved full bundle's primary 15x2pt result,
+  checking keys/order, shapes/dtypes, and numbers at `rtol=1e-10`, `atol=1e-12`.
+  Retain fresh results and failure evidence when the comparison fails. Never
+  report success merely because numbers are finite.
+- Preserve provenance, configs, inputs, outputs, logs, timings, and source/input
+  checks for this one case. Do not run seven resolution workers just to prepare
+  one case. Lightweight validation of the authoritative inventory is fine.
+- Save enough baseline comparison evidence in the new quick bundle to check it
+  after relocation without the external baseline directory. Record the original
+  full manifest digest and the copied comparison payload's digest. Distinguish
+  validating the full baseline at capture time from later checking the embedded
+  comparison evidence; do not claim to revalidate uncopied full-bundle artifacts.
 
-Update the root-level egg-info ignore rule and any layout-dependent build,
-manifest, README, or validation references. Keep the executable check runner and
-single-source version definition. Review source-distribution and wheel contents;
-metadata, tests, and the documented runner may be in the source archive, but only
-the intended import package and distribution metadata belong in the wheel.
+### Full mode and explicit coverage
 
-Reinstall the editable package after the move so its installed mapping no longer
-points to `src`. Do not rely on running Python from the repository root: the new
-layout makes an uninstalled checkout importable there, which can hide packaging
-errors. Preserve isolated subprocess imports from outside the checkout without
-PYTHONPATH or sys.path workarounds.
+Full mode retains seven primary cases and one independent 15x2pt repeat, each in
+a fresh subprocess, with all revision-1 preservation, serialization, numerical,
+configuration, and repeat checks. Required primary cases remain:
 
-### 2. Make repeated validation test the current build
+| INI | Selected pairs |
+| --- | ---: |
+| `lbg_lae_3x2pt.ini` | 3 |
+| `lya_lbg_lae_3x2pt.ini` | 3 |
+| `lya_lbg_lae_6x2pt.ini` | 6 |
+| `lya_qso_2x2pt.ini` | 2 |
+| `lya_qso_lbg_lae_4x2pt.ini` | 4 |
+| `lya_qso_lbg_lae_8x2pt.ini` | 8 |
+| `lya_qso_lbg_lae_15x2pt.ini` | 15 |
 
-Update the retained validation helper under `.validation/`, or replace it with
-an equally reproducible sequence recorded in the report. Keep this a small
-validation aid rather than introducing a packaging test framework.
+Record suite identity and expected coverage explicitly in new versioned
+manifests. Derive permitted inventories from the supported suite, not arbitrary
+manifest counts. A valid quick bundle must say quick/one case; it cannot satisfy
+`--require-suite full`. A partially completed full capture cannot be relabeled
+as a successful quick run. Reject conflicting suite, inventory, role, and repeat
+records with useful errors.
 
-- Give each run a new validation-output directory and new wheel-install
-  environments, including a separate environment for the wheel rebuilt from the
-  source distribution. Environments must have no system site packages or dev
-  extras. Do not treat forced reinstallation into an old environment as proof of
-  a clean install.
-- Produce/select artifacts in fresh run-specific output directories. Identify the
-  wheel and source archive from that build explicitly and fail on unexpected
-  multiplicity; do not select the first match from a directory containing older
-  runs. Build from a clean source staging directory if needed to avoid stale
-  build/egg-info contents. Validate the resulting contents against the new layout.
-- Install the exact selected wheel with `--no-deps`, clearing PYTHONPATH and
-  importing with isolated Python from an unrelated working directory. Confirm
-  site-packages origin and matching installed metadata. Compare the installed
-  package file bytes with the selected wheel payload so the evidence identifies
-  the artifact actually exercised, not just its version number.
-- Repeat the same checks for the wheel rebuilt from a separately extracted source
-  archive. Avoid any dependence on adjacent checkout files.
-- Retain logs, artifact paths/hashes, and helper/probe sources for each run.
-  Preserve the previous revision's evidence; do not overwrite its final logs or
-  artifacts. Run the updated workflow twice without manual cleanup, and demonstrate
-  that both runs use distinct fresh environments and their own exact artifacts.
+Retain read/check support for the existing version-1 full bundle so it remains
+usable as a baseline. Apply all checks supported by its recorded evidence;
+identify new preservation fields that old captures lack without inventing them
+or modifying old artifacts. New captures must include the complete revised
+requirements. Keep compatibility handling small and explicit.
 
-### 3. Refresh the handoff report
+### Runtime and cadence
 
-Before replacing `reviews/step-01.md`, preserve its existing revision-3 contents
-as `reviews/step-01-r3.md` unless already archived. Keep the reviewer's
-`reviews/step-01-review-r3.md` unchanged. Update the main handoff report to identify
-revision 4, address both findings, and record the current evidence and remaining
-limitations. Hash source/configuration/tests and the actual validation helper and
-probe used, along with built artifacts. Do not hash a report into itself.
+Keep cases serial and single-threaded in this revision. Quick mode is expected
+to take about two minutes, based on the recorded 134-second 15x2pt case, while
+ordinary tests took 10.63 seconds in review. Measure actual revised timings;
+these estimates are not hard performance assertions.
 
-## Acceptance assessments
+Two concurrent workers could shorten full-suite wall time, but do not reduce
+work and add memory/process-management costs. Reduced grids barely address the
+observed initialization bottleneck. Do not add parallel execution, change grids,
+or cache/share CAMB initialization in this revision.
 
-| Check | Required result |
-| --- | --- |
-| Layout and discovery | `fishhighz/__init__.py` is directly under the repository root; no obsolete `src/` remains. Wheel/source-archive contents reflect the new layout, and package discovery excludes unrelated directories. |
-| Editable development workflow | Reinstall the current editable package in the development environment. Run the executable `scripts/check.sh` from the repository root and from an unrelated directory. Pytest, Ruff lint, and Ruff format verification all pass. |
-| Fresh-process import | The existing quiet-import test passes outside the checkout with isolated Python, no PYTHONPATH injection, and neither Vega nor lyaforecast imported. Verify the editable install resolves to the new package directory. |
-| Built-wheel independence | Install the exact newly built wheel with `--no-deps` into a fresh environment. Outside the checkout, verify quiet import, site-packages origin, installed metadata, and payload agreement with that wheel. |
-| Source distribution completeness | Independently extract the new source archive, build its wheel with declared isolated build requirements, and repeat fresh installation/import/payload checks. Confirm the documented check runner is included and executable. |
-| Repeat-run reliability | Run the updated validation workflow twice with unchanged source, without manual cleanup. Logs identify distinct new environments and output directories and exact artifacts for each run. Neither run skips installation because of an existing FishHighz installation. Byte-identical wheel hashes across builds are not required. |
-| Scope and evidence | Updated report addresses both findings and includes commands, versions, exit statuses, artifacts, source/helper hashes, and limitations. Earlier evidence remains identifiable. No scientific implementation, sibling edit, invented metadata, commit, or publication. |
+Run ordinary tests after local edits and quick mode when checking the reference
+capture/integration path. Do not execute the real full suite at step completion,
+review checkpoints, after failures, or after relevant changes unless the user
+explicitly requests it. Do not ask for full execution routinely or treat an
+unrequested full run as a prerequisite for a review handoff. Record it as not run
+under the user-selected validation policy. A request for one full run does not
+authorize subsequent full reruns.
 
-These retain the original installation/import checks while explicitly guarding
-against source shadowing and stale builds during the layout migration. Use small
-behavioral assessments; do not add tests that merely repeat packaging constants.
-No multi-version Python matrix or scientific baseline is required for this step.
+Portable synthetic tests may exercise full-mode orchestration without launching
+real forecasts; offline checking of saved full bundles is also part of the quick
+workflow. Future steps should reuse accepted reference evidence and run relevant
+quick FishHighz tests/comparisons. An unchanged lyaforecast rerun alone is not a
+test of newly implemented FishHighz numerics.
 
-## Boundaries and completion
+## 2. Close the four review findings
 
-Only the scaffold, its development/validation aids, and its handoff report are in
-scope. Do not implement forecasting APIs, add numerical runtime dependencies,
-run DESI-2 forecasts, initialize Git, commit, push, publish, or advance the roadmap.
-NumPy/Numba-friendly kernels and 2D P(k,mu) remain the agreed later numerical path.
+### A. Validate tool snapshots and required shared evidence
 
-The planning agent has updated the design/roadmap/AGENTS.md for the layout choice;
-leave those documents and this plan unchanged during implementation unless the
-user requests another planning revision. If an environment restriction prevents
-a required check, retain the error and mark the assessment incomplete.
+The reviewer appended a comment to the copied controller snapshot without
+updating any checksum; the checker still passed. Validate both required tool
+snapshot files against the digests recorded in `tool.json`. Require the shared
+artifact inventory rather than trusting whichever keys happen to be present.
+Reuse containment validation for paths reached through nested metadata. Missing,
+corrupted, or out-of-bundle snapshots must fail with a specific diagnostic.
 
-Complete the implementation and all assessments, write the handoff report, and
-stop for the user's review. Passing checks is not user acceptance and does not
-authorize another step.
+### B. Use the same worker checks for every case role
+
+The checker accepted a repeat with exit code 17 and a failed stored status.
+Factor common case-evidence validation for full primaries, repeats, and quick
+runs. Require successful manifest/status exit codes and state, verified round
+trips, consistent worker response/status evidence, correct case/role, and all
+required artifacts. Ensure a repeat is a distinct captured run with its own
+request, paths, and result evidence; aliasing primary artifacts cannot serve as
+an independent repeat. Numerical agreement never overrides worker failure.
+
+### C. Validate complete coordinate and identity metadata
+
+The checker accepted an interior k value of -1000 and, separately, a result
+redshift shifted by 0.001 relative to its unchanged metadata/configuration.
+
+Check all k and mu values, their one-dimensional shapes, ordering, and agreement
+with the actual reference grid formulas. Check result redshifts/edges against
+worker metadata and original survey settings, including bin count, and check
+fiducial redshift against its configured reference value. Reproduce only the
+simple reference coordinate conventions in these standard-library checks; do
+not import the scientific package. Support the settings used by the seven
+actual INIs, reporting unsupported alternatives explicitly.
+
+Derive tracer order, all pair identities, and selected pairs from the original
+configuration using the reference naming rules, rather than checking counts
+alone. Preserve forest sample identities and zero-filled unselected results.
+Use explicit tight coordinate tolerances allowing floating-point roundoff; do
+not require byte equality between independently constructed floating arrays.
+
+### D. Preserve authoritative INIs and source/input inventories
+
+Current before/after checks omit authoritative example INIs and miss newly added
+source/SNR files. Capture original INIs before input resolution or forecasts,
+hash them before/after, and use those captured originals consistently for
+resolution, effective configurations, and repeat comparison.
+
+Compare bounded source and consumed input-directory inventories before and after
+capture as well as contents, including added/deleted files and directory entries
+relevant to the spectrograph header reader. An added source module or SNR file
+must invalidate an unchanged-source/input claim. Scope quick-mode preservation
+to its consumed data and reference source, and full mode to all seven cases.
+Do not broaden filesystem scans outside the specified reference roots.
+
+## 3. Preserve existing guarantees
+
+- Use the unchanged `NewForecast(path).new_run_forecast()` scientific API.
+  Allow only output/input path substitutions in effective INIs; never patch
+  scientific methods or alter settings to accelerate runs or force agreement.
+- Preserve complete dictionaries, order, dtypes/shapes, exact serialization
+  round trips, finite-result checks, positive selected/combined uncertainties,
+  bounded correlations, and zero-filled unselected pairs.
+- Keep NumPy/CAMB/reference imports in the scientific worker. Preserve the
+  lexical virtual-environment interpreter path and verify actual module origins.
+- Keep thread limits at one and disable reference bytecode writes. All writes
+  stay in FishHighz or explicit new artifact locations; no Slurm actions.
+- Create new destinations exclusively, retain failed evidence with nonzero
+  status, and keep snapshots/outputs ignored. Never overwrite accepted evidence.
+- Keep ordinary pytest independent of scientific dependencies and sibling
+  installations; keep check commands offline and usable after relocation.
+
+## 4. Required tests and acceptance evidence
+
+Extend portable tests with synthetic bundles and stub workers. Cover:
+
+1. Full mode launches exactly seven primary forecasts plus one repeat; quick mode
+   launches exactly one 15x2pt forecast and no repeat. Count scientific `run`
+   actions separately from lightweight probes/resolution, using stub evidence.
+   Verify that omitting `--suite` selects quick, and that missing/incompatible
+   baseline evidence fails without launching a real or stub full capture.
+2. Quick success against a compatible full baseline; numerical and structural
+   mismatches; invalid/quick baseline rejection; science/environment mismatch
+   rejected before forecasting; location-only compatibility; and missing baseline.
+3. Quick/full manifest coverage, `--require-suite full`, and malformed/partial
+   captures. Check a relocated quick bundle after making the original baseline
+   and reference paths unavailable within the test's temporary directories.
+4. Missing/corrupted tool snapshots, missing shared evidence, and nested invalid
+   artifact paths; failed repeat exit/status and unverified round trips; primary
+   artifacts reused as repeat evidence. Exercise semantic failures with updated
+   hashes so tests do not stop at checksum mismatch alone.
+5. Interior k/mu mutations, redshift/result/metadata disagreement, wrong bin count,
+   tracer/pair identity changes, and valid real-case coordinate conventions.
+6. Changed original INI and added/removed source or consumed-directory entries
+   during a synthetic capture. Preserve failure evidence and exit nonzero.
+
+Retain the existing regression coverage and run `scripts/check.sh`. Then:
+
+- Recheck the existing full bundle with the revised checker, reporting its legacy
+  schema and any unavailable new fields honestly.
+- Run quick mode once against that compatible full baseline. Record total wall
+  time and comparison outcome, and check the relocated quick bundle offline.
+- Exercise full-mode orchestration and revised preservation requirements with
+  synthetic tests. Do not run a new real full capture by default. If the user
+  explicitly requests one, verify seven primary cases, the separate repeat,
+  complete revised preservation evidence, and offline relocation checks.
+- Record exact commands, code hashes/Git state, environment, suite identities,
+  artifact paths, timings, comparisons, failures, and remaining limitations in
+  the updated handoff. Link the revision-1 report and review, and address each
+  finding explicitly. Do not claim a measured parallel speedup or FishHighz
+  scientific validation.
+
+The revision is ready for review when the required portable tests, offline
+checks, and quick validation pass. An unrequested real full run is not an unmet
+acceptance requirement; report that it was not run and distinguish historical
+full evidence from validation of the new code. If the user requests a full run,
+include its result or failure in the handoff. The user reviews and requests
+independent review, then decides whether to advance. No agent may start or draft
+Step 03 as part of this assignment.

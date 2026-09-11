@@ -68,3 +68,55 @@ commands, artifact hashes, and independent installation checks used for verifica
 Workspace contributors can consult the [design](../../FISHHIGHZ_DESIGN.md) and
 [roadmap](../../FISHHIGHZ_IMPLEMENTATION_PLAN.md); neither is needed to install,
 import, or test the package.
+
+## Lyaforecast reference capture
+
+Step 02's maintained tool defaults to a quick scientific check: one unchanged,
+full-resolution 15x2pt forecast compared with a previously accepted full bundle.
+Supply the baseline, reference checkout, and scientific Python explicitly. The
+destination is created exclusively and must not already exist:
+
+```bash
+python scripts/lyaforecast_baseline.py capture \
+  --suite quick \
+  --baseline .validation/baseline/<existing-full-bundle> \
+  --reference-checkout ../lyaforecast \
+  --python ../lyaforecast/.validation/dev-env/bin/python
+```
+
+`--suite quick` is the default, but is shown for clarity. It requires a compatible
+full baseline and never falls back to a full run. A complete capture remains
+available only as explicit opt-in; it runs all seven authoritative DESI-2 cases
+and an independent 15x2pt repeat:
+
+```bash
+python scripts/lyaforecast_baseline.py capture \
+  --suite full \
+  --reference-checkout ../lyaforecast \
+  --python ../lyaforecast/.validation/dev-env/bin/python
+```
+
+The default destination is a unique, ignored
+`.validation/baseline/<UTC-timestamp>-<suffix>/` directory. Each case runs
+serially in a fresh isolated subprocess with single-thread settings. Bundles
+contain original/effective INIs, configuration/input/source snapshots and
+inventories, Git and environment provenance, complete pickle and typed-JSON
+results, logs, timings, and checksums. Quick bundles copy the full reference
+result, compatibility fields, and numerical comparison so offline checks survive
+relocation. Existing destinations are never resumed or overwritten.
+
+Validate a bundle without rerunning forecasts, NumPy, CAMB, or the original
+checkout:
+
+```bash
+python scripts/lyaforecast_baseline.py check \
+  .validation/baseline/<UTC-timestamp>-<suffix>
+python scripts/lyaforecast_baseline.py check \
+  .validation/baseline/<UTC-timestamp>-<suffix> --require-suite full
+```
+
+The checker supports the accepted schema-v1 full evidence and identifies
+inventory guarantees unavailable in that legacy schema. Real reference forecasts
+are explicit validation work and are not run by `scripts/check.sh`; ordinary
+pytest coverage uses synthetic inputs and stub workers only. Run the real full
+suite only when it is specifically requested.

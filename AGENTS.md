@@ -5,7 +5,7 @@
 FishHighz is a new, standalone forecasting package in this directory. It computes
 Fourier-space Gaussian covariances and Fisher forecasts for combinations of
 galaxy/quasar and Lyα forest fields, with interchangeable external P3D and P1D
-providers. The initial scaffold is implemented and under review; numerical
+providers. The initial scaffold is accepted for progression; numerical
 forecasting functionality has not been implemented yet.
 
 - [Scientific design](../../FISHHIGHZ_DESIGN.md): conventions, architecture, and
@@ -24,9 +24,11 @@ report inconsistencies so the planning agent can reconcile the documents.
 
 The user chooses and prompts implementation agents and retains control over plan
 review, implementation review, acceptance, and progression. An instruction to
-implement the current step includes its tests. Complete that bounded assignment,
-report evidence, and stop for review; do not ask for an extra permission between
-implementation and its already authorized tests.
+implement the current step includes its quick tests. The real full validation
+suite requires an explicit user request; a general implementation, testing,
+review, or step-completion request does not authorize it. Complete the bounded
+assignment and quick checks, report evidence, and stop for review; do not ask for
+extra permission to run already authorized quick tests.
 
 Do not advance the roadmap, write future detailed steps, or treat passing tests
 as user acceptance. Do not spawn or dispatch other agents unless the user
@@ -117,6 +119,23 @@ outputs, and timings. A scaffold-only step does not require a forecast baseline.
 Existing baselines are reference evidence, not assumed-current results. Match
 the environment for numerical comparisons and explain expected differences from
 the legacy BAO recipe rather than forcing agreement by changing physics.
+
+Run only quick checks by default: fast ordinary tests, relevant one-case reference
+checks, and offline validation of saved bundles. Execute the real full suite only
+when the user explicitly asks for that run, including at final step/review
+checkpoints. Failures, relevant changes, or a missing/incompatible baseline do not
+authorize automatic full execution or fallback. A request for one full run does
+not authorize later full reruns. Synthetic tests of full-mode orchestration are
+allowed in the quick suite because they do not run real forecasts.
+
+Do not routinely ask for a full run or hold an otherwise complete review handoff
+pending one. Report an unrequested full run as not run under the user's policy;
+do not call it a failed or outstanding acceptance check. Report any actual quick
+validation failure or blocked comparison separately.
+Reuse accepted immutable reference evidence for FishHighz comparisons when its
+provenance remains applicable. Rerunning unchanged reference code alone does not
+test newly implemented FishHighz behavior; future steps need their own focused
+numerical tests and comparisons.
 
 Tests should be self-contained, deterministic, and independent of NERSC paths or
 neighboring installed packages. Use synthetic arrays and small generated
