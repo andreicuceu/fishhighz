@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fishhighz"
+version = "0.1.0.dev0"
+description = "Development scaffold for high-redshift Fourier-space forecasts"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "build"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["fishhighz", "fishhighz.*"]
+namespaces = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+extend-exclude = [".validation"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
