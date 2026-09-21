@@ -1,1 +1,3 @@
 include scripts/check.sh
+include RESEARCH_BASELINE.md
+recursive-include examples *.py

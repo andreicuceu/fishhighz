@@ -5,12 +5,14 @@ McDonald & Eisenstein (2007). No raw assets or normalization policies are copied
 """
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 import numpy as np
 
 from ._arrays import integer, real_array, scalar
 from .fields import ObservedField, PairSelection
 from .geometry import SPEED_LIGHT_KMS, BinGeometry, _immutable, _positive
+from .kernels.full_sum_weights import METHODS, fixed_weights, solve
 from .kernels.weights import _integrals, _iterate
 from .models.external import P3DProvider, PreparedP3D, evaluate_p1d, evaluate_p3d
 from .response import InstrumentResponse, velocity_response
@@ -185,6 +187,7 @@ class ForestWeights:
     I3: np.ndarray
     A: float
     P_pixel: float
+    convergence: object
 
     def validate_context(self, field, geometry, response):
         """Reject reuse across field, evaluation geometry, h or response settings."""
@@ -209,8 +212,19 @@ def prepare_forest_weights(
     signal=None,
     alias=None,
     auxiliary=None,
+    rtol=1e-4,
+    min_updates=3,
+    stable_steps=3,
+    max_updates=96,
 ):
     """Prepare from same-shaped 1D m, positive dm weights, rho and pixel variance.
+
+    'early_lyaforecast' and 'mcdonald' use full-sample moments and require
+    positive signal/alias or matching fiducial auxiliary samples. With no
+    iterations they require confirmed adaptive convergence (rtol=1e-4, at
+    least three updates and three stable transitions, doubled-count
+    confirmation, cap 96). Failure raises; no last iterate becomes a forecast.
+    Explicit iterations selects a labeled fixed-count diagnostic.
 
     Require explicit method='supplied' with weights, or 'legacy' with iterations
     and positive S/B (signal/alias), optionally from sample_auxiliary.
@@ -251,10 +265,11 @@ def prepare_forest_weights(
         if w.shape != m.shape:
             raise ValueError("weights shape mismatch")
         changes = np.empty(0)
-    elif method == "legacy":
+    elif method == "legacy" or method in METHODS:
         if weights is not None:
             raise ValueError("legacy method conflicts with supplied weights")
-        iterations = integer(iterations, "iterations")
+        if method == "legacy" or iterations is not None:
+            iterations = integer(iterations, "iterations")
         if auxiliary is not None:
             if (
                 not isinstance(auxiliary, AuxiliarySamples)
@@ -275,14 +290,44 @@ def prepare_forest_weights(
         changes = np.empty(0)
     else:
         raise ValueError(
-            "method must be explicitly 'supplied', 'legacy' or 'inverse_variance'"
+            "method must be supplied, legacy, inverse_variance, early_lyaforecast or mcdonald"
         )
+    convergence = None
     try:
         with np.errstate(over="raise", invalid="raise", divide="raise", under="ignore"):
             masses = r * q
             if np.any((r > 0) & (masses == 0)):
                 raise ValueError("quadrature masses are not representable")
-            if method == "legacy":
+            if method in METHODS:
+                inputs = SimpleNamespace(
+                    density=r,
+                    quadrature=q,
+                    variance=v,
+                    length=length,
+                    pixel=pixel,
+                    signal=signal,
+                    p1d=alias,
+                )
+                if iterations is None:
+                    convergence = solve(
+                        inputs,
+                        METHODS[method],
+                        rtol=rtol,
+                        min_updates=min_updates,
+                        stable_steps=stable_steps,
+                        max_updates=max_updates,
+                    )
+                    if convergence["status"] != "converged":
+                        raise ValueError(
+                            f"{field.id}: {method} {convergence['status']}: "
+                            f"{convergence['reason']}"
+                        )
+                    w = convergence["weights"]
+                else:
+                    w = fixed_weights(inputs, METHODS[method], iterations)
+                    convergence = dict(status="fixed_count", updates=iterations)
+                changes = np.empty(0)
+            elif method == "legacy":
                 w, changes = _iterate(
                     masses, v, length, pixel, signal, alias, iterations
                 )
@@ -335,6 +380,7 @@ def prepare_forest_weights(
         I3=i3,
         A=float(a),
         P_pixel=float(p),
+        convergence=convergence,
     )
     for name, value in values.items():
         object.__setattr__(

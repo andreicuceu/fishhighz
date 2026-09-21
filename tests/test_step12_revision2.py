@@ -381,7 +381,7 @@ def test_real_orchestrator_dispatch_without_reference_imports(tmp_path, monkeypa
     monkeypatch.setattr(profiles, "compatibility", compatibility)
 
     class FakeRecipe:
-        def __init__(self, root, case, *args):
+        def __init__(self, root, case, *args, **kwargs):
             cases.append(case)
             self._samples = {}
             self._prepared = {}
@@ -402,6 +402,9 @@ def test_real_orchestrator_dispatch_without_reference_imports(tmp_path, monkeypa
         wheel=wheel,
         suite="full",
         sensitivities=False,
+        profiles=("compatibility", "accuracy"),
+        accuracy_method="legacy",
+        recipe_revision=None,
     )
     assert m["complete"] and len(m["records"]) == 78
     assert len(backgrounds) == 1 and len(cases) == 7

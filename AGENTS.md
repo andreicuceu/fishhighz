@@ -2,97 +2,115 @@
 
 ## Project and authoritative documents
 
-FishHighz is a new, standalone forecasting package in this directory. It computes
-Fourier-space Gaussian covariances and Fisher forecasts for combinations of
-galaxy/quasar and Lyα forest fields, with interchangeable external P3D and P1D
-providers. The scaffold, reference capture, core array contracts, and covariance
-from supplied observed powers, Fisher assembly, and named results from supplied
-Jacobians, external model integration, and derivative generation are accepted for
-progression, as are built-in template input and interpolation. The intrinsic
-Kaiser/BAO model is also accepted for progression. Step 09 geometry, instrument
-response, and default P1D are accepted for progression. Step 10 fixed forest
-weighting/noise and galaxy sampling noise are accepted for progression after
-revision-2 review resolved the original numerical finding. Step 11 revision 2
-implements Python survey orchestration and explicit raw density/SNR readers;
-independent review passed, closing nonuniform redshift and input dtype findings.
-The user accepted Step 11 for progression by requesting Step 12. Step 12
-revision 1 implements DESI-2 validation and opt-in legacy input/P3D adapters.
-Revision 2 implements the full seven-case comparison and plots. Independent
-review verifies all 39 compatibility bins and closes the five original R1
-probes; R2 requires binding convergence evidence to its recorded trials.
-Only five galaxy-only accuracy bins converge; all 34 forest bins remain
-unresolved (R3). The user archived the exact revision-3 scientific repair in
-reviews/step-12-instructions-r3.md for later use. Revision 4 implements performance
-optimization and passes independent review for the optional compiled path;
-the default NumPy matrix target remains unmet. Revision 5 restores that
-assignment and supplies a 15x2pt-only handoff.
-Revision-5 review found weak-spectrum trial binding incomplete. Revision 6
-implements per-spectrum checks and saved-trial metric/verdict reconstruction;
-independent review passes, resolving R2. All six accuracy bins remain unconverged
-(R3), with a verified weight diagnosis and 12 unavailable diagnostics. The user
-selected investigation of a normalized/asymptotic limit of the same
-cumulative rule and requested Step 13 revision 1. This authorizes planning and
-progression of that investigation, not scientific acceptance of the failed
-forecasts. Step 13 revision 1 is implemented and independently reviewed. Finite-step and
-fixed-grid numerics are verified, but continuum-verdict, source/attempt-binding
-and diagnostic scalar-range findings require revision 2. The current assignment
-remains diagnostic-only on synthetic and saved inputs; production adoption,
-scientific choices, new real runs, plan approval and dispatch remain with the user. Later performance/distribution
-steps are numbered 14/15. INI translation, production CLI and serialization
-remain future work.
+FishHighz is a standalone Fourier-space covariance/Fisher forecasting package.
+Steps 01–11 are accepted for progression; Step 12 evidence repair passed review,
+while historical accuracy forecasts remain scientifically unaccepted.
 
-The parallel forest-weighting diagnostic W01 supports inherited finite-update
-sensitivity; W01-R4/R5 remain deferred. W02–W07 pass scientific review. W05
-identifies the explicit inverse-variance reference with the legacy seed, W06
-verifies its bounded magnitude stability, and W07 finds smaller BAO errors for
-that reference in one accuracy QSO-forest auto-spectrum/bin; see
-[W07 review](reviews/weighting-diagnostics-w07-review-r1.md). These results
-establish no general multi-mode optimum or physical validation of input policies.
-On 2026-09-16 the user selected the fixed-reference option. W08 revision 1
-implements explicit `method="inverse_variance"` with direct scalar B_star.
-Independent review verifies its ordinary analytic, noise, survey and saved
-coefficients but finds one range-safety gap: positive `l_p*v` can underflow to
-zero without rejection while final coefficients remain representable. W08
-revision 2 rejects only that product underflow and passes independent scientific
-review. Exact zeros and an exactly representable subnormal product remain valid;
-ordinary analytic, legacy/supplied, noise, survey and saved-reference checks
-pass. No consequential correction is needed.
+On 2026-09-17 the user marked **Step 13 and W12 done**, closed the entire
+previous weighting diagnostic plan, and directed that these assignments not be
+resumed. W12's bounded fixed-reference accuracy-profile review passed; preserve
+its implementation. Step 13's continuum conclusion remains unresolved in the
+historical evidence. Deferred W01 repairs and the old W13 proposal are retired.
 
-W09 also passes independent scientific review: the public fixed-reference
-noise/covariance/Fisher chain reproduces W07 for the original QSO bin. W10 also
-passes independent scientific review: two additional population/redshift samples
-retain roundoff-level reference refinement stability and smaller reference errors
-than the historical cumulative results. The weak-LBG local-Fisher limitation
-remains explicit. W11 passes independent review and detects reference-mode
-sensitivity above 0.1% at 0.003 s/km. The user explicitly selected retention of
-q_star=0.00035 s/km and planning accuracy-profile adoption. W12 revision 1 is
-proposed for approval/dispatch: host-side fixed-reference routing, applicable
-refinement controls with historical legacy semantics retained, and one saved
-FF/FG/GG bin at two forest magnitude orders. This choice is not optimization or
-physical-policy validation. Only W12 has current detailed instructions; W13
-broader validation requires a separate request. No production change or numerical
-run occurred during this planning update. Package Step 13 and acceptance of
-historical failed forecasts remain unchanged.
+Current planning update, 2026-09-18: the five-stage compatibility weighting
+study and additional grid-to-BAO check are complete. `FOREST_WEIGHTING_DECISION.md`
+records the accepted early-lyaforecast baseline and retained McDonald alternative.
+S1–S3 now implement full-compatibility, fixed-compatibility and updated accuracy,
+qualify all six revised-accuracy bins within the stated finite-refinement tests,
+and complete the selected six-bin DESI-2 comparison. Astra (light) implementations
+and Sol (high) independent scientific reviews are recorded in `reviews/s1.md`,
+`reviews/s2.md`, `reviews/s3.md` and their `-review.md` reports; all three reviews
+pass with no consequential correction requested. S4 attribution is also complete with a passing Sol scientific review:
+`reviews/s4.md`, `reviews/s4-impact-table.md`, `reviews/s4-profile-inventory.md`
+and `reviews/s4-review.md`. Scientific acceptance remains with the user;
+S5 reassessment began on 2026-09-21 as a joint planning discussion. The user
+requested an evidence summary, interpretation and proposed next work; that
+initial request authorized planning only. The later S5 execution authorization
+below now governs implementation and review. The user
+confirmed a research-ready Python API as the first S5 milestone and the tested
+S2–S4 accuracy recipe as its research baseline, retaining mixed-pair damping and
+full wiggle AP derivatives. The reference-mode comparison is now a separate
+later study in `DEFERRED_SCIENTIFIC_TESTS.md`; S5 covers only prescription
+documentation, Python API documentation/examples, and validation. No further
+scientific decision is pending before implementation within that scope. The
+legacy weighting reference remains in use, with a 1% BAO-error attribution
+trigger and 0.1% numerical-refinement target.
 
-- [Scientific design](../../FISHHIGHZ_DESIGN.md): conventions, architecture, and
-  confirmed versus proposed decisions.
-- [High-level roadmap](../../FISHHIGHZ_IMPLEMENTATION_PLAN.md): sequence, review
-  process, and acceptance register.
-- [Current package step](IMPLEMENTATION_STEP.md): the detailed scope for the
-  main package assignment.
-- [Parallel forest-weighting diagnostic roadmap](../../FISHHIGHZ_WEIGHTING_DIAGNOSTICS_PLAN.md)
-  and [current diagnostic step](WEIGHTING_DIAGNOSTIC_STEP.md): a separate
-  user-requested plan/implementation/review sequence, created 2026-09-15.
-  Select the assignment explicitly from the user's prompt; diagnostic work must
-  not execute or replace the package Step 13 assignment. Both retain user control
-  of approval, dispatch, acceptance and progression. Diagnostic-specific scope,
-  checks and execution bounds belong in its current-step file. The new roadmap
-  authorizes no automatic agent dispatch or scientific acceptance.
+For every future forecast, exclude bin-1 correlations involving LBG, LAE or
+lya(lbg). Retain only lya(qso) auto, QSO auto and their cross in bin 1, including
+its joint covariance. Bins 2–6 retain all 15 spectra. This is a forecast selection,
+not a plot cut; preserve historical files and their original selection.
+
+The completed validation study implements five fixed-count variants and opt-in
+full-sum forest-auto adaptive stopping. Its trajectory, BAO and magnitude-grid
+results and independent reviews are linked from the weighting decision. Iteration
+convergence does not establish magnitude-grid convergence or physical accuracy.
+The historical extra grid-to-BAO check covers bins 2–6 only; S2 adds the retained
+three-spectrum bin-1 check. W12's explicit implementation is retained. Revised
+accuracy uses its own fiducial per-field P/B, response and magnitude quadrature,
+with frozen weights in BAO derivatives. Its maximum tested individual/joint
+BAO-error refinement changes are 0.0011411%/0.0012685%. S3 finds material
+accuracy/fixed differences, triggering the completed S4 study. Its 364 controlled calculations identify
+mixed forest–galaxy damping as the dominant isolated reduction, partly opposed
+by the grouped AP derivative change. Maximum endpoint mismatch is 0.000129%;
+maximum tested error refinement is 0.010783%. These quantify model assumptions
+and numerical behavior, not scientific acceptance of the reconstruction physics.
+Execution authorization, 2026-09-18: the user subsequently authorized the
+coordinator to dispatch Astra (light) implementation agents and Sol (high)
+scientific reviewers, check results and progress through S1–S3 inclusive.
+Reviews should request changes only when likely to affect scientific conclusions.
+The user subsequently authorized S4 attribution with the same agent roles and
+scientific review criterion, including a report table of all scientifically
+meaningful profile changes and their joint BAO effects. This includes the scoped
+S2/S3 and S4 real forecasts; it did not itself authorize S5 calculations, commits,
+pushes or Slurm actions. S5 now has its separate authorization below. The user explicitly directed login-node
+execution for these short forecasts. Use one numerical thread and bounded runs.
+The remaining standing review controls apply; scientific acceptance stays with
+the user.
+
+- [Scientific design](../../FISHHIGHZ_DESIGN.md): scientific conventions and API
+  context; dated former assignments are historical.
+- [Implementation roadmap](../../FISHHIGHZ_IMPLEMENTATION_PLAN.md): current
+  sequence and status; its preceding version is archived alongside it.
+- [Compatibility weighting test plan](../../FISHHIGHZ_COMPATIBILITY_WEIGHTING_PLAN.md):
+  completed study and evidence, including the five variants, individual/joint
+  plots and historical plotting cut for uncertainties above 0.2.
+- [Deferred scientific tests](DEFERRED_SCIENTIFIC_TESTS.md): later, non-critical
+  studies with agreed and proposed statuses kept distinct.
+- [Closed diagnostic plan](../../FISHHIGHZ_WEIGHTING_DIAGNOSTICS_PLAN.md): closure
+  record and link to its full archive.
+- `IMPLEMENTATION_STEP.md` and `WEIGHTING_DIAGNOSTIC_STEP.md` retain retired
+  assignments; neither authorizes implementation or dispatch. New detailed
+  assignments require a user request. Do not follow their historical pending-work
+  instructions as current tasks.
 
 This file supplies standing context and working rules. Keep step-specific tasks,
 acceptance criteria, and feedback in the current-step file, not here. Follow the
 user's latest explicit instructions if they change a document's requirements;
 report inconsistencies so the planning agent can reconcile the documents.
+
+### S5 execution authorization, 2026-09-21
+
+The user has now explicitly requested S5 implementation, with **Sol (medium)**
+implementation agents and **Sol (high)** independent review agents. The coordinator
+controls dispatch and checks results. S5 reviews cover scientific correctness,
+software and documentation. This supersedes the earlier planning-only status
+and narrower review scope for this assignment. Implement the roadmap's three
+S5 parts, including bounded synthetic/example, focused-test and installed-package
+checks. Keep the adopted numerical recipe and historical evidence unchanged;
+report any consequential correction before expanding numerical scope. D1/D2,
+new real-survey studies, commits, pushes and Slurm actions remain outside scope.
+
+### S5 completion, 2026-09-21
+
+S5 is complete with a passing Sol (high) scientific, software and documentation
+review. `RESEARCH_BASELINE.md` defines the adopted S2–S4 recipe;
+`examples/research_bao_forecast.py` demonstrates the standalone Python API with
+synthetic inputs. `reviews/s5.md` and `reviews/s5-review.md` record 101 focused
+tests, two installed checks, direct covariance reconstruction and unchanged
+numerical code/evidence. Only package docstrings and three validation error-message
+occurrences changed in existing source. The guide and examples ship in the source
+distribution. D1/D2 remain deferred; no next step is authorized by this completion.
 
 ## Roles and review control
 
@@ -218,14 +236,14 @@ preserved: seven reference cases, both profiles and bounded diagnostic studies.
 The subsequent 15x2pt-only revision-3 repair was archived during performance-only
 revision 4. Revision 5 used the restored scientific assignment on the reviewed r4
 baseline. Preserve its saved 15x2pt primaries, diagnostics and weighting diagnosis.
-Revision 6 completes the reviewed synthetic/offline evidence repair. Step 13
-investigates the same cumulative rule's normalized limit using a diagnostic
-prototype and saved samples. It must retain amplitude in the nonlinear update
-and test iteration and grid limits separately; it must not assume a finite limit.
-Production weighting/guards remain unchanged in this assignment. A further real
-forecast requires an explicit user request. Do not run the other six cases or
-recapture NewForecast. Preserve r4 optimizations and regression tests. Weighting/input
-policy changes require the user's scientific decision.
+Revision 6 completes the reviewed synthetic/offline evidence repair. Step 13's
+normalized-limit investigation is now closed; preserve its diagnostic and saved
+results without resuming its former assignment. In the new compatibility study,
+retain amplitude in nonlinear updates and distinguish iteration from grid
+sensitivity. The planned 15×2pt execution needs its own explicit assignment;
+do not run the other six cases or recapture NewForecast. Preserve r4 optimizations
+and regression tests. Further weighting/input-policy adoption requires the user's
+scientific decision.
 The literal legacy estimator path
 is validation-only. The accuracy profile preserves existing-model scope and
 retained input policies with sensitivity tests; neither changes strict defaults.

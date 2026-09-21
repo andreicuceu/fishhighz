@@ -20,11 +20,14 @@ DEFAULT = dict(
 def study(self, task, *, payload_factory=OrderedDict):
     """Bounded isolated/combined convergence; unresolved controls never pass."""
     method = getattr(self, "weight_method", "legacy")
-    if method not in ("legacy", "inverse_variance"):
+    if method not in ("legacy", "inverse_variance", "early_lyaforecast", "mcdonald"):
         raise ValueError("unknown accuracy forest-weight method")
     controls = dict(DEFAULT)
-    if method == "inverse_variance":
+    if method != "legacy":
         controls.pop("iterations")
+    adaptive = method in ("early_lyaforecast", "mcdonald")
+    if adaptive:
+        controls["weight_rtol"] = 1e-5
     trials = {}
     outcomes = {}
     failures = []
@@ -60,6 +63,10 @@ def study(self, task, *, payload_factory=OrderedDict):
                 array_index=len(trials),
             ),
         )
+        if adaptive:
+            outcomes[identity]["forest_weighting"] = r.get("settings", {}).get(
+                "forest_weighting", {}
+            )
         payloads[key] = (a, r)
         while len(payloads) > 3:
             # Preserve the current selected control candidate, so later
@@ -142,6 +149,9 @@ def study(self, task, *, payload_factory=OrderedDict):
         volume="z_order",
         step="step",
     )
+    if adaptive:
+        levels["weights"] = [1e-4, 1e-5]
+        keys["weights"] = "weight_rtol"
     for name, values in levels.items():
         key = keys[name]
         for extra in range(3):
@@ -154,7 +164,7 @@ def study(self, task, *, payload_factory=OrderedDict):
                 break
             controls[key] = values[-1]
             retained_key = tuple(sorted(controls.items()))
-            if passes(m) or extra == 2:
+            if passes(m) or extra == 2 or name == "weights":
                 break
             values.append(values[-1] * (0.5 if name == "step" else 2))
     # Re-evaluate every isolated level at the same final other controls.
@@ -206,7 +216,7 @@ def study(self, task, *, payload_factory=OrderedDict):
         actual["weights"] = [r[0] for r in weight_rows]
     lower = dict(controls)
     for name, values in actual.items():
-        if name != "weights":
+        if name != "weights" or adaptive:
             lower[keys[name]] = values[-2]
     if method == "legacy" and len(weight_rows) >= 2:
         lower["iterations"] = weight_rows[-2][0]

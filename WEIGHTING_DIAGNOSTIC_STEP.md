@@ -1,3 +1,16 @@
+# W12 — done and closed
+
+W12 revision 1 is done and closed at the user's direction on 2026-09-17.
+Its bounded independent scientific review passed. The entire W-series plan is
+closed; the proposed W13 continuation is withdrawn.
+
+The current direction is the [compatibility weighting test plan](../../FISHHIGHZ_COMPATIBILITY_WEIGHTING_PLAN.md)
+and [implementation roadmap](../../FISHHIGHZ_IMPLEMENTATION_PLAN.md).
+The assignment below is retained as historical text only; its dispatch and
+pending-work instructions are inactive.
+
+---
+
 # W12 — adopt the declared fixed reference in the accuracy profile
 
 Revision: 1. Status: proposed for user approval and implementation dispatch.

@@ -1,14 +1,39 @@
 # FishHighz
 
-FishHighz is an early development package for high-redshift Fourier-space
-Gaussian covariances and Fisher forecasts. Field/pair identities, parameter
-bindings, fixed integration grids, callable model contracts, and Gaussian
-covariance and Fisher information from supplied arrays are implemented, with
-named results, explicit priors, uncertainty diagnostics, external callable routes,
-mixed analytic/numerical parameter derivatives, and signed linear-power template
-input/interpolation, and an intrinsic template Kaiser/BAO signal. Survey
-preparation and default P1D remain unimplemented. NumPy is the only unconditional runtime dependency; template
-preparation uses optional Astropy/SciPy. Targeted compilation is planned later.
+FishHighz is a Python package for high-redshift Fourier-space Gaussian
+covariances and Fisher forecasts. It provides field/pair identities, parameter
+bindings, fixed integration grids, external callable models, signed linear-power
+templates, intrinsic Kaiser/BAO models, survey geometry and response, the default
+P1D prescription, forest weighting and sampling noise, fixed-covariance Fisher
+assembly, named results, and Python survey orchestration. NumPy is the only
+unconditional runtime dependency. Template, cosmology, survey-reader and compiled
+Fisher support are explicit optional extras.
+
+The recommended research prescription tested in S2--S4 is documented in
+[RESEARCH_BASELINE.md](RESEARCH_BASELINE.md). It uses converged
+`method="early_lyaforecast"` forest weights at the representative mode
+`(k_transverse, k_parallel) = (2.4 deg^-1, 0.00035 s/km)`, physical FWHM
+resolution, per-field crossed squared-width damping, and full wiggle inverse-AP
+derivatives with fixed fiducial weights and covariance. The compact executable
+[research_bao_forecast.py](examples/research_bao_forecast.py) exposes these
+public API choices with synthetic inputs; it requires `fishhighz[templates]` and
+can also be imported as `run()`.
+
+Three [DESI Run-2 examples](examples/) read the real survey inputs:
+[full compatibility](examples/desi2_full_compatibility.py),
+[fixed compatibility](examples/desi2_fixed_compatibility.py), and the commented
+[accuracy tutorial](examples/desi2_accuracy.py). Each computes individual and
+joint BAO constraints in six independent redshift bins, retaining only the
+Lyα(QSO) and QSO auto/cross spectra in bin 1 and all 15 spectra in bins 2–6.
+The compatibility examples use the optional installed `lyaforecast` reference
+package; the tutorial explicitly constructs the research-baseline FishHighz API
+objects. See each script's docstring and `--help` for dependencies, input paths
+and output files. No captured validation bundle is required.
+
+The package API is more general than that tested prescription. Callers choose
+fields, models, parameters, priors, selections and numerical controls explicitly.
+Validation profiles under `fishhighz.validation` reproduce named historical
+studies; they are not a general public profile factory.
 
 ## Development
 
@@ -805,16 +830,19 @@ Changing P3D never selects, integrates, or modifies P1D.
 
 `fishhighz.weights.prepare_forest_weights(field, geometry, response, *,
 z_source, magnitudes, quadrature, rho, variance, length_velocity, method,
-weights=None, iterations=None, signal=None, alias=None, auxiliary=None)` prepares
+weights=None, iterations=None, signal=None, alias=None, auxiliary=None,
+rtol=1e-4, min_updates=3, stable_steps=3, max_updates=96)` prepares
 one immutable forest sample per field/bin. `field` is an `ObservedField`,
 `geometry` a `BinGeometry`, and `response` the same `InstrumentResponse` used for
 signal and final noise. Its full pixel width must be positive; Gaussian sigma
 may be zero. Source redshift must exceed `geometry.z_eval`: densities/variances
 are sampled at the source, while clustering, P1D and distance conversions use
 `z_eval`. Field identity, redshifts, h convention, geometry conversion factors,
-response, input arrays and iteration settings are retained. Noise evaluation
-rejects a different field, evaluation geometry or response. Changing area alone
-does not change this local noise preparation.
+response and input arrays are retained. A fixed-count `iterations` value and an
+adaptive outcome/counts/residuals are retained, but adaptive input controls must
+be preserved separately in caller provenance. Noise evaluation rejects a
+different field, evaluation geometry or response. Changing area alone does not
+change this local noise preparation.
 
 All magnitude arrays have shape `(n_magnitude,)`, including a one-node sample.
 Magnitudes are strictly increasing, quadrature weights are explicitly positive
@@ -841,6 +869,20 @@ Choose explicitly:
   with zero variance get one. This is the legacy cumulative recipe, not a
   convergence algorithm or a claim of global optimality. `S` and `B` must be
   strictly positive finite representable scalars.
+- `method="early_lyaforecast"`: use the full-sample `sum_historical`
+  recurrence. Its update signal is `S + B/(I1*L_v)`, with `I1` recomputed from
+  the current weights. This is the recommended research method. With
+  `iterations=None`, the adaptive solver requires at least three updates, three
+  stable transitions, doubled-count confirmation, positive finite `rtol`
+  (default `1e-4`) and a finite cap (default 96). Failure raises and no last
+  iterate is substituted. An explicit nonnegative `iterations` value requests
+  a labeled fixed-count diagnostic instead. The result retains the convergence
+  outcome, counts and residuals; callers must retain nondefault input controls
+  in their own provenance.
+- `method="mcdonald"`: use the optional full-sample `sum_aliasing` recurrence,
+  with update signal `S + B*I2/(I1**2*L_v)`. Adaptive and explicit fixed-count
+  behavior is identical to `early_lyaforecast`, including explicit failure.
+  This retained alternative is not the selected research baseline.
 - `method="inverse_variance", alias=B_star`: compute
   `w=B_star/(B_star+Delta_v*variance)` once on positive-density nodes; store
   zero on zero-density nodes and exactly one for zero variance on support.
@@ -869,8 +911,10 @@ of `signal/alias`. It routes only the matching forest auto through the original
 field indices and binding, and calls independently bound P1D once. It computes
 `k_parallel=a_v*k_p_velocity`, `k_transverse=k_t_deg/d_deg`,
 `S=P3D_auto*W^2*a_v/d_deg^2` (deg² km/s) and `B=P1D*W^2` (km/s).
-`S` is the caller's full intrinsic prediction; a legacy method name containing
-“smooth” does not require a smooth-only external provider. Explicit historical
+`S` is the caller's full-auto P3D prediction after the field response and
+angular/velocity unit conversion shown above; it is not an unsmoothed intrinsic
+scalar. A legacy method name containing “smooth” does not require a smooth-only
+external provider. Explicit historical
 auxiliary examples are `(2.4, 0.00035)` for BAO and `(7, 0.001)` for P1D, in
 `deg^-1` and `s/km`. There is no default. Auxiliary modes may lie outside
 forecast cuts, add no modes, and must remain inside provider/template domains.
@@ -1011,7 +1055,8 @@ only NumPy. Standalone reader signatures are:
   quadrature, forest velocity length, and the Step 10 weighting settings.
   `ForestInput` also requires an independent P1D callable, binding and state.
   Optional `auxiliary_coordinates=(k_t_deg,k_p_velocity)` selects one auto/P1D
-  query for legacy weights; supplied weights bypass auxiliary calls.
+  query for `legacy`, `early_lyaforecast`, or `mcdonald` weights; supplied and
+  inverse-variance weights bypass auxiliary calls.
 
 Readers retain resolved paths, SHA-256 hashes, owned tables, domains, units,
 normalization/exposure settings and interpolation provenance. They reject
@@ -1039,7 +1084,12 @@ retain their dtype (including indices and Boolean flags). Object arrays cannot b
 frozen as immutable byte-backed values and are rejected; use typed arrays or
 plain nested metadata instead.
 
-## DESI-2 validation and explicit legacy compatibility (Step 12)
+## Historical DESI-2 validation and explicit legacy compatibility (Step 12)
+
+This section records the earlier Step-12 comparison and remains available for
+reproduction. Its fixed-reference `inverse_variance` accuracy profile is not the
+current research baseline. The current three-profile identity and selected
+S2--S4 prescription are given in [RESEARCH_BASELINE.md](RESEARCH_BASELINE.md).
 
 `python examples/desi2_synthetic.py` runs all seven explicit selections on tiny
 synthetic arrays, checking their correlated Fisher matrices against an independent
@@ -1074,9 +1124,9 @@ these into normalized arrays and plain provenance for `ForestInput`:
   snapshots, with no counters updated during derivatives. Each forest owns its
   own source, SNR, response, weights and independent P1D.
 
-Revision 2 provides two explicit validation profiles for the seven original
-cases (39 bins, 78 primary records). They share observed cuts and selected
-spectra, but represent different estimators:
+Revision 2 historically provided two explicit validation profiles for the seven
+original cases (39 bins, 78 primary records). They share observed cuts and
+selected spectra, but represent different estimators:
 
 - **Maximum compatibility** captures actual upstream mean/total powers and BAO
   derivatives, then independently constructs Wick covariance and Fisher
@@ -1084,7 +1134,7 @@ spectra, but represent different estimators:
   extraction, backward derivative, pair-specific noise and redshift conventions.
   Literal field-matrix PSD failures are reported separately; selected covariance
   must still be positive definite. This path is validation-only.
-- **Maximum accuracy** uses the accepted `prepare_bin`/`run_bin` and `KaiserModel`
+- **Historical maximum accuracy** uses the accepted `prepare_bin`/`run_bin` and `KaiserModel`
   engines: geometric evaluation redshift, integrated volume, Gauss–Legendre k/mu
   and composite magnitude quadrature, CAMB growth at actual redshifts, physical
   FWHM resolution, accepted auto/cross damping and full wiggle-mapping derivatives.

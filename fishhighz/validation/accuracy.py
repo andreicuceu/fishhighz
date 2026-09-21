@@ -27,6 +27,14 @@ from ..survey import BinSpec, ForestInput
 from ..weights import density_per_velocity
 from .cases import CASE_IDS, bins, recipe, selection, verify_inventory
 from .numerics import contract, relative
+from .profile_definitions import (
+    ADAPTIVE,
+    REFERENCE,
+    REVISION,
+    STOPPING,
+    forecast_selection,
+    identity,
+)
 from .reference_capture import imported_reference, resolved_resources
 from .schema import _assemble
 
@@ -57,6 +65,7 @@ def _forest_input(
     method,
     iterations=None,
     policy="primary",
+    weight_rtol=1e-4,
 ):
     """Construct the accuracy-profile forest input and declared weight metadata."""
     common = dict(
@@ -96,6 +105,18 @@ def _forest_input(
             B_star_units="km/s",
         )
         iteration_status = {"applicable": False, "status": "inapplicable"}
+    elif method in ADAPTIVE:
+        options = dict(
+            common,
+            method=method,
+            iterations=iterations,
+            **{**STOPPING, "rtol": weight_rtol},
+        )
+        auxiliary_coordinates = (REFERENCE["k_t_deg"], REFERENCE["k_p_velocity"])
+        reference = REFERENCE
+        iteration_status = dict(
+            applicable=True, stopping={**STOPPING, "rtol": weight_rtol}
+        )
     elif method == "legacy":
         if iterations is None:
             raise ValueError("legacy accuracy requires an explicit iteration count")
@@ -103,7 +124,10 @@ def _forest_input(
         auxiliary_coordinates = (2.4, 0.00035)
         iteration_status = {"applicable": True, "count": iterations}
     else:
-        raise ValueError("accuracy weight method must be legacy or inverse_variance")
+        raise ValueError(
+            "accuracy weight method must be legacy, inverse_variance, "
+            "early_lyaforecast or mcdonald"
+        )
     weighting = dict(
         method=method,
         iterations=iteration_status,
@@ -210,7 +234,8 @@ class AccuracyRecipe:
         template,
         provenance,
         *,
-        weight_method="inverse_variance",
+        weight_method="early_lyaforecast",
+        recipe_revision=REVISION,
     ):
         from lyaforecast.power_spectrum import PowerSpectrum
         from scipy.interpolate import interp1d
@@ -221,14 +246,16 @@ class AccuracyRecipe:
         self.config = configparser.ConfigParser()
         self.config.read_dict(recipe(case))
         self.selection = selection(case)
+        self.recipe_revision = recipe_revision
         self.cosmo = cosmo
         self.template = template
         self.h = template.h_fid
         self.external = PowerSpectrum(self.config, cosmo, {})
         self.provenance = provenance
-        if weight_method not in ("inverse_variance", "legacy"):
+        if weight_method not in ("inverse_variance", "legacy", *ADAPTIVE):
             raise ValueError(
-                "accuracy weight method must be legacy or inverse_variance"
+                "accuracy weight method must be legacy, inverse_variance, "
+                "early_lyaforecast or mcdonald"
             )
         self.weight_method = weight_method
         resolved_resources(self.root, self.config)
@@ -299,6 +326,7 @@ class AccuracyRecipe:
         return float(self.cosmo.sigma8_zbins[i]), float(self.cosmo.growth_rate_zbins[i])
 
     def model(self, index, *, mean_z=None, growth="camb", reconstruction=True):
+        selected = self.bin_selection(index)
         z = self.z(index) if mean_z is None else float(mean_z)
         sigma, f = self._growth(z)
         sigma_template, _ = self._growth(self.template.z_ref)
@@ -348,12 +376,8 @@ class AccuracyRecipe:
 
         p3d = PreparedP3D(
             self.registry,
-            self.selection,
-            [
-                P3DProvider(
-                    "accuracy BAO", provider, binding, self.selection.required_pairs
-                )
-            ],
+            selected,
+            [P3DProvider("accuracy BAO", provider, binding, selected.required_pairs)],
         )
         return p3d, dict(
             z_eval=z,
@@ -386,6 +410,13 @@ class AccuracyRecipe:
                 else InstrumentResponse(0, 0)
             )
         return responses
+
+    def bin_selection(self, index):
+        return (
+            forecast_selection(self.case, index)
+            if getattr(self, "recipe_revision", None)
+            else self.selection
+        )
 
     def samples(self, index, order, *, policy="primary", rectangular=False):
         key = (index, order, policy, rectangular)
@@ -428,7 +459,7 @@ class AccuracyRecipe:
             "remove_sentinel",
         ):
             raise ValueError("unknown explicit sensitivity policy")
-        active = np.unique(self.selection.selected_pairs)
+        active = np.unique(self.bin_selection(index).selected_pairs)
         for i, f in enumerate(self.selection.fields):
             if i not in active:
                 continue
@@ -551,6 +582,7 @@ class AccuracyRecipe:
                     method=self.weight_method,
                     iterations=controls.get("iterations"),
                     policy=policy,
+                    weight_rtol=controls.get("weight_rtol", 1e-4),
                 )
             else:
                 galaxies[field.id] = local_galaxy_density(row["density"], q, geometry)
@@ -566,6 +598,20 @@ class AccuracyRecipe:
                 independent_sampling=True,
             )
         )
+        if self.weight_method in ADAPTIVE:
+            for name, weight in prepared.weights.items():
+                forest_weighting[name].update(
+                    result=plain(weight.convergence),
+                    weights=weight.weights.tolist(),
+                    A=weight.A,
+                    P_pixel=weight.P_pixel,
+                    auxiliary=dict(
+                        k=weight.auxiliary.k,
+                        mu=weight.auxiliary.mu,
+                        P=weight.signal,
+                        B=weight.alias,
+                    ),
+                )
         settings = dict(
             profile="accuracy",
             parameters=[f"ap_{index}", f"at_{index}"],
@@ -595,11 +641,21 @@ class AccuracyRecipe:
                 reference=(
                     FIXED_REFERENCE
                     if self.weight_method == "inverse_variance"
+                    else REFERENCE
+                    if self.weight_method in ADAPTIVE
                     else None
                 ),
                 iterations=(
                     {"applicable": False, "status": "inapplicable"}
                     if self.weight_method == "inverse_variance"
+                    else {
+                        "applicable": True,
+                        "stopping": {
+                            **STOPPING,
+                            "rtol": controls.get("weight_rtol", 1e-4),
+                        },
+                    }
+                    if self.weight_method in ADAPTIVE
                     else {"applicable": True, "count": controls["iterations"]}
                 ),
                 forests=forest_weighting,
@@ -610,6 +666,8 @@ class AccuracyRecipe:
             noise_ownership="per-field independent sampling; pixel/Poisson unsmoothed",
             response_ownership="observed J, response already applied exactly once",
         )
+        if getattr(self, "recipe_revision", None):
+            settings["recipe_identity"] = identity("accuracy", self.weight_method)
         result = (prepared, settings)
         self._prepared[key] = result
         while len(self._prepared) > 3:
@@ -617,6 +675,8 @@ class AccuracyRecipe:
         return result
 
     def evaluate(self, task, controls, **options):
+        if task.get("recipe_revision") != getattr(self, "recipe_revision", None):
+            raise ValueError("accuracy task and recipe revision differ")
         index = task["bin"]
         prepared, settings = self.prepare(index, controls, **options)
         settings = {**settings, "controls": dict(controls)}
@@ -629,7 +689,7 @@ class AccuracyRecipe:
             prepared.mu,
             step_scale=controls["step"] / 0.001,
         )
-        selected = self.selection.selected_to_required
+        selected = prepared.p3d.selection.selected_to_required
         j = (prepared.products[:, :, None] * derivatives.jacobian)[:, selected][
             :, :, active
         ]

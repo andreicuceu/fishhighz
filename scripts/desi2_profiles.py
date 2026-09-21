@@ -13,14 +13,25 @@ if __name__ == "__main__":
     p.add_argument(
         "--profiles",
         nargs="+",
-        choices=["compatibility", "accuracy"],
-        default=["compatibility", "accuracy"],
+        choices=[
+            "compatibility",
+            "full-compatibility",
+            "fixed-compatibility",
+            "accuracy",
+        ],
+        default=["full-compatibility", "fixed-compatibility", "accuracy"],
     )
     p.add_argument("--cases", nargs="+")
     p.add_argument("--bins", nargs="+", type=int)
     p.add_argument("--reference")
     p.add_argument("--template")
     p.add_argument("--reference-bundle")
+    p.add_argument("--compatibility-bundle")
+    p.add_argument(
+        "--accuracy-method",
+        choices=["early_lyaforecast", "mcdonald", "inverse_variance", "legacy"],
+        default="early_lyaforecast",
+    )
     p.add_argument("--wheel")
     p.add_argument("--reuse-completed")
     a = p.parse_args()
@@ -36,6 +47,8 @@ if __name__ == "__main__":
             reference=a.reference,
             template=a.template,
             reference_bundle=a.reference_bundle,
+            compatibility_bundle=a.compatibility_bundle,
+            accuracy_method=a.accuracy_method,
             wheel=a.wheel,
             suite=a.suite,
             cases=a.cases,

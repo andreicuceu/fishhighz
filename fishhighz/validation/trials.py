@@ -24,6 +24,8 @@ FIXED_CONTROL_KEYS = {
     name: key for name, key in CONTROL_KEYS.items() if name != "weights"
 }
 FIXED_LEVELS = {name: values for name, values in LEVELS.items() if name != "weights"}
+ADAPTIVE_CONTROL_KEYS = dict(FIXED_CONTROL_KEYS, weights="weight_rtol")
+ADAPTIVE_LEVELS = dict(FIXED_LEVELS, weights=[1e-4, 1e-5])
 FIXED_REFERENCE = dict(
     convention="intrinsic_p1d_times_field_response_squared",
     q_star=0.00035,
@@ -45,6 +47,10 @@ def bind(arrays, report, outcomes, *, method="legacy"):
         version = 2
         control_keys = FIXED_CONTROL_KEYS
         levels = FIXED_LEVELS
+    elif method in ("early_lyaforecast", "mcdonald"):
+        version = 3
+        control_keys = ADAPTIVE_CONTROL_KEYS
+        levels = ADAPTIVE_LEVELS
     else:
         raise ValueError("unknown accuracy forest-weight method")
     final = report["final_controls"]
@@ -69,6 +75,15 @@ def bind(arrays, report, outcomes, *, method="legacy"):
         report["trial_contract"].update(
             method=method,
             fixed_reference=FIXED_REFERENCE,
+        )
+    if version == 3:
+        from .profile_definitions import REFERENCE, REVISION, STOPPING
+
+        report["trial_contract"].update(
+            method=method,
+            reference=REFERENCE,
+            stopping=STOPPING,
+            recipe_revision=REVISION,
         )
 
 
@@ -97,6 +112,25 @@ def validate(arrays, report):
             != {"applicable": False, "status": "inapplicable"}
         ):
             raise ValueError("version-2 trials require the fixed-reference convention")
+    elif version == 3:
+        from .profile_definitions import REFERENCE, REVISION, STOPPING
+
+        control_keys, levels = ADAPTIVE_CONTROL_KEYS, ADAPTIVE_LEVELS
+        method = contract.get("method")
+        weighting = report.get("settings", {}).get("forest_weighting", {})
+        if (
+            method not in ("early_lyaforecast", "mcdonald")
+            or weighting.get("method") != method
+            or contract.get("reference") != REFERENCE
+            or contract.get("stopping") != STOPPING
+            or contract.get("recipe_revision") != REVISION
+        ):
+            raise ValueError("version-3 trials require the adaptive recipe")
+        for row in weighting.get("forests", {}).values():
+            if row.get("result", {}).get("status") != "converged":
+                raise ValueError(
+                    "unconverged adaptive weights cannot supply a forecast"
+                )
     else:
         raise ValueError("missing or changed predeclared trial contract")
     if contract.get("allowed_levels") != levels:
@@ -192,7 +226,7 @@ def validate(arrays, report):
             raise ValueError("metric upper control is not final")
         lower[key] = values[-2]
         expected_values = [
-            v for v in LEVELS[name] if trial_id({**final, key: v}) in successful
+            v for v in levels[name] if trial_id({**final, key: v}) in successful
         ]
         if values != expected_values:
             raise ValueError("actual levels do not match successful isolated trials")
@@ -256,7 +290,12 @@ def validate(arrays, report):
             return dict(
                 fisher=arrays["study_fisher"][j],
                 pair_fisher=arrays["study_pair_fisher"][j],
-            ), dict(settings=dict(grid=dict(volume=arrays["study_volume"][j])))
+            ), dict(
+                settings=dict(
+                    grid=dict(volume=arrays["study_volume"][j]),
+                    forest_weighting=row.get("forest_weighting", {}),
+                )
+            )
 
     saved = SavedTrials()
     context = report.get("context", {})

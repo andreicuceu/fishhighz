@@ -1,3 +1,16 @@
+# Step 13 — done and closed
+
+Step 13 revision 2 is done and closed at the user's direction on 2026-09-17.
+Its unresolved continuum conclusion is preserved; no further repair or review
+is assigned under this step.
+
+The current direction is the [compatibility weighting test plan](../../FISHHIGHZ_COMPATIBILITY_WEIGHTING_PLAN.md)
+and [implementation roadmap](../../FISHHIGHZ_IMPLEMENTATION_PLAN.md).
+The assignment below is retained as historical text only; its dispatch and
+pending-work instructions are inactive.
+
+---
+
 # Step 13, revision 2: normalized limit of the cumulative forest weights
 
 Status: revision 1 requires corrections after independent review. Revision 2

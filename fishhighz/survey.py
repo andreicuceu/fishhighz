@@ -38,9 +38,12 @@ class ForestInput:
     """Explicit normalized weight kwargs and independent P1D state.
 
     weight_options are the keyword arguments of prepare_forest_weights. Optional
-    auxiliary_coordinates=(k_t_deg,k_p_velocity) selects one callable S/B query
-    for method='legacy'; omit it for direct scalar S/B or supplied weights.
-    Reader provenance is plain metadata, never a live interpolator.
+    auxiliary_coordinates=(k_t_deg,k_p_velocity) selects one matching auto-P3D
+    and P1D query for method='legacy', 'early_lyaforecast' or 'mcdonald'; omit it
+    for direct scalar S/B, inverse-variance or supplied weights. Adaptive methods
+    raise during bin preparation unless convergence is confirmed within their
+    explicit stopping controls. Reader provenance is plain metadata, never a
+    live interpolator.
     """
 
     weight_options: object
@@ -65,7 +68,8 @@ class ForestInput:
             coords = tuple(self.auxiliary_coordinates)
             if (
                 len(coords) != 2
-                or self.weight_options.get("method") != "legacy"
+                or self.weight_options.get("method")
+                not in ("legacy", "early_lyaforecast", "mcdonald")
                 or any(
                     self.weight_options.get(k) is not None
                     for k in ("signal", "alias", "auxiliary", "weights")
@@ -119,6 +123,9 @@ class BinSpec:
 class PreparedBin:
     """Fixed owned numerical state; no raw adapters or file handles.
 
+    ``weights`` maps active forest IDs to their immutable ForestWeights,
+    including convergence metadata. ``diagnostics`` records pair counts/order,
+    responses, noise convention, volume, units, and actual preparation calls.
     Full factors require O(n_node*n_selected**2) storage. Callables in p3d must
     be deterministic and not externally mutated; changed models/fiducials need
     fresh preparation. Arbitrary callable internals are not hashed or copied.

@@ -81,7 +81,13 @@ def requests(suite, cases=None, bin_indices=None):
 
 
 def modern_requests(
-    suite, cases=None, bin_indices=None, *, profiles=("accuracy",), kind="real_bao"
+    suite,
+    cases=None,
+    bin_indices=None,
+    *,
+    profiles=("accuracy",),
+    kind="real_bao",
+    recipe_revision=None,
 ):
     """Exact primary inventory; full two-profile coverage is 78 records."""
     from .schema import PROFILES, request
@@ -94,7 +100,9 @@ def modern_requests(
     ):
         raise ValueError("invalid profile inventory")
     return [
-        request(t["case"], t["bin"], profile, kind=kind)
+        request(
+            t["case"], t["bin"], profile, kind=kind, recipe_revision=recipe_revision
+        )
         for t in requests(suite, cases, bin_indices)
         for profile in profiles
     ]
@@ -111,6 +119,7 @@ def execute(
     profiles=("accuracy",),
     kind="real_bao",
     diagnostic_requests=(),
+    recipe_revision=None,
 ):
     """Write schema-2 semantic evidence, retaining execution/science failures.
 
@@ -120,7 +129,14 @@ def execute(
     """
     from .schema import validate_payload, validate_request
 
-    work = modern_requests(suite, cases, bin_indices, profiles=profiles, kind=kind)
+    work = modern_requests(
+        suite,
+        cases,
+        bin_indices,
+        profiles=profiles,
+        kind=kind,
+        recipe_revision=recipe_revision,
+    )
     diagnostics = list(diagnostic_requests)
     for task in diagnostics:
         validate_request(task)
@@ -138,6 +154,7 @@ def execute(
         bin_indices=list(bin_indices) if bin_indices is not None else None,
         profiles=list(profiles),
         payload_kind=kind,
+        recipe_revision=recipe_revision,
         requested=work,
         diagnostics_requested=diagnostics,
         records=[],
@@ -199,6 +216,16 @@ def execute(
                     scientific_passed=False,
                     error=f"{type(error).__name__}: {error}",
                 )
+            if task.get("recipe_revision"):
+                record["numerical_status"] = (
+                    (
+                        "qualified_finite_refinement"
+                        if task["profile"] == "accuracy"
+                        else "reproducibility_control"
+                    )
+                    if record.get("scientific_passed")
+                    else "unresolved"
+                )
             record["seconds"] = time.monotonic() - start
             manifest[group].append(record)
             save()
@@ -244,6 +271,7 @@ def check(output, *, verify_sources=True):
             m["bin_indices"],
             profiles=m["profiles"],
             kind=m["payload_kind"],
+            recipe_revision=m.get("recipe_revision"),
         )
     )
     if m["requested"] != expected:

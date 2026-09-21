@@ -29,7 +29,7 @@ KINDS = (
     "external_amplitude",
     "diagnostic",
 )
-PROFILES = ("compatibility", "accuracy")
+PROFILES = ("compatibility", "accuracy", "full-compatibility", "fixed-compatibility")
 
 
 def canonical(value):
@@ -42,7 +42,9 @@ def token(value):
     return np.frombuffer(bytes.fromhex(canonical(value)), dtype=np.uint8).copy()
 
 
-def request(case, index, profile, *, kind="real_bao", diagnostic_id=None):
+def request(
+    case, index, profile, *, kind="real_bao", diagnostic_id=None, recipe_revision=None
+):
     """Bind fixed recipe identities, targets and thresholds before worker execution."""
     if profile not in PROFILES or kind not in KINDS:
         raise ValueError("unknown profile/payload kind")
@@ -56,9 +58,23 @@ def request(case, index, profile, *, kind="real_bao", diagnostic_id=None):
         isinstance(diagnostic_id, str) and bool(diagnostic_id)
     ):
         raise ValueError("diagnostic kind requires an explicit diagnostic ID")
-    sel = selection(case)
+    if (
+        profile in ("full-compatibility", "fixed-compatibility")
+        and recipe_revision is None
+    ):
+        from .profile_definitions import REVISION
+
+        recipe_revision = REVISION
+    if recipe_revision is not None:
+        from .profile_definitions import REVISION, forecast_selection
+
+        if recipe_revision != REVISION:
+            raise ValueError("unknown recipe revision")
+        sel = forecast_selection(case, index)
+    else:
+        sel = selection(case)
     parameters = ["A"] if kind.endswith("amplitude") else [f"ap_{index}", f"at_{index}"]
-    return dict(
+    result = dict(
         case=case,
         bin=index,
         bounds=list(bins(case)[index]),
@@ -79,6 +95,10 @@ def request(case, index, profile, *, kind="real_bao", diagnostic_id=None):
         response_ownership="observed J, response already applied exactly once",
     )
 
+    if recipe_revision is not None:
+        result["recipe_revision"] = recipe_revision
+    return result
+
 
 def validate_request(task):
     if task != request(
@@ -87,6 +107,7 @@ def validate_request(task):
         task["profile"],
         kind=task["kind"],
         diagnostic_id=task["diagnostic_id"],
+        recipe_revision=task.get("recipe_revision"),
     ):
         raise ValueError(
             "request does not match exact recipe/field/pair/parameter contract"
@@ -314,8 +335,14 @@ def validate_payload(task, arrays, report, *, require_pass=True, schema=3):
     _close(arrays["field_min_eigenvalue"], eigen, "field eigenvalues")
     if task["profile"] == "accuracy" and task["kind"] in ("real_bao", "diagnostic"):
         from ..covariance import _validate_field_power
+        from .profile_definitions import forecast_selection
 
-        _validate_field_power(arrays["total"], selection(task["case"]))
+        sel = (
+            forecast_selection(task["case"], task["bin"])
+            if task.get("recipe_revision")
+            else selection(task["case"])
+        )
+        _validate_field_power(arrays["total"], sel)
     # Direct solve, independently of the factor kernel used by the writer.
     f, single = contract(c, arrays["observed_j"], independent=True)
     expected = summaries(f, single)
@@ -402,9 +429,9 @@ def validate_payload(task, arrays, report, *, require_pass=True, schema=3):
                 "step",
                 "combined",
             }
-            if version == 1:
+            if version in (1, 3):
                 expected.add("weights")
-            elif version != 2:
+            elif version not in (2, 3):
                 raise ValueError("unknown accuracy trial contract")
             if set(names) != expected:
                 raise ValueError("incomplete accuracy convergence inventory")

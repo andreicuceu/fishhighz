@@ -73,7 +73,10 @@ def prepare_bin(spec):
 
     Returns PreparedBin, with immutable (node,required_pair) N/R/P/T, (node,)
     modes/k/mu, (node,field) W and (node,selected,selected) Cholesky factors.
-    No derivative schedule is assumed until run_bin's explicit options arrive.
+    ForestWeights (including adaptive status) and preparation diagnostics are
+    retained by field. No derivative schedule is assumed until run_bin's
+    explicit options arrive. Weighting failure raises; no partial PreparedBin is
+    returned.
     """
     _validate_spec(spec)
     selection, geometry = spec.p3d.selection, spec.geometry
@@ -213,7 +216,7 @@ def prepare_bin(spec):
 
 @dataclass(frozen=True)
 class BinRun:
-    """One zero-prior FisherResult and actual batched derivative diagnostics."""
+    """One zero-prior FisherResult and actual derivative columns/calls/batches."""
 
     id: str
     result: FisherResult
@@ -224,7 +227,7 @@ class BinRun:
 
 @dataclass(frozen=True)
 class ForecastRun:
-    """Caller-ordered bin results and a combined result with one explicit prior."""
+    """Caller-ordered BinRuns and their combined FisherResult with one prior."""
 
     bin_ids: tuple[str, ...]
     bins: tuple[BinRun, ...]
@@ -324,7 +327,10 @@ def run_forecast(
     """Run prepared independent bins in one registry; add prior exactly once.
 
     No per-bin marginalization, implicit preparation/cache refresh or partial
-    success return. Changing priors reuses the same prepared bins.
+    success return. Changing priors reuses the same prepared bins. The returned
+    ForecastRun exposes each zero-prior bin result and ``combined``, where the
+    caller's prior is applied once after summing independent-bin data Fisher
+    matrices.
     """
     bins = _validate_bins(bins)
     for b in bins:

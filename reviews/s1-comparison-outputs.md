@@ -1,0 +1,11 @@
+# S1 saved three-profile comparison products
+
+The new reader and plotting module retain all 78 individual and six joint results per profile. Twelve excluded bin-1 spectra remain explicit gaps, distinct from failed or unconstrained results. Joint matrices come directly from the saved full covariance contraction. Tables retain Fisher matrices, both errors, correlation, rank, ellipse area and all three requested fractional error comparisons plus ellipse-area ratios. The 0.2 plotting cut masks both components and requires both ratio operands; hidden valid values remain in tables.
+
+Files: `fishhighz/validation/three_profile_plots.py`, `scripts/plot_three_profiles.py`, `tests/test_three_profile_plots.py`. Invocation: `PYTHONPATH=. python scripts/plot_three_profiles.py --bundle BUNDLE [BUNDLE ...] --output OUTPUT`. Exactly all three profiles and six bins are required. The CLI uses saved hashes and existing payload validation, without recalculating forecasts. It supports multiple manifest roots for separately saved profiles.
+
+Eight BAO figures contain all 15 individual panels and separate joint curves, explicitly identifying three selected spectra in bin 1 and fifteen in bins 2–6. Saved fixed/accuracy forest records additionally produce weights-versus-magnitude and A/P_pixel figures. Full-compatibility forest curves are absent when the saved forest record is empty; no weights are reconstructed by plotting. Raw forest metadata and qualification evidence remain in the JSON table.
+
+Finite results do not establish convergence: numerical status defaults to unqualified, explicit `numerical_status` is propagated, and nonempty `unresolved_controls` is shown. Scientific acceptance is never inferred. S2 may supply explicit numerical-status metadata after its independent qualification; the full saved metrics and trial contract are retained.
+
+Validation: one-thread sibling dev environment, `PYTHONPATH=. ../lyaforecast/.validation/dev-env/bin/python -m pytest tests/test_three_profile_plots.py -q`; synthetic selected counts, exact saved joint extraction, hidden-table values and ratio masking, failure/exclusion distinction, and figure rendering including forest diagnostics. Ruff checks cover only the three added Python files. No real forecast, source numerical edits, commits, pushes or Slurm actions performed.

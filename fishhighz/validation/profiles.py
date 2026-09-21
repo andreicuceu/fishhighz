@@ -13,6 +13,7 @@ from .accuracy import AccuracyRecipe, background
 from .cases import CASE_IDS, recipe, verify_inventory
 from .compatibility import run as compatibility
 from .evidence import canonical, digest, execute, modern_requests, record_report
+from .profile_definitions import ADAPTIVE, REVISION, identity
 from .reference_capture import imported_reference, resolved_resources
 from .schema import request, token
 
@@ -115,6 +116,15 @@ def completed_cache(root, ident, work, *, accuracy_method=None):
                 raise ValueError(
                     "cached accuracy weight method differs from the requested profile"
                 )
+        if record["task"].get("recipe_revision"):
+            expected = identity(
+                record["task"]["profile"],
+                accuracy_method if record["task"]["profile"] == "accuracy" else None,
+            )
+            if report.get("settings", {}).get("recipe_identity") != expected:
+                raise ValueError(
+                    "cached recipe revision/mode/stopping/selection differs"
+                )
         old = report["provenance"]
         before = old["fishhighz"]["module_hashes"]
         after = ident["fishhighz"]["module_hashes"]
@@ -193,15 +203,30 @@ def run(
     suite="quick",
     cases=None,
     bin_indices=None,
-    profiles=("compatibility", "accuracy"),
-    sensitivities=True,
+    profiles=("full-compatibility", "fixed-compatibility", "accuracy"),
+    sensitivities=False,
     reuse_completed=None,
-    accuracy_method="inverse_variance",
+    accuracy_method="early_lyaforecast",
+    compatibility_bundle=None,
+    recipe_revision=REVISION,
 ):
     """Serial full is explicit; primary and diagnostic inventories are disjoint."""
-    if accuracy_method not in ("inverse_variance", "legacy"):
-        raise ValueError("accuracy_method must be inverse_variance or legacy")
-    work = modern_requests(suite, cases, bin_indices, profiles=profiles)
+    if accuracy_method not in ("inverse_variance", "legacy", *ADAPTIVE):
+        raise ValueError(
+            "accuracy_method must be legacy, inverse_variance, "
+            "early_lyaforecast or mcdonald"
+        )
+    if recipe_revision:
+        if cases is None:
+            cases = ["lya_qso_lbg_lae_15x2pt"]
+        if list(cases) != ["lya_qso_lbg_lae_15x2pt"]:
+            raise ValueError("revised profiles are bounded to the DESI-2 15x2pt case")
+        profiles = tuple(
+            "full-compatibility" if p == "compatibility" else p for p in profiles
+        )
+    work = modern_requests(
+        suite, cases, bin_indices, profiles=profiles, recipe_revision=recipe_revision
+    )
     verify_inventory(Path(reference) / "examples/desi2")
     ident = provenance(reference, template, wheel)
     primary_rows = {}
@@ -214,7 +239,14 @@ def run(
     diagnostics = []
     if sensitivities and "accuracy" in profiles:
         diagnostics = [
-            request(t["case"], t["bin"], "accuracy", kind="diagnostic", diagnostic_id=p)
+            request(
+                t["case"],
+                t["bin"],
+                "accuracy",
+                kind="diagnostic",
+                diagnostic_id=p,
+                recipe_revision=recipe_revision,
+            )
             for t in work
             if t["profile"] == "accuracy"
             for p in POLICIES
@@ -234,10 +266,10 @@ def run(
             c, t = background(reference, template)
         if active_case != case:
             arguments = (reference, case, c, t, ident)
-            active_recipe = (
-                AccuracyRecipe(*arguments)
-                if accuracy_method == "inverse_variance"
-                else AccuracyRecipe(*arguments, weight_method=accuracy_method)
+            active_recipe = AccuracyRecipe(
+                *arguments,
+                weight_method=accuracy_method,
+                recipe_revision=recipe_revision,
             )
             active_case = case
         return active_recipe
@@ -327,6 +359,14 @@ def run(
                 1,
                 1,
             )
+        elif task["profile"] in ("full-compatibility", "fixed-compatibility"):
+            from .revised_compatibility import run as selected_compatibility
+
+            if compatibility_bundle is None:
+                raise ValueError(
+                    "new compatibility profiles require captured compatibility_bundle"
+                )
+            arrays, report = selected_compatibility(task, compatibility_bundle, ident)
         elif task["profile"] == "compatibility":
             arrays, report = compatibility(task, reference_bundle, ident)
         else:
@@ -366,4 +406,5 @@ def run(
         worker=worker,
         inputs=inputs,
         diagnostic_requests=diagnostics,
+        recipe_revision=recipe_revision,
     )
