@@ -1,5 +1,7 @@
 # FishHighz
 
+[![Documentation Status](https://readthedocs.org/projects/fishhighz/badge/?version=latest)](https://fishhighz.readthedocs.io/en/latest/)
+
 FishHighz computes Fourier-space Gaussian covariances and Fisher forecasts for
 high-redshift galaxy and Lyman-alpha forest surveys. It retains covariance
 between selected auto- and cross-power spectra and supports external models,
@@ -12,8 +14,8 @@ Two interfaces serve different calculations:
 - The scientific Python API exposes fields, parameters, models, derivatives,
   integration grids, covariance, and Fisher assembly for more general studies.
 
-[Documentation](docs/index.md) · [Getting started](docs/getting-started.md) ·
-[INI reference](docs/user/ini.md) · [API reference](docs/api/index.md)
+[Documentation](https://fishhighz.readthedocs.io/en/latest/) · [Getting started](https://fishhighz.readthedocs.io/en/latest/getting-started.html) ·
+[INI reference](https://fishhighz.readthedocs.io/en/latest/user/ini.html) · [API reference](https://fishhighz.readthedocs.io/en/latest/api/index.html)
 
 ## Installation
 
@@ -68,11 +70,11 @@ constraints, effective configuration, and input provenance.
 
 To define another survey, start from the
 [annotated INI](examples/desi2_accuracy_annotated.ini) and consult the
-[configuration guide](docs/user/ini.md). Numerical overrides or changed inputs
+[configuration guide](https://fishhighz.readthedocs.io/en/latest/user/ini.html). Numerical overrides or changed inputs
 require their own assessment; a prescription name does not qualify a modified
 calculation automatically.
 
-The [Python guide](docs/user/python.md) explains preparation, supplied models
+The [Python guide](https://fishhighz.readthedocs.io/en/latest/user/python.html) explains preparation, supplied models
 and readers, execution controls, and results. The
 [synthetic research example](examples/research_bao_forecast.py) demonstrates
 explicit scientific API choices without running a real-survey study.
@@ -83,31 +85,32 @@ Calculations use independent redshift bins, a common volume per bin, and
 fiducial covariance and weights held fixed during mean derivatives. Selecting
 only some spectra does not remove spectra needed to construct their covariance.
 
-The [research baseline](docs/research/RESEARCH_BASELINE.md) defines the adopted
+The [research baseline](https://fishhighz.readthedocs.io/en/latest/research/RESEARCH_BASELINE.html) defines the adopted
 S2–S4 prescription and its numerical qualification. The
-[weighting decision](docs/research/FOREST_WEIGHTING_DECISION.md) records the
+[weighting decision](https://fishhighz.readthedocs.io/en/latest/research/FOREST_WEIGHTING_DECISION.html) records the
 accepted early-lyaforecast recurrence and retained alternative; the
-[deferred tests](docs/research/DEFERRED_SCIENTIFIC_TESTS.md) describe remaining
+[deferred tests](https://fishhighz.readthedocs.io/en/latest/research/DEFERRED_SCIENTIFIC_TESTS.html) describe remaining
 scientific questions. Finite-refinement and iteration checks do not establish
 physical accuracy of reconstruction assumptions or a continuum limit.
 
 The bundled DESI recipe retains only the QSO/lya(qso) spectra in bin 1 and all
 15 spectra in bins 2–6. Historical studies retain their original selections
-and conclusions in the [development and validation archives](docs/archive/index.md).
+and conclusions in the [development and validation archives](https://fishhighz.readthedocs.io/en/latest/archive/index.html).
 
 ## Development and documentation
 
 Contributor setup, quick checks, and distribution instructions are in the
-[development guide](docs/development/contributing.md). Build the HTML manual with:
+[development guide](https://fishhighz.readthedocs.io/en/latest/development/contributing.html). Build the HTML manual with:
 
 ```bash
 python -m pip install -e '.[docs]'
 python -m sphinx -n -W --keep-going -b html docs docs/_build/html
 ```
 
-Read the result at `docs/_build/html/index.html`. Read the Docs configuration is
-included; hosting must be connected separately. Real-survey validation and
-scheduler actions are separate from ordinary documentation and synthetic checks.
+Read the local build at `docs/_build/html/index.html`, or browse the
+[published documentation](https://fishhighz.readthedocs.io/en/latest/).
+Real-survey validation and scheduler actions are separate from ordinary
+documentation and synthetic checks.
 
 ## License
 

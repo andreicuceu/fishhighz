@@ -13,34 +13,43 @@ Invalid shapes, domains, identities and quadrature normalizations raise
 
 ## `fishhighz.fields`
 
-```{autoclass} fishhighz.fields.ObservedField
+```{eval-rst}
+.. autoclass:: fishhighz.fields.ObservedField
 ```
 
-```{autoclass} fishhighz.fields.PairSelection
+```{eval-rst}
+.. autoclass:: fishhighz.fields.PairSelection
 ```
 
 ## `fishhighz.parameters`
 
-```{autoclass} fishhighz.parameters.Parameter
+```{eval-rst}
+.. autoclass:: fishhighz.parameters.Parameter
 ```
 
-```{autoclass} fishhighz.parameters.ParameterRegistry
+```{eval-rst}
+.. autoclass:: fishhighz.parameters.ParameterRegistry
 ```
 
-```{autoclass} fishhighz.parameters.ParameterBinding
+```{eval-rst}
+.. autoclass:: fishhighz.parameters.ParameterBinding
 ```
 
-```{autofunction} fishhighz.parameters.gather_local
+```{eval-rst}
+.. autofunction:: fishhighz.parameters.gather_local
 ```
 
-```{autofunction} fishhighz.parameters.map_jacobian
+```{eval-rst}
+.. autofunction:: fishhighz.parameters.map_jacobian
 ```
 
 ## `fishhighz.grids`
 
-```{autoclass} fishhighz.grids.IntegrationGrid
+```{eval-rst}
+.. autoclass:: fishhighz.grids.IntegrationGrid
 ```
 
-```{autofunction} fishhighz.grids.gauss_legendre_grid
+```{eval-rst}
+.. autofunction:: fishhighz.grids.gauss_legendre_grid
 ```
 

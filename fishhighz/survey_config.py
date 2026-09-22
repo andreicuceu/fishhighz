@@ -961,7 +961,7 @@ def _normalise_readers(config, fields, readers, stack):
 
 
 def prepare_survey(config, *, background, template, readers=None, prepare=False):
-    """Assemble native :class:`BinSpec` objects from a parsed configuration.
+    """Assemble native :class:`~fishhighz.survey.BinSpec` objects from a parsed configuration.
 
     ``background`` and ``template`` are caller-prepared objects.  This function
     never invokes CAMB.  ``readers`` may inject deterministic density/SNR
@@ -1261,7 +1261,7 @@ def prepare_survey(config, *, background, template, readers=None, prepare=False)
 
 
 def prepare_ini(source=None, *, background, template, readers=None):
-    """Parse ``source`` and assemble its native :class:`BinSpec` objects."""
+    """Parse ``source`` and assemble its native :class:`~fishhighz.survey.BinSpec` objects."""
 
     return prepare_survey(
         parse_survey_ini(source),

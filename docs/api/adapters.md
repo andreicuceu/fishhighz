@@ -16,65 +16,80 @@ an optional callable bridge and does not make lyaforecast a base dependency.
 
 ## `fishhighz.survey`
 
-```{autoclass} fishhighz.survey.ForestInput
+```{eval-rst}
+.. autoclass:: fishhighz.survey.ForestInput
 ```
 
-```{autoclass} fishhighz.survey.BinSpec
+```{eval-rst}
+.. autoclass:: fishhighz.survey.BinSpec
 ```
 
-```{autoclass} fishhighz.survey.PreparedBin
+```{eval-rst}
+.. autoclass:: fishhighz.survey.PreparedBin
 ```
 
 ## `fishhighz.forecast`
 
-```{autofunction} fishhighz.forecast.prepare_bin
+```{eval-rst}
+.. autofunction:: fishhighz.forecast.prepare_bin
 ```
 
-```{autoclass} fishhighz.forecast.BinRun
+```{eval-rst}
+.. autoclass:: fishhighz.forecast.BinRun
 ```
 
-```{autoclass} fishhighz.forecast.ForecastRun
+```{eval-rst}
+.. autoclass:: fishhighz.forecast.ForecastRun
 ```
 
-```{autofunction} fishhighz.forecast.run_bin
+```{eval-rst}
+.. autofunction:: fishhighz.forecast.run_bin
 ```
 
-```{autofunction} fishhighz.forecast.run_forecast
+```{eval-rst}
+.. autofunction:: fishhighz.forecast.run_forecast
 ```
 
 ## `fishhighz.adapters.legacy_inputs`
 
-```{autoclass} fishhighz.adapters.legacy_inputs.DensityReader
-:members: query, local_galaxy_density
-:undoc-members:
+```{eval-rst}
+.. autoclass:: fishhighz.adapters.legacy_inputs.DensityReader
+   :members: query, local_galaxy_density
+   :undoc-members:
 ```
 
-```{autoclass} fishhighz.adapters.legacy_inputs.SNRReader
-:members: query, variance
-:undoc-members:
+```{eval-rst}
+.. autoclass:: fishhighz.adapters.legacy_inputs.SNRReader
+   :members: query, variance
+   :undoc-members:
 ```
 
-```{autofunction} fishhighz.adapters.legacy_inputs.sample_forest_readers
+```{eval-rst}
+.. autofunction:: fishhighz.adapters.legacy_inputs.sample_forest_readers
 ```
 
 ## `fishhighz.adapters.legacy_compat`
 
-```{autoclass} fishhighz.adapters.legacy_compat.LegacyDensity
-:members: sample
-:undoc-members:
+```{eval-rst}
+.. autoclass:: fishhighz.adapters.legacy_compat.LegacyDensity
+   :members: sample
+   :undoc-members:
 ```
 
-```{autoclass} fishhighz.adapters.legacy_compat.LegacySNR
-:members: sample
-:undoc-members:
+```{eval-rst}
+.. autoclass:: fishhighz.adapters.legacy_compat.LegacySNR
+   :members: sample
+   :undoc-members:
 ```
 
-```{autofunction} fishhighz.adapters.legacy_compat.sample_legacy_forest
+```{eval-rst}
+.. autofunction:: fishhighz.adapters.legacy_compat.sample_legacy_forest
 ```
 
 ## `fishhighz.adapters.lyaforecast`
 
-```{autoclass} fishhighz.adapters.lyaforecast.IntrinsicP3D
-:special-members: __call__
+```{eval-rst}
+.. autoclass:: fishhighz.adapters.lyaforecast.IntrinsicP3D
+   :special-members: __call__
 ```
 

@@ -20,6 +20,7 @@ public docstrings, four-space indentation, and an 88-character Ruff line length.
 
 ```bash
 python -m sphinx -n -W --keep-going -b html docs docs/_build/html
+python scripts/check_docs.py docs/_build/html
 ```
 
 Alternatively, run `make -C docs html`. Open `docs/_build/html/index.html`.
@@ -28,7 +29,10 @@ build. Hosting configuration does not itself publish or connect a project.
 
 Edit narrative pages in MyST Markdown. Include existing examples with
 `literalinclude` and download links rather than copying their contents. Select
-API members explicitly; never execute forecasts during documentation builds.
+API members explicitly; wrap autodoc and autosummary directives in `eval-rst`
+blocks so their generated reStructuredText is parsed correctly. The HTML check
+requires API object and member anchors and rejects raw Python-domain directives.
+Never execute forecasts during documentation builds.
 Add new pages to a toctree and keep units, array ordering, default values, and
 scientific qualifications consistent with source and tests.
 

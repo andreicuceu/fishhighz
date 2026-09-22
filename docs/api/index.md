@@ -23,16 +23,17 @@ adapters
 
 ## Frequently used interfaces
 
-```{autosummary}
-:nosignatures:
+```{eval-rst}
+.. autosummary::
+   :nosignatures:
 
-fishhighz.public.Forecast
-fishhighz.survey_config.parse_survey_ini
-fishhighz.forecast.prepare_bin
-fishhighz.forecast.run_forecast
-fishhighz.fields.PairSelection
-fishhighz.models.kaiser.KaiserModel
-fishhighz.covariance.gaussian_covariance
-fishhighz.fisher.fisher_matrix
-fishhighz.results.FisherResult
+   fishhighz.public.Forecast
+   fishhighz.survey_config.parse_survey_ini
+   fishhighz.forecast.prepare_bin
+   fishhighz.forecast.run_forecast
+   fishhighz.fields.PairSelection
+   fishhighz.models.kaiser.KaiserModel
+   fishhighz.covariance.gaussian_covariance
+   fishhighz.fisher.fisher_matrix
+   fishhighz.results.FisherResult
 ```

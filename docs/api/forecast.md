@@ -32,83 +32,103 @@ rates and sigma8 are dimensionless; the fixed `h_fid` defines forecast units.
 
 ## `fishhighz.public`
 
-```{autoclass} fishhighz.public.Forecast
-:members: prepare, run
-:undoc-members:
+```{eval-rst}
+.. autoclass:: fishhighz.public.Forecast
+   :members: prepare, run
+   :undoc-members:
 ```
 
-```{autoclass} fishhighz.public.PreparedForecast
-:members: prepared_bins, bin_specs
-:undoc-members:
+```{eval-rst}
+.. autoclass:: fishhighz.public.PreparedForecast
+   :members: prepared_bins, bin_specs
+   :undoc-members:
 ```
 
-```{autoclass} fishhighz.public.SpectrumConstraint
-:members: result, available
-:undoc-members:
+```{eval-rst}
+.. autoclass:: fishhighz.public.SpectrumConstraint
+   :members: result, available
+   :undoc-members:
 ```
 
-```{autoclass} fishhighz.public.SurveyResult
-:members: individual_spectra, joint_constraints, constraints, fisher_results, save
-:undoc-members:
+```{eval-rst}
+.. autoclass:: fishhighz.public.SurveyResult
+   :members: individual_spectra, joint_constraints, constraints, fisher_results, save
+   :undoc-members:
 ```
 
 ## `fishhighz.survey_config`
 
-```{autoclass} fishhighz.survey_config.FieldConfig
+```{eval-rst}
+.. autoclass:: fishhighz.survey_config.FieldConfig
 ```
 
-```{autoclass} fishhighz.survey_config.BinConfig
+```{eval-rst}
+.. autoclass:: fishhighz.survey_config.BinConfig
 ```
 
-```{autoclass} fishhighz.survey_config.SurveyConfig
-:members: observed_fields, provenance
-:undoc-members:
+```{eval-rst}
+.. autoclass:: fishhighz.survey_config.SurveyConfig
+   :members: observed_fields, provenance
+   :undoc-members:
 ```
 
-```{autoclass} fishhighz.survey_config.PreparedSurvey
-:members: bin_specs
-:undoc-members:
+```{eval-rst}
+.. autoclass:: fishhighz.survey_config.PreparedSurvey
+   :members: bin_specs
+   :undoc-members:
 ```
 
-```{autoclass} fishhighz.survey_config.UnsupportedSchemaError
+```{eval-rst}
+.. autoclass:: fishhighz.survey_config.UnsupportedSchemaError
 ```
 
-```{autofunction} fishhighz.survey_config.parse_ini
+```{eval-rst}
+.. autofunction:: fishhighz.survey_config.parse_ini
 ```
 
-```{autofunction} fishhighz.survey_config.parse_survey_ini
+```{eval-rst}
+.. autofunction:: fishhighz.survey_config.parse_survey_ini
 ```
 
-```{autofunction} fishhighz.survey_config.prepare_ini
+```{eval-rst}
+.. autofunction:: fishhighz.survey_config.prepare_ini
 ```
 
-```{autofunction} fishhighz.survey_config.prepare_survey
+```{eval-rst}
+.. autofunction:: fishhighz.survey_config.prepare_survey
 ```
 
 ## `fishhighz.resources`
 
-```{autofunction} fishhighz.resources.bundled_resource
+```{eval-rst}
+.. autofunction:: fishhighz.resources.bundled_resource
 ```
 
-```{autofunction} fishhighz.resources.bundled_path
+```{eval-rst}
+.. autofunction:: fishhighz.resources.bundled_path
 ```
 
-```{autofunction} fishhighz.resources.bundled_paths
+```{eval-rst}
+.. autofunction:: fishhighz.resources.bundled_paths
 ```
 
-```{autofunction} fishhighz.resources.resolve_input_path
+```{eval-rst}
+.. autofunction:: fishhighz.resources.resolve_input_path
 ```
 
 ## `fishhighz.cosmology`
 
-```{autoclass} fishhighz.cosmology.CAMBBackground
-:members: z_bins, H, D_M, sigma8_zbins, growth_rate_zbins, f, H_values, D_M_values, f_values, h_fid, sigma8, results, z_to_index, index, sigma8_at, growth_rate_at, growth_rate, hubble_at, transverse_distance_at, hubble_parameter, comoving_radial_distance, transverse_comoving_distance
-:undoc-members:
+```{eval-rst}
+.. autoclass:: fishhighz.cosmology.CAMBBackground
+   :members: z_bins, H, D_M, sigma8_zbins, growth_rate_zbins, f, H_values, D_M_values, f_values, h_fid, sigma8, results, z_to_index, index, sigma8_at, growth_rate_at, growth_rate, hubble_at, transverse_distance_at, hubble_parameter, comoving_radial_distance, transverse_comoving_distance
+   :undoc-members:
 ```
 
-```{autofunction} fishhighz.cosmology.prepare_camb
+```{eval-rst}
+.. autofunction:: fishhighz.cosmology.prepare_camb
 ```
 
-```{autofunction} fishhighz.cosmology.prepare_camb_background
+```{eval-rst}
+.. autofunction:: fishhighz.cosmology.prepare_camb_background
 ```
 

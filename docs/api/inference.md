@@ -20,62 +20,79 @@ covariance blocks fail with cell context rather than receiving a diagonal floor.
 
 ## `fishhighz.covariance`
 
-```{autofunction} fishhighz.covariance.combine_observed_power
+```{eval-rst}
+.. autofunction:: fishhighz.covariance.combine_observed_power
 ```
 
-```{autofunction} fishhighz.covariance.gaussian_covariance
+```{eval-rst}
+.. autofunction:: fishhighz.covariance.gaussian_covariance
 ```
 
 ## `fishhighz.derivatives`
 
-```{autoclass} fishhighz.derivatives.Stencil
+```{eval-rst}
+.. autoclass:: fishhighz.derivatives.Stencil
 ```
 
-```{autoclass} fishhighz.derivatives.ColumnDiagnostic
+```{eval-rst}
+.. autoclass:: fishhighz.derivatives.ColumnDiagnostic
 ```
 
-```{autoclass} fishhighz.derivatives.CallCount
+```{eval-rst}
+.. autoclass:: fishhighz.derivatives.CallCount
 ```
 
-```{autoclass} fishhighz.derivatives.DerivativeResult
+```{eval-rst}
+.. autoclass:: fishhighz.derivatives.DerivativeResult
 ```
 
-```{autofunction} fishhighz.derivatives.evaluate_derivatives
+```{eval-rst}
+.. autofunction:: fishhighz.derivatives.evaluate_derivatives
 ```
 
-```{autoclass} fishhighz.derivatives.ConvergenceColumn
+```{eval-rst}
+.. autoclass:: fishhighz.derivatives.ConvergenceColumn
 ```
 
-```{autoclass} fishhighz.derivatives.ConvergenceResult
+```{eval-rst}
+.. autoclass:: fishhighz.derivatives.ConvergenceResult
 ```
 
-```{autofunction} fishhighz.derivatives.check_convergence
+```{eval-rst}
+.. autofunction:: fishhighz.derivatives.check_convergence
 ```
 
 ## `fishhighz.fisher`
 
-```{autofunction} fishhighz.fisher.factor_covariance
+```{eval-rst}
+.. autofunction:: fishhighz.fisher.factor_covariance
 ```
 
-```{autofunction} fishhighz.fisher.fisher_from_factors
+```{eval-rst}
+.. autofunction:: fishhighz.fisher.fisher_from_factors
 ```
 
-```{autofunction} fishhighz.fisher.fisher_matrix
+```{eval-rst}
+.. autofunction:: fishhighz.fisher.fisher_matrix
 ```
 
 ## `fishhighz.results`
 
-```{autoclass} fishhighz.results.FisherDiagnostics
+```{eval-rst}
+.. autoclass:: fishhighz.results.FisherDiagnostics
 ```
 
-```{autoclass} fishhighz.results.FisherResult
-:members: conditional_errors, marginalized_covariance, marginalized_errors, correlations, fix_except
-:undoc-members:
+```{eval-rst}
+.. autoclass:: fishhighz.results.FisherResult
+   :members: conditional_errors, marginalized_covariance, marginalized_errors, correlations, fix_except
+   :undoc-members:
 ```
 
-```{autofunction} fishhighz.results.diagonal_prior
+```{eval-rst}
+.. autofunction:: fishhighz.results.diagonal_prior
 ```
 
-```{autofunction} fishhighz.results.combine_results
+```{eval-rst}
+.. autofunction:: fishhighz.results.combine_results
 ```
 

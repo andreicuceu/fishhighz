@@ -22,6 +22,8 @@ html_title = "FishHighz documentation"
 autosummary_generate = True
 napoleon_numpy_docstring = True
 napoleon_google_docstring = False
+# Keep NumPy type descriptions (shapes, choices, optional) as text, not class links.
+napoleon_use_param = False
 napoleon_use_rtype = False
 autodoc_typehints = "none"
 myst_enable_extensions = ["dollarmath", "amsmath", "colon_fence"]

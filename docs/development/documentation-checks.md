@@ -35,7 +35,8 @@ the Sphinx configuration and nine scripts with relocated document paths.
 The integrated HTML build passed with warnings treated as errors. The generated
 HTML audit checked **18,545 local links and anchors** across 202 HTML pages with
 zero errors, including this check record. Representative HTML contained
-mathematical elements, tables, highlighted INI examples, and API signatures.
+mathematical elements, tables, and highlighted INI examples. The initial check
+did not adequately verify API signature rendering; see the correction below.
 
 ## Distributions
 
@@ -69,3 +70,19 @@ Read the Docs and CI configurations are prepared; no hosted build or publication
 was requested. No real-survey forecast, full scientific validation suite, Slurm
 action, commit, or push was performed. Numerical results and their scientific
 acceptance status remain those of the preserved research records.
+
+## API rendering correction
+
+A later check of the published site found autodoc's generated reStructuredText
+rendered as plain text. The original strict build and imported-object checks
+passed despite missing API anchors, so they were insufficient evidence of
+correct API rendering.
+
+The API directives now use MyST `eval-rst` blocks. NumPy-style parameter type
+descriptions remain descriptive text, and explicit docstring cross-references
+resolve to the documented objects. `scripts/check_docs.py` checks signatures
+and anchors for all 113 documented objects and their selected members, and
+rejects raw Python-domain directives in the generated HTML. It fails on the
+original broken HTML and passes on the corrected output. Documentation CI and
+`make -C docs html` run this check after Sphinx. The clean strict build also
+passes. Scientific code is unchanged apart from three docstring references.

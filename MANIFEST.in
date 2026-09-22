@@ -5,3 +5,4 @@ recursive-include tests/data *.ini
 recursive-include docs *.md *.rst *.py *.json Makefile
 prune docs/_build
 include .readthedocs.yaml
+include scripts/check_docs.py

@@ -166,7 +166,7 @@ class CAMBBackground:
 
     @property
     def H(self):
-        """H(z) in km/s/Mpc, in :attr:`redshifts` order."""
+        """H(z) in km/s/Mpc, in ``redshifts`` order."""
         return self.hubble_values
 
     @property
