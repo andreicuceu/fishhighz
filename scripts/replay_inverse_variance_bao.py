@@ -35,7 +35,7 @@ SOURCES = [
     "scripts/replay_inverse_variance_bao.py",
     "scripts/diagnose_desi2_weights.py",
     "scripts/compare_forest_weight_bao_errors.py",
-    "WEIGHTING_DIAGNOSTIC_STEP.md",
+    "docs/archive/notes/WEIGHTING_DIAGNOSTIC_STEP.md",
     "fishhighz/weights.py",
     "fishhighz/noise.py",
     "fishhighz/response.py",

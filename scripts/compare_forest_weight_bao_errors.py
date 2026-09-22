@@ -26,13 +26,13 @@ SOURCES = [
     "scripts/diagnose_desi2_weights.py",
     "fishhighz/validation/numerics.py",
     "fishhighz/_information.py",
-    "WEIGHTING_DIAGNOSTIC_STEP.md",
-    "IMPLEMENTATION_STEP.md",
-    "../../FISHHIGHZ_WEIGHTING_DIAGNOSTICS_PLAN.md",
-    "reviews/step-12-r5.md",
-    "reviews/step-12-review-r5.md",
-    "reviews/weighting-diagnostics-w06-r1.md",
-    "reviews/weighting-diagnostics-w06-review-r1.md",
+    "docs/archive/notes/WEIGHTING_DIAGNOSTIC_STEP.md",
+    "docs/archive/notes/IMPLEMENTATION_STEP.md",
+    "docs/archive/planning/FISHHIGHZ_WEIGHTING_DIAGNOSTICS_PLAN.md",
+    "docs/archive/reviews/step-12-r5.md",
+    "docs/archive/reviews/step-12-review-r5.md",
+    "docs/archive/reviews/weighting-diagnostics-w06-r1.md",
+    "docs/archive/reviews/weighting-diagnostics-w06-review-r1.md",
 ]
 
 

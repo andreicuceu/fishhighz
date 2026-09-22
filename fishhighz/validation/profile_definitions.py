@@ -1,17 +1,19 @@
 """Explicit recipe identity and scientifically selected forecast observables."""
 
+from ..accuracy import ADAPTIVE, REFERENCE, REVISION, STOPPING
 from ..fields import PairSelection
 from .cases import selection
 
-REVISION = "early-lyaforecast-2026-09-18"
+__all__ = [
+    "ADAPTIVE",
+    "REFERENCE",
+    "REVISION",
+    "STOPPING",
+    "forecast_selection",
+    "identity",
+]
+
 PROFILES = ("full-compatibility", "fixed-compatibility", "accuracy")
-ADAPTIVE = ("early_lyaforecast", "mcdonald")
-STOPPING = dict(rtol=1e-4, min_updates=3, stable_steps=3, max_updates=96)
-REFERENCE = dict(
-    k_t_deg=2.4,
-    k_p_velocity=0.00035,
-    convention="fiducial_auto_p3d_and_p1d_times_response_squared",
-)
 
 
 def forecast_selection(case, index):

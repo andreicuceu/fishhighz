@@ -39,7 +39,7 @@ HASHES = {
     ),
 }
 SOURCES = [
-    "WEIGHTING_DIAGNOSTIC_STEP.md",
+    "docs/archive/notes/WEIGHTING_DIAGNOSTIC_STEP.md",
     "scripts/check_forest_reference_mode.py",
     "fishhighz/weights.py",
     "fishhighz/kernels/weights.py",

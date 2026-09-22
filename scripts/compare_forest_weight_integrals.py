@@ -290,7 +290,7 @@ def main():
             else str(p): hashlib.sha256(p.read_bytes()).hexdigest()
             for p in (
                 Path(__file__).resolve(),
-                ROOT / "WEIGHTING_DIAGNOSTIC_STEP.md",
+                ROOT / "docs/archive/notes/WEIGHTING_DIAGNOSTIC_STEP.md",
                 ROOT / "scripts/diagnose_legacy_forest_iterations.py",
                 ROOT.parent / "lyaforecast/lyaforecast/weights.py",
             )

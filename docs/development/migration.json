@@ -1,0 +1,994 @@
+[
+  {
+    "source": "lib/fishhighz/LYAFORECAST_WEIGHTING_FINDINGS.md",
+    "destination": "lib/fishhighz/docs/archive/notes/LYAFORECAST_WEIGHTING_FINDINGS.md",
+    "category": "archive",
+    "sha256": "37b29705e17477cd453ec37e49905c46c70d5bcbf60aee8f3d786a7e9d479ef9"
+  },
+  {
+    "source": "lib/fishhighz/RESEARCH_BASELINE.md",
+    "destination": "lib/fishhighz/docs/research/RESEARCH_BASELINE.md",
+    "category": "research",
+    "sha256": "f26f93d72df7c3c456184f4db5f6c806ecc79f7642c1e6e59108ee552c30cbd1"
+  },
+  {
+    "source": "lib/fishhighz/DEFERRED_SCIENTIFIC_TESTS.md",
+    "destination": "lib/fishhighz/docs/research/DEFERRED_SCIENTIFIC_TESTS.md",
+    "category": "research",
+    "sha256": "f853593b7251d45027f41c4117ae0b4da9a6bd1640e1cb0b6afc7731066a00a9"
+  },
+  {
+    "source": "lib/fishhighz/IMPLEMENTATION_STEP.md",
+    "destination": "lib/fishhighz/docs/archive/notes/IMPLEMENTATION_STEP.md",
+    "category": "archive",
+    "sha256": "fe5319a35f59fa733f785ddd1155fec95fdc212fb66412f01d1f157314a6580b"
+  },
+  {
+    "source": "lib/fishhighz/WEIGHTING_DIAGNOSTIC_STEP.md",
+    "destination": "lib/fishhighz/docs/archive/notes/WEIGHTING_DIAGNOSTIC_STEP.md",
+    "category": "archive",
+    "sha256": "ad6698d54e05d81380af447f86717fa824f4e6b3f6cf7450507ef9cb6d7ef22f"
+  },
+  {
+    "source": "lib/fishhighz/FOREST_WEIGHTING_DECISION.md",
+    "destination": "lib/fishhighz/docs/research/FOREST_WEIGHTING_DECISION.md",
+    "category": "research",
+    "sha256": "3c37cf56e208d632f4842365c50bf470e9e83d65dbec07a6bc403165c395b8c9"
+  },
+  {
+    "source": "lib/fishhighz/reviews/s5-review.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/s5-review.md",
+    "category": "archive",
+    "sha256": "01f5b303f18cd8ad92355e68d62957f7c474098d11167d13fc3530694802cfeb"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w02-review-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w02-review-r1.md",
+    "category": "archive",
+    "sha256": "63443d8ca617229e779cfe67949748875ebe38ac754f58eeb3ec01fea7ce9815"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-03-native-survey-ini.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-03-native-survey-ini.md",
+    "category": "archive",
+    "sha256": "516200b15d9e92652a996acd045569fe62f742884ca277d365eca236ebe36d77"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-12-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-12-r1.md",
+    "category": "archive",
+    "sha256": "c23ac13c6f1b71fd70829029cdec09a7e194645fdf30e986b057dcbace45230b"
+  },
+  {
+    "source": "lib/fishhighz/reviews/desi2-examples-validation.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/desi2-examples-validation.md",
+    "category": "archive",
+    "sha256": "c0c3d8a4c6fff580e56cb902a62286f7f485b905e4da20eaddbbcfc69b29a6b8"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w12-review-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w12-review-r1.md",
+    "category": "archive",
+    "sha256": "3566ae63f3023a5887bfe5b4aae85087eeddaedd0cd393506f888be7d2c5a0cb"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-05-installation-and-reproduction.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-05-installation-and-reproduction.md",
+    "category": "archive",
+    "sha256": "3a6cbf1afaa3e02edec3f21749f1db3fa7f0f31409c105c30121d1df9b6342bf"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w11-prompts-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w11-prompts-r1.md",
+    "category": "archive",
+    "sha256": "68a502c6c1466ee0d0663f0dd348b12b99717da5ff9061705e6f3e1db21617f2"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w08-prompts-reviewed-r2.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w08-prompts-reviewed-r2.md",
+    "category": "archive",
+    "sha256": "130b98e15b77cb56a262cc91e29d9c78d2d30de6d6db379c3f857472732e4045"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-12-r5.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-12-r5.md",
+    "category": "archive",
+    "sha256": "fe88a69f75874324fd29905c166258726fc2f1ebcb19fee8ea9818cae4c70037"
+  },
+  {
+    "source": "lib/fishhighz/reviews/compatibility-weighting-stage4-review.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/compatibility-weighting-stage4-review.md",
+    "category": "archive",
+    "sha256": "7784966355b702f1730c262ea8c4cc27137af3c543d090ebbff104c4a99bc10a"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-01-review-r4.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-01-review-r4.md",
+    "category": "archive",
+    "sha256": "6304aad1036b03b51b7b148ec4ab392bedfda8ccf4c70502adda7d15facf657b"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w03-review-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w03-review-r1.md",
+    "category": "archive",
+    "sha256": "bf2f67d80d461ad5e644b2682f428f5c82e3a5412a1d2c028f4cb90f964d1c22"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w09-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w09-r1.md",
+    "category": "archive",
+    "sha256": "59117a6359b28667dffe2787c7c13c60f4da5b872fd2e40517f5be4d681168bc"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w10-instructions-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w10-instructions-r1.md",
+    "category": "archive",
+    "sha256": "67cf81614990048379e778f769f4c68bb112cb86893b15668f216840e74c81e6"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-10-review-r2.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-10-review-r2.md",
+    "category": "archive",
+    "sha256": "d49a12b460df26a54e6af42829b943afd8ea84d627ed7adf234cfbec78df32c0"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-13-weight-limit-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-13-weight-limit-r1.md",
+    "category": "archive",
+    "sha256": "0096f23fe1663f592932f109231e208b71b64120338cc97205577faf7438eed3"
+  },
+  {
+    "source": "lib/fishhighz/reviews/compatibility-weighting-stage2.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/compatibility-weighting-stage2.md",
+    "category": "archive",
+    "sha256": "a2e1bde140378a563dbb2aa591a6a22ef4617595aea2fa8bc411a8c89931e6e2"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w06-review-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w06-review-r1.md",
+    "category": "archive",
+    "sha256": "375b78f10314740ab6082be7dbf34ec52c0384c907ddde7e297b07c935eb2ab2"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w08-review-r2.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w08-review-r2.md",
+    "category": "archive",
+    "sha256": "93430495453ba8b2fd7f4167592710137c4f0f57e84d8da083feabbaf712e31a"
+  },
+  {
+    "source": "lib/fishhighz/reviews/compatibility-weighting-stage2-review.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/compatibility-weighting-stage2-review.md",
+    "category": "archive",
+    "sha256": "1cb05387f16634c7ec8d2357dae4a1c697f018f540fc7bd4aab75e0ce2cca1b7"
+  },
+  {
+    "source": "lib/fishhighz/reviews/s2-review.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/s2-review.md",
+    "category": "archive",
+    "sha256": "16297ea80eb9ef6d491319ddaa9f467dcf65e7c2a9d7646490dbe288d7a53677"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-04-public-forecast-interface-review.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-04-public-forecast-interface-review.md",
+    "category": "archive",
+    "sha256": "06be10061b2aad3377373659874eee221b327945fc5083f29f0b2966a27d568c"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w03-instructions-reviewed-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w03-instructions-reviewed-r1.md",
+    "category": "archive",
+    "sha256": "4c1aeb648e412b1828c194459a5cebc6c02e79bf731cd5af35945695afe890a6"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-05.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-05.md",
+    "category": "archive",
+    "sha256": "8328df0ff023c5eb66f4ffe233bbe9b68a867f8f1ec29094f500af250a34d913"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-12-review-r6.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-12-review-r6.md",
+    "category": "archive",
+    "sha256": "66638c8eb4088958a3508f000d544876485e4aa09b01f4b49f909c4c8d7a5bdc"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w01-instructions-r3.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w01-instructions-r3.md",
+    "category": "archive",
+    "sha256": "7d92b8cd7c395e67f6b59355223a0ee08db09c62e8271e46d994e810e5ee256d"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w10-review-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w10-review-r1.md",
+    "category": "archive",
+    "sha256": "05b2659862e2177ce97b0be4a6a77b55f6d8723855a163f971ebaed9c140d5f1"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w08-instructions-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w08-instructions-r1.md",
+    "category": "archive",
+    "sha256": "a1906a789a6e0ea118507fcddb35a4f41614302e39ca488a72dc4203b8eaaad2"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w07-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w07-r1.md",
+    "category": "archive",
+    "sha256": "52d57846812ca78f3f4bb4982f22ff617bffeae748c20e359533be5f9d96f1ae"
+  },
+  {
+    "source": "lib/fishhighz/reviews/s5-documentation.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/s5-documentation.md",
+    "category": "archive",
+    "sha256": "5fc9e8462856d07a31f8673e5585131c871a73cbe80c324ab1bc5e12482c693b"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w04-instructions-reviewed-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w04-instructions-reviewed-r1.md",
+    "category": "archive",
+    "sha256": "936ad046f89f03c7456a1a7eb0fcf640185754db8d338fd90a8d0670da465e98"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-03-native-survey-ini-review.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-03-native-survey-ini-review.md",
+    "category": "archive",
+    "sha256": "7e32aa81de6247581c3be006f883b0a025ae391a78a8f731777f63f7c6a15a91"
+  },
+  {
+    "source": "lib/fishhighz/reviews/s4-impact-table.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/s4-impact-table.md",
+    "category": "archive",
+    "sha256": "4a9d3043aded11597ae838b2597af3d472fb7e4c9a198911cd5bfd0c7d886787"
+  },
+  {
+    "source": "lib/fishhighz/reviews/s5.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/s5.md",
+    "category": "archive",
+    "sha256": "899a32a109ad0a214d1a6b499db2d9a930d38c66bed95b4e40d24ffff3269650"
+  },
+  {
+    "source": "lib/fishhighz/reviews/compatibility-weighting-stage4.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/compatibility-weighting-stage4.md",
+    "category": "archive",
+    "sha256": "4033f7468329473c7e627875e8c73d71cbb1aca3c30d6aceb80211264f6e9a81"
+  },
+  {
+    "source": "lib/fishhighz/reviews/s5-example.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/s5-example.md",
+    "category": "archive",
+    "sha256": "aa6a3451a02171fd1817285ff77647a79c617c17a0662e73fd3919b42d55ac5e"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w08-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w08-r1.md",
+    "category": "archive",
+    "sha256": "31010f19e7b701361132081742c4d78a3f31fd3b1a9f35157a764f0078a260aa"
+  },
+  {
+    "source": "lib/fishhighz/reviews/standalone-result-provenance-corrections.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/standalone-result-provenance-corrections.md",
+    "category": "archive",
+    "sha256": "b67cf283a0208ace77c55e5494af590acec621322f29ef9ea7055b617d8646e4"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-08.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-08.md",
+    "category": "archive",
+    "sha256": "4eaf91c02ad67e88ce8cfab01e33993df413c5546183efb1df1af9a47b485ce2"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-13-review-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-13-review-r1.md",
+    "category": "archive",
+    "sha256": "e9af334ae7087aee9d2a73f64c049e9c9501d1c126ea30b963435c7b5d23faf7"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-04-review-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-04-review-r1.md",
+    "category": "archive",
+    "sha256": "2ceab685e689ae96476c5a6fbb3413bfd7b3caa140cb7ba96fb34bf7d99a884b"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-06.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-06.md",
+    "category": "archive",
+    "sha256": "6d61f09c9cc5d35a1dd1ded161a707aaca738e125f3fea9c1ff0c4e0701f3c9a"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w05-review-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w05-review-r1.md",
+    "category": "archive",
+    "sha256": "5074c749a7ab61d5a4bf84cdb70c37a065171edc1bfb118f97960fc88976bbd9"
+  },
+  {
+    "source": "lib/fishhighz/reviews/standalone-zero-redshift-correction.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/standalone-zero-redshift-correction.md",
+    "category": "archive",
+    "sha256": "70395e4291765752b637001de2290e9118fb10e5983c1088461149b8f746c5cf"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-02.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-02.md",
+    "category": "archive",
+    "sha256": "04f5e34d2d405f5837842459ce2f2c2a0588caedf34649675915985f7541d02f"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-06-review-r2.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-06-review-r2.md",
+    "category": "archive",
+    "sha256": "c2a6b7f91b8605a4bc01f1cc5f5195ca5211777806eb51412ccf95a34d2fdab4"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w02-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w02-r1.md",
+    "category": "archive",
+    "sha256": "0f9310f337aa990a23944c253a9dcb7b34e60154d6363c7261a098892c81dc3a"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-12-review-r2.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-12-review-r2.md",
+    "category": "archive",
+    "sha256": "f546288adb8991c009f178ad9ac417e9de11ef36e5c6122fe2057110db65a789"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-11-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-11-r1.md",
+    "category": "archive",
+    "sha256": "5b0f38d64778952060eb19c4dc9f61b4c420995de55673138ee8921dc10d7f23"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w01-review-r2.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w01-review-r2.md",
+    "category": "archive",
+    "sha256": "f54e004c6225f2cea267180a2eba11f0dd791e8a9af7f13e61ea2adb4c2d23a9"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w09-prompts-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w09-prompts-r1.md",
+    "category": "archive",
+    "sha256": "c05dd282f9830b491b30017f17c2bd97420386b6e268de185dc720a02f396fb5"
+  },
+  {
+    "source": "lib/fishhighz/reviews/s1-comparison-outputs.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/s1-comparison-outputs.md",
+    "category": "archive",
+    "sha256": "7b025ca6856f0641899b43763ed6a03d2c5191f9456ddc098e485b864192b23d"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w07-instructions-reviewed-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w07-instructions-reviewed-r1.md",
+    "category": "archive",
+    "sha256": "84e3bdbb4ffcba9a4bb4a3e65d26770a4d2c08bc9cab4c9ed53e54f6085e3ad4"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-04-public-forecast-interface.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-04-public-forecast-interface.md",
+    "category": "archive",
+    "sha256": "e5f7023d3f47b5055304b41d59f06d9ffb38dc868293eb7563a2ed7d9fc9f2bc"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-02-native-cosmology-bias-review.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-02-native-cosmology-bias-review.md",
+    "category": "archive",
+    "sha256": "fccbb971c08f6f21b3f1f5fa74fc75645da6815873b72aa0f30c25b550693d44"
+  },
+  {
+    "source": "lib/fishhighz/reviews/compatibility-weighting-stage3.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/compatibility-weighting-stage3.md",
+    "category": "archive",
+    "sha256": "fe39380d18c7d24891bf11f9e3977c726546510ee5c5760d4ef4d3771cea9781"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-01-run2-input-packaging-review.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-01-run2-input-packaging-review.md",
+    "category": "archive",
+    "sha256": "0b78ecd0365a0ee183d1407cc249a8645ab29b2735c731c83872debe5a71418e"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-05-installation-and-reproduction-review.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-05-installation-and-reproduction-review.md",
+    "category": "archive",
+    "sha256": "bb3dd7be7a690de7dfc088149d8b5a846594d655adb8f921c3f92221eb7af53e"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-12-performance-assessment-r4.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-12-performance-assessment-r4.md",
+    "category": "archive",
+    "sha256": "1a3b8b73529805b56f3eed8b995f4d924b1c81632de8267c4daa764f3afd54fe"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-05-live-validation-20260922T152624Z-review.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-05-live-validation-20260922T152624Z-review.md",
+    "category": "archive",
+    "sha256": "3da125ed055ad7a9e52fa4fb0ddcf3b3bd05e0f045e27405c5fa3f2b81d09834"
+  },
+  {
+    "source": "lib/fishhighz/reviews/compatibility-weighting-stage1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/compatibility-weighting-stage1.md",
+    "category": "archive",
+    "sha256": "0307c2181e8481870dfce87fbeb07e13de22a166577ef7a2d54baf9262c6071e"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w04-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w04-r1.md",
+    "category": "archive",
+    "sha256": "70facf7e9a4bb79d2f1bfa8f829792857a9d460eecced204f909c2ba46cf408e"
+  },
+  {
+    "source": "lib/fishhighz/reviews/early-lyaforecast-grid-bao-review.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/early-lyaforecast-grid-bao-review.md",
+    "category": "archive",
+    "sha256": "cf348771e7e19555432d63f73cf53059a112a4bd6489776b01ea8f4e041052db"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-12-instructions-r6.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-12-instructions-r6.md",
+    "category": "archive",
+    "sha256": "93019fb9422917c8806302a23529242ff575920ba36224a2b708722b700dacf8"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-13.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-13.md",
+    "category": "archive",
+    "sha256": "3818631c850daeb8a553f8930cec3dd5718212fac8554b4bb76140915912188f"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-10-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-10-r1.md",
+    "category": "archive",
+    "sha256": "97e57df39a69218511f32b86a29847529a0859f0fe96688389902b8523065b6c"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-12-instructions-r3.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-12-instructions-r3.md",
+    "category": "archive",
+    "sha256": "f74db52795b8b27cb3fd9839406e60236a4edde4ea6223df45df03d86f9bc752"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w03-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w03-r1.md",
+    "category": "archive",
+    "sha256": "0ee06d4eaaa6589fa682f6adaa81520f009a6df419cf361bee285202ddc0ce6f"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-roadmap-pre-w10.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-roadmap-pre-w10.md",
+    "category": "archive",
+    "sha256": "b9890d3dd5bc71a14addf08edb955fc6eb9dc852b991bb9d62ea4b369ace0757"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-04.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-04.md",
+    "category": "archive",
+    "sha256": "9cbac01f9b3e47938edd720d295fd44d3d39bea68730fcffe7ba8795dd2e64fc"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-12.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-12.md",
+    "category": "archive",
+    "sha256": "859705024177c4e2c171b7d32f73d55461eeae41cb9be504f78dd96ce085cb85"
+  },
+  {
+    "source": "lib/fishhighz/reviews/early-lyaforecast-grid-bao.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/early-lyaforecast-grid-bao.md",
+    "category": "archive",
+    "sha256": "7ba4ed444d0b1c7a6ed2bd186f37757be0c9c385721dd00c5140284de03dd0e2"
+  },
+  {
+    "source": "lib/fishhighz/reviews/s3-review.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/s3-review.md",
+    "category": "archive",
+    "sha256": "17ea344ae06f131d23fe4ac244e7688768aaf27f7bf07f6cca46b05b00902f54"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-12-r2.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-12-r2.md",
+    "category": "archive",
+    "sha256": "f02ce0c722af788b6e08d49245550ddbb78817ed152830f994bc25367ccfe66f"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-02-review-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-02-review-r1.md",
+    "category": "archive",
+    "sha256": "8a32a66f13612e176a56f59da538c317a1a2399d21e5d4e23afca7234eff215b"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-05-review-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-05-review-r1.md",
+    "category": "archive",
+    "sha256": "0635767fbb5d5271d87eade74ea8bc63544cec5cd1a4abfbf6e3ff6f71317ada"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w08-instructions-reviewed-r2.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w08-instructions-reviewed-r2.md",
+    "category": "archive",
+    "sha256": "7efb7f6f810deb8df0d3bc73ef3ab170c244fd4209f1f095caaea758140220e6"
+  },
+  {
+    "source": "lib/fishhighz/reviews/compatibility-weighting-stage3-review.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/compatibility-weighting-stage3-review.md",
+    "category": "archive",
+    "sha256": "d04352614234e7e1b21441a2c44f0b9b8471e095ff88c4a8b8a83c07364ac1ad"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-01-r3.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-01-r3.md",
+    "category": "archive",
+    "sha256": "521f51c89c9f2654350617168b6a5ca39ff4053b2dfb4e09a53a7efb44ac6ff4"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w08-review-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w08-review-r1.md",
+    "category": "archive",
+    "sha256": "d81562aad52522b705616aea902778555fe9d802c328f0d12c34478041af7c21"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w01-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w01-r1.md",
+    "category": "archive",
+    "sha256": "cdd3401cb0caf21d9da2e46ee43480f06690ffba515288a9fb34aa7c2e5a6ce9"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-11-review-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-11-review-r1.md",
+    "category": "archive",
+    "sha256": "ba7bd86bd4dbb1f9fcc44a7448e38e79008e6f3824d5dbf7c695948c8a462643"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w02-instructions-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w02-instructions-r1.md",
+    "category": "archive",
+    "sha256": "a29aecefeebb0f658d3a59f4e646966220c3abd945fe25504f7c71bb5bccad07"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-10.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-10.md",
+    "category": "archive",
+    "sha256": "d0d74e92fbf560817fd3643c3d882aa8422ad8301af82c71024c31f2434a3d78"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-12-performance-r4.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-12-performance-r4.md",
+    "category": "archive",
+    "sha256": "87e3a5b77a48f2cabd33d84cc2ff6bf71d7055d25b018fa27d9f669a5b90085c"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w08-instructions-r2.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w08-instructions-r2.md",
+    "category": "archive",
+    "sha256": "3a3e8b1337a402325f34a2e2a749ac78f0872b657b5a2c153bd344090c54228f"
+  },
+  {
+    "source": "lib/fishhighz/reviews/s4.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/s4.md",
+    "category": "archive",
+    "sha256": "5e3c65f12c29f250409a4d7f8411c16be1089f1e1b2a955ecb97db88f43f9133"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w02-instructions-reviewed-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w02-instructions-reviewed-r1.md",
+    "category": "archive",
+    "sha256": "5bd13379f20d14f26c9cdf89f5da3a920a5193a53d83a5b498073e1805d49b7d"
+  },
+  {
+    "source": "lib/fishhighz/reviews/s1-review.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/s1-review.md",
+    "category": "archive",
+    "sha256": "4ac7d0bd9f3504e3e1b6578bd6d42d540c7d56a224f5291fa7662627f282dc69"
+  },
+  {
+    "source": "lib/fishhighz/reviews/s3.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/s3.md",
+    "category": "archive",
+    "sha256": "08078859662972bfafd9498121a059d7a9375549c4dafdc6f9e72c3b9afa8244"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w04-review-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w04-review-r1.md",
+    "category": "archive",
+    "sha256": "4656be2f2dcd4d417ea9d36d09cdd7a38229b7515949a89d96c05ae53416cf65"
+  },
+  {
+    "source": "lib/fishhighz/reviews/s2.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/s2.md",
+    "category": "archive",
+    "sha256": "2cd9f97a9a3b165c26c5135dfb2c9b632fddc35e52610f911b4f5cca34a7661f"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-13-instructions-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-13-instructions-r1.md",
+    "category": "archive",
+    "sha256": "c6ff6fed41447701d225960f1a76e3168cd16883808568597df78bf59ba6932e"
+  },
+  {
+    "source": "lib/fishhighz/reviews/s1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/s1.md",
+    "category": "archive",
+    "sha256": "f501a370e479edeb5c9fe99de803693d0b74eea61030a48ad5f0cada90eca5ec"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-05-live-validation-20260922T152624Z.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-05-live-validation-20260922T152624Z.md",
+    "category": "archive",
+    "sha256": "33730e7103daf36deea29cb5984075af337ea1ccb49ec9157012c0204a153cae"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-02-native-cosmology-bias.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-02-native-cosmology-bias.md",
+    "category": "archive",
+    "sha256": "22c58221a1c1829830db3b07f53022a10f8a63c4df8f53049726191b0ea0cbc5"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-10-review-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-10-review-r1.md",
+    "category": "archive",
+    "sha256": "10df0e30d985c084b2bded184988dee0114f97a876582a19dda506b2f7544b5c"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-02-review-r3.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-02-review-r3.md",
+    "category": "archive",
+    "sha256": "13ba4a4030ab3d86984937dfb298c9876083f3838862d498fc36ae57b95b1ee4"
+  },
+  {
+    "source": "lib/fishhighz/reviews/standalone-configuration-review.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/standalone-configuration-review.md",
+    "category": "archive",
+    "sha256": "fcedc88628f6b16638e2b39f818a93aa4a2fd3896fb7c28ea2829d1300e5c958"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-12-review-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-12-review-r1.md",
+    "category": "archive",
+    "sha256": "01ee16942da091bc75e76a5fc6db07a2081419fcb87ba5ea6bb7a80b749e006a"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-11-review-r2.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-11-review-r2.md",
+    "category": "archive",
+    "sha256": "93236a2d945d46726ee02dee85a1a43f15ed41ed87f82e183e0a795498c48a9f"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w01-review-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w01-review-r1.md",
+    "category": "archive",
+    "sha256": "501b1dafc8f4e38917970846328033eb410f6f31d6d0e1d1c230ee2165de5149"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w06-instructions-reviewed-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w06-instructions-reviewed-r1.md",
+    "category": "archive",
+    "sha256": "7ea9ef3512162fd9efef85db12b48b50678996ccaf6c540f166df3be41a012f9"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-03.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-03.md",
+    "category": "archive",
+    "sha256": "6a1a76b8ea572e3a280f07760bbdf2fda93c21b40d8b503e21c55febe944bf4c"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-13-weight-limit-r2.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-13-weight-limit-r2.md",
+    "category": "archive",
+    "sha256": "9ee9cdff6cddb004764565a95d97d9636480acbbbc524ddfbd2d4e71eece304a"
+  },
+  {
+    "source": "lib/fishhighz/reviews/compatibility-weighting-stage1-review.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/compatibility-weighting-stage1-review.md",
+    "category": "archive",
+    "sha256": "69a8af61aef09f6c056b87652f82c78d3c91bc918207bbe263ebaded5afbc17d"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w06-instructions-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w06-instructions-r1.md",
+    "category": "archive",
+    "sha256": "a3e5f7047288861d20ecb7c7e180695255edeb2077d252d047831b694c7a6dfd"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-01-review-r3.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-01-review-r3.md",
+    "category": "archive",
+    "sha256": "b9a01670c99a66fe31843bf2f0ed63f25139a986bfc7cf44fe52fd4391eb3fa5"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w05-instructions-reviewed-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w05-instructions-reviewed-r1.md",
+    "category": "archive",
+    "sha256": "43e9f16ef841cfa3fb6999904d5dc204efc8d39d0fdd08efa86eda14b5e538f8"
+  },
+  {
+    "source": "lib/fishhighz/reviews/standalone-corrections-review.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/standalone-corrections-review.md",
+    "category": "archive",
+    "sha256": "9bfd8a12b0ba10be3cab54cae1551a4acd7c87da59dca173c09338110359e30d"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w03-instructions-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w03-instructions-r1.md",
+    "category": "archive",
+    "sha256": "efc3218677af21705a9170e715c4df0e91101fc8a2cadd0fe350c72a6bf1d223"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w11-instructions-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w11-instructions-r1.md",
+    "category": "archive",
+    "sha256": "84dbdd5d07d48b2cf780600661575aa5b0c3b450c0cdfc6256e20b27ac21c162"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-01.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-01.md",
+    "category": "archive",
+    "sha256": "13f0deec0cd7a1558ea881898b67397837da658e1da02fbcdd6f3e8a2a62f29b"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-02-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-02-r1.md",
+    "category": "archive",
+    "sha256": "3fc8e74ffbf21e24c0a89bb83d2666dfa387eb24ce1e4d2d196248c236749e7a"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w08-r2.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w08-r2.md",
+    "category": "archive",
+    "sha256": "978d3a1952b3289914f16a83825216da05b4f20f831d1a0274d927bdd70a2a6c"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w05-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w05-r1.md",
+    "category": "archive",
+    "sha256": "09e8ce4bf90e905bc47f54dee88172733a5ea2237240704cb583e0fe8905f79e"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-11.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-11.md",
+    "category": "archive",
+    "sha256": "e3bdb28f6ab40a75ed9a6cac7cc2922c75601e20c264ccf13f6100c397f92046"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-09-review-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-09-review-r1.md",
+    "category": "archive",
+    "sha256": "ae4d5d88bb1722ae10c9f42df9ac910f7b6aac240406f8c50923a63b28a55386"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-08-review-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-08-review-r1.md",
+    "category": "archive",
+    "sha256": "d0e6ad6f1de8b2e5b62dd2011d165d16dc0662c4e1a3115370a140171de59160"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w07-review-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w07-review-r1.md",
+    "category": "archive",
+    "sha256": "22211919c30f8a87c546bf975ba0a560b45a018baee2a7952468df06d5ee1377"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-09.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-09.md",
+    "category": "archive",
+    "sha256": "7f29df7b344c24960820c0047a766442f87255ac897c668ed13c2efe92c1efde"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w06-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w06-r1.md",
+    "category": "archive",
+    "sha256": "e0641e7cc28a434291041ac9e1d378eea4bfd317cbf906c51c6c24d7cd63b586"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-12-review-r5.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-12-review-r5.md",
+    "category": "archive",
+    "sha256": "df916c34cc24d56a98a7b984a56b9dc8d5deb36f26ad7e0ff553bd0120d43537"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-01-run2-input-packaging.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-01-run2-input-packaging.md",
+    "category": "archive",
+    "sha256": "162070947835afc160f62344fe7f0fa81f5f34366adf65cfb3f05a60f6b1ea8e"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-13-planning-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-13-planning-r1.md",
+    "category": "archive",
+    "sha256": "393a1a34626194c1db6be0516a55f57e6db1025324197e53dd782086a2a02818"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w09-instructions-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w09-instructions-r1.md",
+    "category": "archive",
+    "sha256": "2fb5125c2a2eda1841d1c1ccb68e1bf8b8b83fde550262a92e65697b0395f818"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w01-r2.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w01-r2.md",
+    "category": "archive",
+    "sha256": "f101a5a62a0cd936527f0519527f6a419e1f040256464a7d9b9cec3577d869bc"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w05-instructions-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w05-instructions-r1.md",
+    "category": "archive",
+    "sha256": "aa8fe72ce592dae51e57dad2a6a07830fd412ac35964ed71048f4c3c88ac080c"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-07-review-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-07-review-r1.md",
+    "category": "archive",
+    "sha256": "2b88b05f970518160191f28b0fa166e0c499ecf09d3c4e5499a454db001b89b0"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w04-instructions-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w04-instructions-r1.md",
+    "category": "archive",
+    "sha256": "2dd75313f84c404a159bb16872b567d3fece57207583698dd61ae0516c55eb02"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-13-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-13-r1.md",
+    "category": "archive",
+    "sha256": "e6e2213e220274da5400f514a958426f085c812f240e71c18f55025d5063136d"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-07.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-07.md",
+    "category": "archive",
+    "sha256": "5e8a2488428e9ea900d777bcdc057d7716ac00c2bed708bb85c4b420465393d3"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w07-instructions-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w07-instructions-r1.md",
+    "category": "archive",
+    "sha256": "1a250bacc07e2d40fcfe970922d05796f20a3163d8a91d91ddad8b90c7d522a3"
+  },
+  {
+    "source": "lib/fishhighz/reviews/s4-profile-inventory.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/s4-profile-inventory.md",
+    "category": "archive",
+    "sha256": "e7c9afde4ddb9d83d6661f1b7bbc1e8fecdd3a61f7aa9cfdd61df239de098bc3"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w10-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w10-r1.md",
+    "category": "archive",
+    "sha256": "8c25d4e7d76b9bb783cf114f74e01efd1a64a7baefa91eb12b9dfb6d89917d19"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w09-review-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w09-review-r1.md",
+    "category": "archive",
+    "sha256": "90e4b5d0b30ed6d87857fac8bd648ae3d7495531a8e4532f81d98771e336dabb"
+  },
+  {
+    "source": "lib/fishhighz/reviews/standalone-configuration-corrections.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/standalone-configuration-corrections.md",
+    "category": "archive",
+    "sha256": "3058fe94ce91c0e9c0751697abaccfd129f5bbee7d5164b458c8123717e368fe"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-12-review-r4.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-12-review-r4.md",
+    "category": "archive",
+    "sha256": "bf6e5359cfdbfb1d7f047f8557088abf35627467c57eafe33972314fe2da626e"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w12-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w12-r1.md",
+    "category": "archive",
+    "sha256": "bde0c4b3a4ab197ef334a8e9598f86e16c6fb78b76c69ada560e6da8aa0122d2"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-12-instructions-r5.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-12-instructions-r5.md",
+    "category": "archive",
+    "sha256": "1528ca945b0ebc3305a90bb7b6950f868a9a20e688bb98af588bc4425f7c9f8b"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w11-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w11-r1.md",
+    "category": "archive",
+    "sha256": "6fa175cda2da547d6cce104503362e9e8e7b086fcfebdb18311783f4b2955089"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-03-review-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-03-review-r1.md",
+    "category": "archive",
+    "sha256": "f5f32500b5f6ea1319281ec8c2dfba2d67e0d14873f6a9c5167bb620321f1aaf"
+  },
+  {
+    "source": "lib/fishhighz/reviews/s4-review.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/s4-review.md",
+    "category": "archive",
+    "sha256": "ffb14cf47db2eb13191ce32746a1c1dbcdf77db0f943aa2669694e6ddeae2d2c"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w11-review-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w11-review-r1.md",
+    "category": "archive",
+    "sha256": "6a1ed402f9f3123029f7a4630c249a50ea283f09946ccdcdde5964c61706c384"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-w10-prompts-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-w10-prompts-r1.md",
+    "category": "archive",
+    "sha256": "676bb3c9df2b38c9a5fc37a26f259526f5fee32de765e18643a2740e55c08914"
+  },
+  {
+    "source": "lib/fishhighz/reviews/step-06-review-r1.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/step-06-review-r1.md",
+    "category": "archive",
+    "sha256": "4af3f2379afd329d8b3194985f5329b02cb30877d2dc230cc47a7f7f19c41bc5"
+  },
+  {
+    "source": "lib/fishhighz/reviews/weighting-diagnostics-roadmap-pre-w02.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/weighting-diagnostics-roadmap-pre-w02.md",
+    "category": "archive",
+    "sha256": "c3855b81d8d4a8ddf395dd0cbe860fda69b416c19e8f3e394c57b46ac182812b"
+  },
+  {
+    "source": "lib/fishhighz/reviews/cumulative-forest-weighting-profile-comparison-2026-09-15.md",
+    "destination": "lib/fishhighz/docs/archive/reviews/cumulative-forest-weighting-profile-comparison-2026-09-15.md",
+    "category": "archive",
+    "sha256": "08ba8364f9aa4e2ab63abfcba8b9a6ccc779cac2f8bd86bcd3a7b0579939507f"
+  },
+  {
+    "source": "FISHHIGHZ_WEIGHTING_DIAGNOSTICS_PROMPTS.md",
+    "destination": "lib/fishhighz/docs/archive/planning/FISHHIGHZ_WEIGHTING_DIAGNOSTICS_PROMPTS.md",
+    "category": "archive",
+    "sha256": "9c11664ac464a639ede85a1aacbab66c8d450cd95cf940dc731f29276521cc1b"
+  },
+  {
+    "source": "FISHHIGHZ_IMPLEMENTATION_PLAN_ARCHIVE_2026-09-17.md",
+    "destination": "lib/fishhighz/docs/archive/planning/FISHHIGHZ_IMPLEMENTATION_PLAN_ARCHIVE_2026-09-17.md",
+    "category": "archive",
+    "sha256": "324571219ba99d3cd9ce266d73debfe1a7bba62dbf6436e5ad924e01030ad440"
+  },
+  {
+    "source": "FISHHIGHZ_WEIGHTING_DIAGNOSTICS_PLAN_ARCHIVE_2026-09-17.md",
+    "destination": "lib/fishhighz/docs/archive/planning/FISHHIGHZ_WEIGHTING_DIAGNOSTICS_PLAN_ARCHIVE_2026-09-17.md",
+    "category": "archive",
+    "sha256": "fe6f6dd6d95ada849fad7ab716cc53e63453b345605d6b4b32cd3943c8d6e650"
+  },
+  {
+    "source": "FISHHIGHZ_PLANNING_REVIEW_PROMPT.md",
+    "destination": "lib/fishhighz/docs/archive/planning/FISHHIGHZ_PLANNING_REVIEW_PROMPT.md",
+    "category": "archive",
+    "sha256": "9972bbefdcf58f3c6cb823b8f9cd894af37cb6db8334c0aff7419a1c30d705bb"
+  },
+  {
+    "source": "FISHHIGHZ_DESIGN.md",
+    "destination": "lib/fishhighz/docs/archive/planning/FISHHIGHZ_DESIGN.md",
+    "category": "archive",
+    "sha256": "8458aac3a3183c8d64aba729796fa6904081fa5f5dd2b9686a0da8fe77d99157"
+  },
+  {
+    "source": "FISHHIGHZ_IMPLEMENTATION_PLAN.md",
+    "destination": "lib/fishhighz/docs/archive/planning/FISHHIGHZ_IMPLEMENTATION_PLAN.md",
+    "category": "archive",
+    "sha256": "f6b5560f07489c9a30015b420a2d9f3376de30d52c021404224ee5d455a837e2"
+  },
+  {
+    "source": "FISHHIGHZ_WEIGHTING_DIAGNOSTICS_PLAN.md",
+    "destination": "lib/fishhighz/docs/archive/planning/FISHHIGHZ_WEIGHTING_DIAGNOSTICS_PLAN.md",
+    "category": "archive",
+    "sha256": "74a797e2073d885b49b7914a3563366ba8f5e69c65b8e9d58ad48c6665167c12"
+  },
+  {
+    "source": "FISHHIGHZ_COMPATIBILITY_WEIGHTING_PLAN.md",
+    "destination": "lib/fishhighz/docs/archive/planning/FISHHIGHZ_COMPATIBILITY_WEIGHTING_PLAN.md",
+    "category": "archive",
+    "sha256": "288804085f1b5afa0c1b3d261a758c0ec1ac03d0d461daa5d0d0b0384ed9774c"
+  },
+  {
+    "source": "lib/fishhighz/README.md#Development, distributions and reference capture",
+    "destination": "lib/fishhighz/docs/archive/readme-development.md",
+    "category": "archive",
+    "sha256": "2cc9f3e0cb1f29e1bdabbddb9d706b7534c86f87a1325b00f2e524cce24afbca",
+    "extension": "README extraction; hash covers the archived record after link portability repair"
+  },
+  {
+    "source": "lib/fishhighz/README.md#Historical Step 12 and Step 13",
+    "destination": "lib/fishhighz/docs/archive/readme-validation.md",
+    "category": "archive",
+    "sha256": "9a2b730be75c0b31adabe96f156f02c1df4a7c575a28652ac815fdb838a96d38",
+    "extension": "README extraction; hash covers the archived record after link portability repair"
+  }
+]

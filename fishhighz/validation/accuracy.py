@@ -6,12 +6,14 @@ from pathlib import Path
 
 import numpy as np
 
+from ..accuracy import ADAPTIVE, REFERENCE, REVISION, STOPPING
 from ..adapters.legacy_compat import LegacyDensity, LegacySNR, plain
 from ..adapters.legacy_inputs import DensityReader, SNRReader
 from ..derivatives import evaluate_derivatives
 from ..forecast import prepare_bin
 from ..geometry import LYA_REST_ANGSTROM, SPEED_LIGHT_KMS, prepare_geometry
 from ..grids import gauss_legendre_grid
+from ..magnitude import breakpoints, composite
 from ..models.external import BoundParameters, P3DProvider, PreparedP3D
 from ..models.kaiser import KaiserModel, Scaling
 from ..models.p1d import default_p1d
@@ -27,14 +29,7 @@ from ..survey import BinSpec, ForestInput
 from ..weights import density_per_velocity
 from .cases import CASE_IDS, bins, recipe, selection, verify_inventory
 from .numerics import contract, relative
-from .profile_definitions import (
-    ADAPTIVE,
-    REFERENCE,
-    REVISION,
-    STOPPING,
-    forecast_selection,
-    identity,
-)
+from .profile_definitions import forecast_selection, identity
 from .reference_capture import imported_reference, resolved_resources
 from .schema import _assemble
 
@@ -178,49 +173,6 @@ def background(root, template_path):
     cosmo = CosmoCamb(str(ini), z_ref=2.3, z_centres=zs)
     template = load_template(template_path, h_fid=parsed.H0 / 100)
     return cosmo, template
-
-
-def composite(partition, order):
-    """Ordered Gauss-Legendre magnitude nodes/weights on a fixed partition."""
-    x, w = np.polynomial.legendre.leggauss(order)
-    lo, hi = np.asarray(partition[:-1]), np.asarray(partition[1:])
-    return ((lo[:, None] + hi[:, None]) / 2 + (hi - lo)[:, None] * x / 2).ravel(), (
-        (hi - lo)[:, None] * w / 2
-    ).ravel()
-
-
-def breakpoints(densities, snrs, z_queries, lo, hi):
-    """Partition spline/support/SNR boundaries and negative-interpolant roots.
-
-    Quadratic pieces at fixed z are fitted on each existing spline interval only
-    to locate zeros; this does not replace or modify the density interpolation.
-    """
-    points = [lo, hi]
-    for name, density in densities.items():
-        r = density.reader
-        knots = np.unique(np.r_[r.magnitudes, density._spline.get_knots()[1], lo, hi])
-        knots = knots[(knots >= lo) & (knots <= hi)]
-        points.extend(knots)
-        for a, b in zip(knots[:-1], knots[1:]):
-            if a < r.magnitudes[0] or b > r.magnitudes[-1]:
-                continue
-            y = density._spline.ev(np.full(3, z_queries[name]), [a, (a + b) / 2, b])
-            # Local t in [0,1], coefficients of the exact quadratic segment.
-            c = y[0]
-            aa = 2 * (y[2] - 2 * y[1] + y[0])
-            bb = y[2] - y[0] - aa
-            roots = np.roots([aa, bb, c]) if aa != 0 else ([-c / bb] if bb != 0 else [])
-            for t in roots:
-                if np.isreal(t) and 1e-12 < float(np.real(t)) < 1 - 1e-12:
-                    points.append(a + (b - a) * float(np.real(t)))
-    for snr in snrs.values():
-        points.extend(snr.reader.magnitudes)
-    p = np.unique(np.asarray(points))
-    p = p[(p >= lo) & (p <= hi)]
-    # Coalesce only numerically indistinguishable duplicate boundaries.
-    return p[
-        np.r_[True, np.diff(p) > 64 * np.finfo(float).eps * np.maximum(1, abs(p[1:]))]
-    ]
 
 
 class AccuracyRecipe:

@@ -368,7 +368,7 @@ def main():
         "--output", type=Path, default=Path(".validation/s4/attribution-summary.json")
     )
     parser.add_argument(
-        "--report", type=Path, default=Path("reviews/s4-impact-table.md")
+        "--report", type=Path, default=Path("docs/archive/reviews/s4-impact-table.md")
     )
     args = parser.parse_args()
     result = summarize(args.input)

@@ -1,3 +1,7 @@
 include scripts/check.sh
-include RESEARCH_BASELINE.md
-recursive-include examples *.py
+recursive-include examples *.py *.ini
+recursive-include fishhighz/data *
+recursive-include tests/data *.ini
+recursive-include docs *.md *.rst *.py *.json Makefile
+prune docs/_build
+include .readthedocs.yaml

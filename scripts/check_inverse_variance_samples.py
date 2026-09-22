@@ -30,7 +30,7 @@ HASHES = {
 }
 SOURCES = [
     "scripts/check_inverse_variance_samples.py",
-    "WEIGHTING_DIAGNOSTIC_STEP.md",
+    "docs/archive/notes/WEIGHTING_DIAGNOSTIC_STEP.md",
     "fishhighz/weights.py",
     "fishhighz/kernels/weights.py",
     "fishhighz/_arrays.py",

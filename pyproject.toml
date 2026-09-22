@@ -14,13 +14,22 @@ dependencies = ["numpy"]
 compiled = ["numba", "scipy"]
 templates = ["astropy", "scipy"]
 cosmology = ["astropy", "scipy"]
+camb = ["camb"]
 survey = ["scipy"]
 dev = ["pytest", "ruff", "build"]
+docs = ["sphinx>=8,<9", "myst-parser>=4,<5", "sphinx-rtd-theme>=3,<4"]
+
+[project.scripts]
+fishhighz-forecast = "fishhighz.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["fishhighz", "fishhighz.*"]
+exclude = ["fishhighz.data", "fishhighz.data.*"]
 namespaces = false
+
+[tool.setuptools.package-data]
+fishhighz = ["data/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

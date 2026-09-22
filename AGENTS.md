@@ -13,16 +13,16 @@ its implementation. Step 13's continuum conclusion remains unresolved in the
 historical evidence. Deferred W01 repairs and the old W13 proposal are retired.
 
 Current planning update, 2026-09-18: the five-stage compatibility weighting
-study and additional grid-to-BAO check are complete. `FOREST_WEIGHTING_DECISION.md`
+study and additional grid-to-BAO check are complete. `docs/research/FOREST_WEIGHTING_DECISION.md`
 records the accepted early-lyaforecast baseline and retained McDonald alternative.
 S1–S3 now implement full-compatibility, fixed-compatibility and updated accuracy,
 qualify all six revised-accuracy bins within the stated finite-refinement tests,
 and complete the selected six-bin DESI-2 comparison. Astra (light) implementations
-and Sol (high) independent scientific reviews are recorded in `reviews/s1.md`,
-`reviews/s2.md`, `reviews/s3.md` and their `-review.md` reports; all three reviews
+and Sol (high) independent scientific reviews are recorded in `docs/archive/reviews/s1.md`,
+`docs/archive/reviews/s2.md`, `docs/archive/reviews/s3.md` and their `-review.md` reports; all three reviews
 pass with no consequential correction requested. S4 attribution is also complete with a passing Sol scientific review:
-`reviews/s4.md`, `reviews/s4-impact-table.md`, `reviews/s4-profile-inventory.md`
-and `reviews/s4-review.md`. Scientific acceptance remains with the user;
+`docs/archive/reviews/s4.md`, `docs/archive/reviews/s4-impact-table.md`, `docs/archive/reviews/s4-profile-inventory.md`
+and `docs/archive/reviews/s4-review.md`. Scientific acceptance remains with the user;
 S5 reassessment began on 2026-09-21 as a joint planning discussion. The user
 requested an evidence summary, interpretation and proposed next work; that
 initial request authorized planning only. The later S5 execution authorization
@@ -30,7 +30,7 @@ below now governs implementation and review. The user
 confirmed a research-ready Python API as the first S5 milestone and the tested
 S2–S4 accuracy recipe as its research baseline, retaining mixed-pair damping and
 full wiggle AP derivatives. The reference-mode comparison is now a separate
-later study in `DEFERRED_SCIENTIFIC_TESTS.md`; S5 covers only prescription
+later study in `docs/research/DEFERRED_SCIENTIFIC_TESTS.md`; S5 covers only prescription
 documentation, Python API documentation/examples, and validation. No further
 scientific decision is pending before implementation within that scope. The
 legacy weighting reference remains in use, with a 1% BAO-error attribution
@@ -68,18 +68,18 @@ execution for these short forecasts. Use one numerical thread and bounded runs.
 The remaining standing review controls apply; scientific acceptance stays with
 the user.
 
-- [Scientific design](../../FISHHIGHZ_DESIGN.md): scientific conventions and API
+- [Archived scientific design](docs/archive/planning/FISHHIGHZ_DESIGN.md): historical scientific conventions and API
   context; dated former assignments are historical.
-- [Implementation roadmap](../../FISHHIGHZ_IMPLEMENTATION_PLAN.md): current
-  sequence and status; its preceding version is archived alongside it.
-- [Compatibility weighting test plan](../../FISHHIGHZ_COMPATIBILITY_WEIGHTING_PLAN.md):
+- [Archived implementation roadmap](docs/archive/planning/FISHHIGHZ_IMPLEMENTATION_PLAN.md): historical
+  sequence and status; it does not authorize current work.
+- [Archived compatibility weighting test plan](docs/archive/planning/FISHHIGHZ_COMPATIBILITY_WEIGHTING_PLAN.md):
   completed study and evidence, including the five variants, individual/joint
   plots and historical plotting cut for uncertainties above 0.2.
-- [Deferred scientific tests](DEFERRED_SCIENTIFIC_TESTS.md): later, non-critical
+- [Deferred scientific tests](docs/research/DEFERRED_SCIENTIFIC_TESTS.md): later, non-critical
   studies with agreed and proposed statuses kept distinct.
-- [Closed diagnostic plan](../../FISHHIGHZ_WEIGHTING_DIAGNOSTICS_PLAN.md): closure
+- [Archived closed diagnostic plan](docs/archive/planning/FISHHIGHZ_WEIGHTING_DIAGNOSTICS_PLAN.md): historical closure
   record and link to its full archive.
-- `IMPLEMENTATION_STEP.md` and `WEIGHTING_DIAGNOSTIC_STEP.md` retain retired
+- `docs/archive/notes/IMPLEMENTATION_STEP.md` and `docs/archive/notes/WEIGHTING_DIAGNOSTIC_STEP.md` retain retired
   assignments; neither authorizes implementation or dispatch. New detailed
   assignments require a user request. Do not follow their historical pending-work
   instructions as current tasks.
@@ -104,9 +104,9 @@ new real-survey studies, commits, pushes and Slurm actions remain outside scope.
 ### S5 completion, 2026-09-21
 
 S5 is complete with a passing Sol (high) scientific, software and documentation
-review. `RESEARCH_BASELINE.md` defines the adopted S2–S4 recipe;
+review. `docs/research/RESEARCH_BASELINE.md` defines the adopted S2–S4 recipe;
 `examples/research_bao_forecast.py` demonstrates the standalone Python API with
-synthetic inputs. `reviews/s5.md` and `reviews/s5-review.md` record 101 focused
+synthetic inputs. `docs/archive/reviews/s5.md` and `docs/archive/reviews/s5-review.md` record 101 focused
 tests, two installed checks, direct covariance reconstruction and unchanged
 numerical code/evidence. Only package docstrings and three validation error-message
 occurrences changed in existing source. The guide and examples ship in the source

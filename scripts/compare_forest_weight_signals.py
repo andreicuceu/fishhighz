@@ -334,8 +334,8 @@ def main():
                 W03 / "arrays.npz",
                 W03 / "summary.json",
                 Path(__file__).resolve(),
-                ROOT / "WEIGHTING_DIAGNOSTIC_STEP.md",
-                ROOT / "IMPLEMENTATION_STEP.md",
+                ROOT / "docs/archive/notes/WEIGHTING_DIAGNOSTIC_STEP.md",
+                ROOT / "docs/archive/notes/IMPLEMENTATION_STEP.md",
                 ROOT / "scripts/compare_forest_weight_integrals.py",
             )
         }
