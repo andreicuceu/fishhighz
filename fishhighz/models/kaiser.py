@@ -20,6 +20,7 @@ _BASES = {
     "ap_at": ("ap", "at"),
     "alpha_phi": ("alpha", "phi"),
     "alpha_iso_epsilon": ("alpha_iso", "epsilon"),
+    "alpha_iso_phi": ("alpha_iso", "phi"),
 }
 
 
@@ -29,7 +30,7 @@ class Scaling:
 
     Parameters
     ----------
-    basis : {'ap_at', 'alpha_phi', 'alpha_iso_epsilon'}
+    basis : {'ap_at', 'alpha_phi', 'alpha_iso_epsilon', 'alpha_iso_phi'}
         Coordinates respectively (ap,at), (alpha,phi), (alpha_iso,epsilon).
         These map to Vega ap_at, phi_alpha, aiso_epsilon conventions.
     **coordinates

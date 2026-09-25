@@ -260,6 +260,41 @@ def parse_survey_ini(source=None):
             f"unsupported FishHighz INI schema version {version}; supported version is {SCHEMA_VERSION}"
         )
 
+    mode = parser.get("model", "mode", fallback="bao")
+    full_shape = mode == "full_shape"
+    bao_marginalized = mode == "bao_marginalized"
+    if full_shape:
+        dilation_only = parser["model"].get("target_set", "full") == "dilation_only"
+        full_basis = parser["model"].get("parameterization", "alpha_phi")
+        amplitude = "alpha_iso" if full_basis == "alpha_iso_phi" else "alpha"
+        for key, value in {
+            "parameterization": full_basis,
+            "parameter_names": (
+                f"{amplitude}_w,phi_w,{amplitude}_s,phi_s"
+                if dilation_only
+                else f"{amplitude}_w,phi_w,{amplitude}_s,phi_s,f"
+            ),
+            "smooth_scaling": full_basis,
+            "wiggle_scaling": full_basis,
+            "growth_rate": "fixed_fiducial_f" if dilation_only else "free_f",
+            "biases": "marginalized",
+            "forest_bindings": "shared",
+            "reported_growth": "f_sigma8_fid",
+        }.items():
+            if key not in parser["model"]:
+                parser["model"][key] = value
+    if bao_marginalized:
+        for key, value in {
+            "parameterization": "alpha_iso_phi",
+            "parameter_names": "alpha_iso,phi",
+            "smooth_scaling": "identity",
+            "wiggle_scaling": "alpha_iso_phi",
+            "growth_rate": "fixed_fiducial_f",
+            "biases": "marginalized",
+            "forest_bindings": "shared",
+        }.items():
+            if key not in parser["model"]:
+                parser["model"][key] = value
     prescription = None
     if parser.defaults():
         raise ValueError("[DEFAULT] options are unsupported; use explicit sections")
@@ -371,6 +406,12 @@ def parse_survey_ini(source=None):
         parser,
         "model",
         (
+            "mode",
+            "biases",
+            "forest_bindings",
+            "reported_growth",
+            "target_set",
+            "growth_rate",
             "parameterization",
             "parameter_names",
             "smooth_scaling",
@@ -446,28 +487,115 @@ def parse_survey_ini(source=None):
     _section_options(
         parser,
         "numerical",
-        tuple(CONTROLS) + ("weight_rtol",),
+        tuple(CONTROLS)
+        + (
+            "weight_rtol",
+            "scale_step",
+            "relative_step",
+            "k_max_galaxy_galaxy",
+            "k_max_galaxy_forest",
+            "k_max_forest_forest",
+        ),
         tuple(CONTROLS) + ("weight_rtol",),
     )
 
-    if (
-        parser["model"]["parameterization"] != "ap_at"
-        or parser["model"]["parameter_names"].replace(" ", "") != "ap,at"
+    if mode not in ("bao", "full_shape", "bao_marginalized"):
+        raise ValueError("[model] mode must be bao, full_shape or bao_marginalized")
+    if full_shape and parser["model"]["parameterization"] not in (
+        "alpha_phi",
+        "alpha_iso_phi",
     ):
         raise ValueError(
-            "[model] native preparation currently requires ap_at with parameter_names=ap,at"
+            "[model] full_shape parameterization must be alpha_phi or alpha_iso_phi"
         )
+    full_basis = parser["model"]["parameterization"] if full_shape else None
     fixed_labels = {
-        "parameterization": "ap_at",
-        "smooth_scaling": "identity",
-        "wiggle_scaling": "ap_at",
+        "parameterization": full_basis
+        if full_shape
+        else "alpha_iso_phi"
+        if bao_marginalized
+        else "ap_at",
+        "smooth_scaling": full_basis if full_shape else "identity",
+        "wiggle_scaling": full_basis
+        if full_shape
+        else "alpha_iso_phi"
+        if bao_marginalized
+        else "ap_at",
         "damping": "mixed_squared_width",
         "growth": "camb_sigma8_ratio",
         "reconstruction": "per_field",
     }
+    if mode == "bao":
+        inappropriate = set(parser["model"]) & {
+            "biases",
+            "forest_bindings",
+            "reported_growth",
+            "growth_rate",
+            "target_set",
+        }
+        inappropriate |= set(parser["numerical"]) & {
+            "scale_step",
+            "relative_step",
+            "k_max_galaxy_galaxy",
+            "k_max_galaxy_forest",
+            "k_max_forest_forest",
+        }
+        if inappropriate:
+            raise ValueError(
+                "full_shape mode required for options: "
+                + ", ".join(sorted(inappropriate))
+            )
+    expected_names = (
+        (
+            "alpha_iso_w,phi_w,alpha_iso_s,phi_s"
+            if full_basis == "alpha_iso_phi"
+            else "alpha_w,phi_w,alpha_s,phi_s"
+        )
+        if full_shape and parser["model"].get("target_set") == "dilation_only"
+        else (
+            "alpha_iso_w,phi_w,alpha_iso_s,phi_s,f"
+            if full_basis == "alpha_iso_phi"
+            else "alpha_w,phi_w,alpha_s,phi_s,f"
+        )
+        if full_shape
+        else "alpha_iso,phi"
+        if bao_marginalized
+        else "ap,at"
+    )
+    if parser["model"]["parameter_names"].replace(" ", "") != expected_names:
+        raise ValueError(f"[model] parameter_names must be {expected_names}")
+    if full_shape:
+        target_set = parser["model"].get("target_set", "full")
+        if target_set not in ("full", "dilation_only"):
+            raise ValueError("[model] target_set must be full or dilation_only")
+        parser["model"]["target_set"] = target_set
+        fixed_labels.update(
+            growth_rate=(
+                "fixed_fiducial_f" if target_set == "dilation_only" else "free_f"
+            ),
+            biases="marginalized",
+            forest_bindings="shared",
+            reported_growth="f_sigma8_fid",
+        )
+    if bao_marginalized:
+        if "target_set" in parser["model"] or "reported_growth" in parser["model"]:
+            raise ValueError(
+                "[model] target_set/reported_growth require full_shape mode"
+            )
+        fixed_labels.update(
+            growth_rate="fixed_fiducial_f",
+            biases="marginalized",
+            forest_bindings="shared",
+        )
     for key, expected in fixed_labels.items():
         if parser["model"][key] != expected:
             raise ValueError(f"[model] {key}={parser['model'][key]!r} is unsupported")
+    for key, default in (("scale_step", "0.00025"), ("relative_step", "0.001")):
+        value = parser["numerical"].get(key, default)
+        if not np.isfinite(float(value)) or float(value) <= 0:
+            raise ValueError(f"[numerical] {key} must be positive finite")
+        if full_shape or bao_marginalized:
+            parser["numerical"][key] = value
     fixed_policies = {
         "density_semantics": "cell_count_per_deg2",
         "density_width_policy": "legacy_first_spacing",
@@ -544,6 +672,14 @@ def parse_survey_ini(source=None):
             key: float(parser["numerical"][key])
             for key in ("k_min", "k_max", "ap_step", "weight_rtol")
         }
+        if full_shape or bao_marginalized:
+            for key in (
+                "k_max_galaxy_galaxy",
+                "k_max_galaxy_forest",
+                "k_max_forest_forest",
+            ):
+                if key in parser["numerical"]:
+                    numerical[key] = float(parser["numerical"][key])
         integer_controls = {
             key: parser["numerical"].getint(key)
             for key in (
@@ -589,6 +725,12 @@ def parse_survey_ini(source=None):
         or numerical["weight_rtol"] <= 0
     ):
         raise ValueError("[numerical] k/ap/weight controls have invalid domains")
+    if any(
+        value <= numerical["k_min"]
+        for key, value in numerical.items()
+        if key.startswith("k_max_")
+    ):
+        raise ValueError("[numerical] category k_max must exceed k_min")
     if any(value < 1 for value in integer_controls.values()):
         raise ValueError(
             "[numerical] quadrature and interval controls must be positive integers"
@@ -771,7 +913,11 @@ def parse_survey_ini(source=None):
                 for position, left in enumerate(field_order)
                 for right in field_order[position:]
             )
-        for token in selected.split(","):
+        if not selected.strip() and not (full_shape or bao_marginalized):
+            raise ValueError(
+                f"[{section}] empty selected pairs require full_shape or bao_marginalized mode"
+            )
+        for token in () if not selected.strip() else selected.split(","):
             pair = tuple(x.strip() for x in token.split("x"))
             if len(pair) != 2 or any(x not in ids for x in pair):
                 raise ValueError(f"[{section}] invalid selected pair {token!r}")
@@ -781,6 +927,23 @@ def parse_survey_ini(source=None):
             pairs.append(pair)
         z_eval = float(np.sqrt((1 + z_min) * (1 + z_max)) - 1)
         bins.append(BinConfig(index, z_min, z_max, z_eval, tuple(pairs)))
+    if (full_shape or bao_marginalized) and not any(
+        item.selected_pairs for item in bins
+    ):
+        raise ValueError(f"{mode} requires at least one nonempty redshift bin")
+    if full_shape and parser["model"]["target_set"] == "dilation_only":
+        if any(
+            any(
+                field.observed.kind != "forest"
+                for field in fields
+                if field.observed.id in pair
+            )
+            for item in bins
+            for pair in item.selected_pairs
+        ):
+            raise ValueError(
+                "dilation_only target_set requires forest-only selected spectra"
+            )
 
     return SurveyConfig(
         path,
@@ -1037,6 +1200,9 @@ def prepare_survey(config, *, background, template, readers=None, prepare=False)
         "background damping_reference_redshift/configured damping_reference_redshift",
     )
     fields = config.observed_fields
+    mode = config.model.get("mode", "bao")
+    full_shape = mode == "full_shape"
+    bao_marginalized = mode == "bao_marginalized"
     registry = ParameterRegistry(
         [
             Parameter(f"{name}_{index}", 1.0, "target", step=0.001)
@@ -1044,6 +1210,14 @@ def prepare_survey(config, *, background, template, readers=None, prepare=False)
             for name in ("ap", "at")
         ]
     )
+    if full_shape:
+        from .full_shape import make_registry
+
+        registry = make_registry(config, background)
+    if bao_marginalized:
+        from .bao_marginalized import make_registry
+
+        registry = make_registry(config, background)
     with ExitStack() as stack:
         reader_map = _normalise_readers(config, config.fields, readers, stack)
         densities = {name: item["density"] for name, item in reader_map.items()}
@@ -1055,6 +1229,18 @@ def prepare_survey(config, *, background, template, readers=None, prepare=False)
         specs = []
         bin_provenance = []
         for bin_config in config.bins:
+            if (full_shape or bao_marginalized) and not bin_config.selected_pairs:
+                bin_provenance.append(
+                    {
+                        "index": bin_config.index,
+                        "bounds": [bin_config.z_min, bin_config.z_max],
+                        "z_eval": bin_config.z_eval,
+                        "selected_pairs": [],
+                        "required_pairs": [],
+                        "status": "excluded",
+                    }
+                )
+                continue
             z_eval = bin_config.z_eval
             geometry = prepare_geometry(
                 bin_config.z_min,
@@ -1066,12 +1252,31 @@ def prepare_survey(config, *, background, template, readers=None, prepare=False)
                 hubble=background.hubble_parameter,
                 transverse_distance=background.transverse_comoving_distance,
             )
+            k_min = float(config.numerical["k_min"])
+            field_kinds = {field.id: field.kind for field in fields}
+            category_cuts = []
+            for left, right in bin_config.selected_pairs:
+                kinds = (field_kinds[left], field_kinds[right])
+                suffix = (
+                    "forest_forest"
+                    if kinds == ("forest", "forest")
+                    else "galaxy_galaxy"
+                    if kinds == ("galaxy", "galaxy")
+                    else "galaxy_forest"
+                )
+                category_cuts.append(
+                    float(
+                        config.numerical.get(
+                            "k_max_" + suffix, config.numerical["k_max"]
+                        )
+                    )
+                )
+            k_edges = np.linspace(
+                k_min, max(category_cuts), int(config.numerical["k_intervals"]) + 1
+            )
+            k_edges = np.unique(np.concatenate((k_edges, category_cuts)))
             grid = gauss_legendre_grid(
-                np.linspace(
-                    float(config.numerical["k_min"]),
-                    float(config.numerical["k_max"]),
-                    int(config.numerical["k_intervals"]) + 1,
-                ),
+                k_edges,
                 k_order=int(config.numerical["k_order"]),
                 mu_order=int(config.numerical["mu_order"]),
                 h_fid=float(h_fid),
@@ -1107,23 +1312,54 @@ def prepare_survey(config, *, background, template, readers=None, prepare=False)
                     (1 + growth_rate) * sigma_transverse,
                     sigma_transverse,
                 )
-            model = KaiserModel(
-                template,
-                fields,
-                biases=biases,
-                betas=betas,
-                widths=widths,
-                f=growth_rate,
-                local_names=("ap", "at"),
-                wiggle=Scaling("ap_at", ap="ap", at="at"),
-                z=z_eval,
-                growth=(sigma8 / sigma8_template) ** 2,
-            )
-            binding = BoundParameters(
-                registry,
-                ("ap", "at"),
-                {name: f"{name}_{bin_config.index - 1}" for name in ("ap", "at")},
-            )
+            if full_shape:
+                from .full_shape import make_model
+
+                model, binding = make_model(
+                    config,
+                    bin_config,
+                    registry,
+                    template,
+                    fields,
+                    biases,
+                    betas,
+                    widths,
+                    growth_rate,
+                    (sigma8 / sigma8_template) ** 2,
+                )
+            elif bao_marginalized:
+                from .bao_marginalized import make_model
+
+                model, binding = make_model(
+                    config,
+                    bin_config,
+                    registry,
+                    template,
+                    fields,
+                    biases,
+                    betas,
+                    widths,
+                    growth_rate,
+                    (sigma8 / sigma8_template) ** 2,
+                )
+            else:
+                model = KaiserModel(
+                    template,
+                    fields,
+                    biases=biases,
+                    betas=betas,
+                    widths=widths,
+                    f=growth_rate,
+                    local_names=("ap", "at"),
+                    wiggle=Scaling("ap_at", ap="ap", at="at"),
+                    z=z_eval,
+                    growth=(sigma8 / sigma8_template) ** 2,
+                )
+                binding = BoundParameters(
+                    registry,
+                    ("ap", "at"),
+                    {name: f"{name}_{bin_config.index - 1}" for name in ("ap", "at")},
+                )
             p3d = PreparedP3D(
                 registry,
                 selection,

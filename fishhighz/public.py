@@ -70,6 +70,12 @@ class SpectrumConstraint:
     sigma_ap: float | None
     sigma_at: float | None
     correlation: float | None
+    target_ids: tuple[str, ...] = ()
+    target_covariance: object = None
+    target_errors: object = None
+    target_correlations: object = None
+    target_fiducials: tuple[float, ...] = ()
+    sigma8_fid: float | None = None
 
     @property
     def result(self):
@@ -136,6 +142,14 @@ class SurveyResult:
 
         output = Path(path).expanduser().resolve()
         output.mkdir(parents=True, exist_ok=False)
+        if self.config.model.get("mode", "bao") == "full_shape":
+            from .full_shape import save_full_shape
+
+            return save_full_shape(self, output)
+        if self.config.model.get("mode", "bao") == "bao_marginalized":
+            from .bao_marginalized import save_bao_marginalized
+
+            return save_bao_marginalized(self, output)
         records = []
         for item in (*self.constraints, *self.excluded):
             records.append(
@@ -433,15 +447,47 @@ class Forecast:
                 template=template,
                 readers=readers,
             )
+            if self.config.model.get("mode", "bao") in (
+                "full_shape",
+                "bao_marginalized",
+            ):
+                from .full_shape import validate_template_coverage
+
+                for spec in survey.bins:
+                    validate_template_coverage(spec)
             bins = tuple(prepare_bin(spec) for spec in survey.bins)
         self._prepared = PreparedForecast(
             self.config, survey, background, template, bins, freeze(identities)
         )
         return self._prepared
 
-    def run(self, *, batch_size=2048, step_scale=None, numerical=False):
+    def run(
+        self, *, batch_size=2048, step_scale=None, numerical=False, individuals=True
+    ):
         """Run joint and own-covariance individual constraints."""
 
+        if self.config.model.get("mode", "bao") == "full_shape":
+            from .full_shape import run_full_shape
+
+            return run_full_shape(
+                self,
+                batch_size=batch_size,
+                step_scale=1.0 if step_scale is None else step_scale,
+                numerical=numerical,
+                individuals=individuals,
+            )
+        if self.config.model.get("mode", "bao") == "bao_marginalized":
+            from .bao_marginalized import run_bao_marginalized
+
+            return run_bao_marginalized(
+                self,
+                batch_size=batch_size,
+                step_scale=1.0 if step_scale is None else step_scale,
+                numerical=numerical,
+                individuals=individuals,
+            )
+        if not individuals:
+            raise ValueError("individuals=False requires full_shape mode")
         prepared = self.prepare()
         if step_scale is None:
             step_scale = float(self.config.numerical["ap_step"]) / 0.001

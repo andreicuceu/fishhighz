@@ -1,7 +1,8 @@
 # Native INI reference
 
 The current schema is `fishhighz-native-survey`, version `1`. It implements the
-BAO accuracy prescription with independent AP parameters per redshift bin.
+BAO accuracy prescription by default, with independent AP parameters per redshift
+bin, and an explicit full-shape mode.
 Unknown sections/options, duplicate definitions and `[DEFAULT]` values are
 rejected. Sections and string values are case sensitive; option names are case
 insensitive. Use full-line comments: trailing comments are not stripped. Numeric
@@ -115,6 +116,109 @@ qualification of altered inputs.
 :language: ini
 :lines: 234-265
 ```
+
+## BAO with marginalized tracer nuisances
+
+Add `[model] mode=bao_marginalized` to a compact accuracy INI. The resolved
+model uses `parameterization=alpha_iso_phi`, `parameter_names=alpha_iso,phi`,
+`smooth_scaling=identity`, `wiggle_scaling=alpha_iso_phi`,
+`growth_rate=fixed_fiducial_f`, `biases=marginalized` and
+`forest_bindings=shared`. An expanded INI must set these labels explicitly.
+The wiggle mapping is
+`a_parallel=alpha_iso*phi**(-2/3)` and
+`a_perp=alpha_iso*phi**(1/3)`; both smooth dilations equal one.
+
+Each bin retains the two dilation targets. The galaxy Kaiser factors use a
+single fixed `f_fid(z)` and independent QSO, LBG and LAE biases. Both forest
+samples share one Lyα bias and beta. Only nuisances represented in the selected
+spectra remain active; there are seven parameters for a full 15-spectrum bin.
+No nuisance prior is imposed. Template normalization, growth, damping widths,
+weights, response, noise and covariance remain fixed during mean derivatives.
+
+`[numerical] scale_step` and `relative_step` set dilation and relative nuisance
+steps, respectively, with defaults `0.00025` and `0.001`.
+`Forecast.run(step_scale=0.5)` halves these steps. A blank `selected` value
+excludes a bin and preserves its original index. `Forecast.run(individuals=False)`
+or CLI `--joint-only` skips individual spectra. Category cut controls and template
+coverage checks follow the full-shape mode described below.
+
+## Full-shape mode
+
+Add `[model] mode=full_shape` to the compact accuracy recipe. This fills the
+following supported full-shape defaults; existing explicit BAO scaling options
+must be replaced when adapting an expanded BAO INI:
+
+```ini
+[model]
+mode = full_shape
+parameterization = alpha_phi
+parameter_names = alpha_w, phi_w, alpha_s, phi_s, f
+smooth_scaling = alpha_phi
+wiggle_scaling = alpha_phi
+growth = camb_sigma8_ratio
+growth_rate = free_f
+biases = marginalized
+forest_bindings = shared
+reported_growth = f_sigma8_fid
+
+[numerical]
+k_min = 0.01
+k_max = 0.20
+scale_step = 0.00025
+relative_step = 0.001
+```
+
+`growth=camb_sigma8_ratio` fixes the template power normalization to the fiducial
+background. The separate `growth_rate=free_f` fits the galaxy Kaiser growth rate;
+results report it as `f*sigma8_fid(z)`. The wiggle and smooth components use
+independent `alpha_phi` mappings, with `a_parallel=alpha/sqrt(phi)` and
+`a_perp=alpha*sqrt(phi)`, including separate angular and Fourier-volume factors.
+
+For isotropic dilation coordinates, set `parameterization`, `smooth_scaling`,
+and `wiggle_scaling` to `alpha_iso_phi`, and set `parameter_names` to
+`alpha_iso_w, phi_w, alpha_iso_s, phi_s, f`. A forest-only
+`target_set=dilation_only` omits `f` from that list. Each component then has
+`a_parallel=alpha_iso*phi**(-2/3)` and `a_perp=alpha_iso*phi**(1/3)`.
+The two bases are distinct: `alpha_iso=alpha*phi**(1/6)`. The INI basis is
+saved with the result, so historical `alpha_phi` uncertainties retain their
+original interpretation.
+
+Each bin marginalizes independent QSO, LBG and LAE biases, one Lyα bias shared
+by both forest samples and one shared Lyα beta, without external priors. Absent
+tracer nuisances are removed; all five targets remain. The bundled selection
+therefore has 8 active parameters in bin 1 and 10 in bins 2–6. All parameters
+are independent between bins. Damping widths, response, weights, noise and
+covariance remain fiducial during mean differentiation.
+
+`scale_step` is the absolute step for each dilation parameter; `relative_step`
+multiplies the absolute nonzero fiducial growth or nuisance value, with an
+absolute fallback at zero. `Forecast.run(step_scale=0.5)` halves all steps.
+These initial steps require numerical qualification for each analysis.
+Full-shape-only options are rejected in BAO mode; omitting `mode` preserves BAO.
+
+Optional `[numerical]` values `k_max_galaxy_galaxy`,
+`k_max_galaxy_forest`, and `k_max_forest_forest` set observed-coordinate
+cutoffs by spectrum category; each defaults to `k_max`. All selected spectra
+within a category share its cutoff. The integration is divided at distinct
+cutoffs, with each interval using the covariance closure of its active
+spectra. Interval Fisher matrices are added before nuisance marginalization.
+`Forecast.run(individuals=False)` computes joint bin constraints without
+the selected individual-spectrum calculations; the default computes both.
+
+For forest-only selections, `[model] target_set=dilation_only` keeps four
+dilation targets and fixes the Kaiser growth rate to its fiducial value.
+Forest bias and beta remain marginalized. The default `target_set=full`
+keeps all five targets. A blank `selected` value in a full-shape `[pairs bin N]`
+section excludes that bin, retains its original bin index in results, and
+creates an explicit joint record with status `excluded`.
+
+Edit `k_min` and the applicable `k_max` values to change Fourier cuts. They remain fixed
+observed-coordinate limits; quadrature nodes, weights and mode counts follow
+any finite `0 < k_min < k_max`. Both mapped components must remain inside the
+template domain at every derivative stencil evaluation. Unsupported coverage
+raises an error, without clipping or changing cuts. `k_intervals`, `k_order`
+and `mu_order` control radial and angular refinement. Saved settings record
+requested limits and effective quadrature; see the [results guide](results.md).
 
 ## `[input policies]`
 

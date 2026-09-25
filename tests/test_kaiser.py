@@ -141,6 +141,7 @@ def test_equivalent_bases_coordinates_and_Q(ap, at):
             ("ap_at", {"ap": ap, "at": at}),
             ("alpha_phi", {"alpha": alpha, "phi": phi}),
             ("alpha_iso_epsilon", {"alpha_iso": aiso, "epsilon": epsilon}),
+            ("alpha_iso_phi", {"alpha_iso": aiso, "phi": phi}),
         )
     ):
         p, t, q = _scales(np.array(list(coordinates.values())), code)

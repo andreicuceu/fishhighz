@@ -11,14 +11,16 @@ def _resolve(fixed, destinations, sources, theta):
 
 
 def _scales(values, basis):
-    """Return ap,at,Q; basis codes 0=ap_at, 1=alpha_phi, 2=alpha_iso_epsilon."""
+    """Return ap,at,Q for the four explicit dilation bases."""
     a, b = values
     if basis == 0:
         ap, at = a, b
     elif basis == 1:
         ap, at = a / np.sqrt(b), a * np.sqrt(b)
-    else:
+    elif basis == 2:
         ap, at = (a * (1 + b)) * (1 + b), a / (1 + b)
+    else:
+        ap, at = a * b ** (-2 / 3), a * b ** (1 / 3)
     q = np.exp(-np.log(ap) - 2 * np.log(at))
     return ap, at, q
 
