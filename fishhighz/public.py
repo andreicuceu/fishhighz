@@ -257,7 +257,7 @@ def _default_background(config, stack, identity):
         identifier=_input_identifier(config, config.cosmology["camb_ini"]),
         sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
     )
-    return prepare_camb(
+    background = prepare_camb(
         ini=path,
         template_growth_redshift=float(config.cosmology["template_redshift"]),
         damping_reference_redshift=float(
@@ -265,6 +265,11 @@ def _default_background(config, stack, identity):
         ),
         redshifts=[item.z_eval for item in config.bins],
     )
+    cache = getattr(background, "cache", None)
+    identity["growth_cache"] = (
+        "disabled" if cache is None else f"{cache['status']} ({cache['key']})"
+    )
+    return background
 
 
 def _default_template(config, background, stack):
@@ -496,6 +501,7 @@ class Forecast:
             batch_size=batch_size,
             step_scale=step_scale,
             numerical=numerical,
+            individual=True,
         )
         individual, joint = [], []
         fields = prepared.survey.fields
@@ -522,16 +528,14 @@ class Forecast:
                     correlation,
                 )
             )
-            for pair_values in spec.p3d.selection.selected_pairs.tolist():
+            # Per-field weights, noise and response make each spectrum's own
+            # covariance the diagonal of the fixed joint covariance, so the
+            # joint derivative batches give the individual constraints directly.
+            for pair_values, own in zip(
+                spec.p3d.selection.selected_pairs.tolist(), bin_run.individual
+            ):
                 pair = tuple(int(value) for value in pair_values)
-                own = prepare_bin(_pair_spec(spec, pair))
-                own_run = run_forecast(
-                    [own],
-                    batch_size=batch_size,
-                    step_scale=step_scale,
-                    numerical=numerical,
-                )
-                own_result = own_run.bins[0].result.fix_except(parameter_ids)
+                own_result = own.fix_except(parameter_ids)
                 status, sigma_ap, sigma_at, correlation = _constraints(own_result)
                 individual.append(
                     SpectrumConstraint(
@@ -586,7 +590,7 @@ class Forecast:
                 "template": type(prepared.template).__name__,
                 "bin_ids": [item.id for item in prepared.bins],
                 "parameter_order": list(prepared.survey.registry.ids),
-                "individual_covariance": "one independently prepared covariance per selected spectrum",
+                "individual_covariance": "one-spectrum covariance per selected spectrum (diagonal of the fixed joint covariance)",
                 "joint_covariance": "full selected-spectrum covariance per bin",
                 "run": {
                     "batch_size": batch_size,

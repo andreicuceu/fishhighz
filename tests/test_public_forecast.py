@@ -7,7 +7,7 @@ import numpy as np
 
 from fishhighz import Forecast
 from fishhighz.fields import ObservedField, PairSelection
-from fishhighz.forecast import prepare_bin
+from fishhighz.forecast import prepare_bin, run_forecast
 from fishhighz.geometry import prepare_geometry
 from fishhighz.grids import gauss_legendre_grid
 from fishhighz.models.external import BoundParameters, P3DProvider, PreparedP3D
@@ -207,10 +207,22 @@ def test_forecast_run_retains_fisher_results_and_own_covariance(tmp_path, monkey
     assert len(result.joint) == 1
     assert len(result.excluded) == 0
     assert all(item.fisher is not None for item in result.individual + result.joint)
-    # One three-spectrum joint preparation is followed by three one-spectrum
-    # preparations; the latter own their covariance factors.
-    assert selected_lengths[0] == 3
-    assert selected_lengths[1:] == [1, 1, 1]
+    # Only the three-spectrum joint bin is prepared; each individual constraint
+    # must equal that of an independently prepared one-spectrum bin, which owns
+    # its covariance factors.
+    assert selected_lengths == [3]
+    spec = result.prepared.survey.bins[0]
+    for item, pair in zip(
+        result.individual, spec.p3d.selection.selected_pairs.tolist()
+    ):
+        own = original(_pair_spec(spec, tuple(pair)))
+        assert len(own.p3d.selection.selected_pairs) == 1
+        reference = (
+            run_forecast([own], batch_size=32, step_scale=0.25)
+            .bins[0]
+            .result.fix_except(item.parameter_ids)
+        )
+        np.testing.assert_array_equal(item.fisher.data_fisher, reference.data_fisher)
     assert result.joint[0].fisher.data_fisher.shape == (2, 2)
     output = result.save(tmp_path / "result")
     assert (output / "settings.json").is_file()

@@ -1,4 +1,4 @@
-"""Explicitly requested optional contraction; imported lazily by the host.
+"""Optional compiled contraction (default when Numba is installed); lazy import.
 
 One cell of solve workspace, no fastmath, no parallel loops. Matrix products
 retain the NumPy reference ordering. Status failures are replayed by the host
@@ -9,7 +9,7 @@ import numpy as np
 from numba import njit
 
 
-@njit(cache=False, fastmath=False)
+@njit(cache=True, fastmath=False)
 def contract(lower, jacobian):
     nodes, rows, parameters = jacobian.shape
     result = np.zeros((parameters, parameters))

@@ -6,7 +6,11 @@ from types import MappingProxyType
 import numpy as np
 
 from ._arrays import integer
-from .covariance import combine_observed_power, gaussian_covariance
+from .covariance import (
+    combine_observed_power,
+    gaussian_covariance,
+    gaussian_variances,
+)
 from .derivatives import CallCount, _schedule, evaluate_derivatives
 from .fisher import factor_covariance, fisher_from_factors
 from .geometry import _immutable, mode_counts, wavenumber_comoving_to_velocity
@@ -216,13 +220,18 @@ def prepare_bin(spec):
 
 @dataclass(frozen=True)
 class BinRun:
-    """One zero-prior FisherResult and actual derivative columns/calls/batches."""
+    """One zero-prior FisherResult and actual derivative columns/calls/batches.
+
+    ``individual`` holds, when requested, one zero-prior FisherResult per
+    selected spectrum (selected-pair order) using that spectrum's own variance.
+    """
 
     id: str
     result: FisherResult
     columns: tuple
     calls: tuple[CallCount, ...]
     node_slices: tuple
+    individual: tuple | None = None
 
 
 @dataclass(frozen=True)
@@ -238,20 +247,61 @@ def _batch_size(batch_size, n):
     return n if batch_size is None else integer(batch_size, "batch_size", minimum=1)
 
 
-def run_bin(prepared, *, batch_size=None, steps=None, step_scale=1.0, numerical=False):
+def _individual_factors(prepared):
+    """One-spectrum (node,1,1) factors from the diagonal of the fixed covariance.
+
+    Each factor is exactly what factor_covariance returns for the one-spectrum
+    covariance of an independently prepared single-pair bin, because forest
+    weights, noise and response are per field and the variance arithmetic is
+    shared with the full covariance.
+    """
+    selection = prepared.p3d.selection
+    variances = gaussian_variances(prepared.total, prepared.modes, selection)
+    factors = []
+    for spectrum, pair in enumerate(selection.selected_pairs.tolist()):
+        try:
+            factors.append(factor_covariance(variances[:, spectrum, None, None]))
+        except ValueError as error:
+            raise ValueError(f"selected spectrum {tuple(pair)}: {error}") from error
+    return factors
+
+
+def run_bin(
+    prepared,
+    *,
+    batch_size=None,
+    steps=None,
+    step_scale=1.0,
+    numerical=False,
+    individual=False,
+):
     """Reuse fixed factors; transient required-pair Jacobians are node-bounded.
 
     Batches are consecutive C-order nodes, never spectra. Derivative evaluation
     may repeat fiducial P3D calls. Survey quantities and factors are never rebuilt.
+    Only the scheduled (nonzero) global columns enter the contraction; the other
+    rows and columns of the returned information are exactly zero. With
+    ``individual=True`` the same Jacobian batches also give each selected
+    spectrum's Fisher matrix under its own one-spectrum covariance.
     """
     if not isinstance(prepared, PreparedBin):
         raise ValueError("require PreparedBin")
     n = len(prepared.k)
     size = _batch_size(batch_size, n)
-    _schedule(prepared.p3d, prepared.theta, steps, step_scale, numerical)
+    schedules = _schedule(prepared.p3d, prepared.theta, steps, step_scale, numerical)
+    active = np.array(
+        sorted({index for schedule in schedules for index, _ in schedule}),
+        dtype=np.intp,
+    )
+    if not len(active):
+        active = np.arange(len(prepared.theta))
+    block = np.ix_(active, active)
     data = np.zeros((len(prepared.theta), len(prepared.theta)))
     calls, slices, columns = {}, [], ()
     selected = prepared.p3d.selection.selected_to_required
+    if individual:
+        own_factors = _individual_factors(prepared)
+        own_data = [np.zeros_like(data) for _ in own_factors]
     for start in range(0, n, size):
         stop = min(start + size, n)
         part = slice(start, stop)
@@ -268,8 +318,13 @@ def run_bin(prepared, *, batch_size=None, steps=None, step_scale=1.0, numerical=
             )
             jac = (prepared.products[part, :, None] * derivative.jacobian)[
                 :, selected, :
-            ]
-            data += fisher_from_factors(jac, prepared.factors[part])
+            ][:, :, active]
+            data[block] += fisher_from_factors(jac, prepared.factors[part])
+            if individual:
+                for spectrum, factor in enumerate(own_factors):
+                    own_data[spectrum][block] += fisher_from_factors(
+                        jac[:, spectrum : spectrum + 1], factor[part]
+                    )
         except Exception as error:
             raise ValueError(
                 f"bin {prepared.id}, global nodes [{start}:{stop}) (local node + {start}): {error}"
@@ -285,6 +340,9 @@ def run_bin(prepared, *, batch_size=None, steps=None, step_scale=1.0, numerical=
         columns,
         tuple(CallCount(name, *counts) for name, counts in calls.items()),
         tuple(slices),
+        tuple(FisherResult(prepared.p3d.registry, own) for own in own_data)
+        if individual
+        else None,
     )
 
 
@@ -323,6 +381,7 @@ def run_forecast(
     steps=None,
     step_scale=1.0,
     numerical=False,
+    individual=False,
 ):
     """Run prepared independent bins in one registry; add prior exactly once.
 
@@ -330,7 +389,7 @@ def run_forecast(
     success return. Changing priors reuses the same prepared bins. The returned
     ForecastRun exposes each zero-prior bin result and ``combined``, where the
     caller's prior is applied once after summing independent-bin data Fisher
-    matrices.
+    matrices. ``individual=True`` also fills each BinRun's per-spectrum results.
     """
     bins = _validate_bins(bins)
     for b in bins:
@@ -349,6 +408,7 @@ def run_forecast(
             steps=steps,
             step_scale=step_scale,
             numerical=numerical,
+            individual=individual,
         )
         for b in bins
     )

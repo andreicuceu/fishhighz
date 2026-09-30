@@ -10,7 +10,7 @@ import numpy as np
 
 from ._arrays import real_array
 from .fields import PairSelection
-from .kernels.covariance import _gaussian_covariance_kernel
+from .kernels.covariance import _gaussian_covariance_kernel, _gaussian_variance_kernel
 
 
 def _power_array(value, name):
@@ -214,5 +214,43 @@ def gaussian_covariance(total_power, mode_counts, selection):
         raise ValueError(
             f"nonfinite covariance arithmetic at node {node}; "
             "check power magnitudes, mode counts, and units"
+        )
+    return out
+
+
+def gaussian_variances(total_power, mode_counts, selection):
+    """Return the diagonal of gaussian_covariance, shape (n_node, n_selected).
+
+    Column a is the variance (T_ii*T_jj + T_ij*T_ji)/mode_counts of selected
+    spectrum a=(i,j), computed with the same operation order as the full
+    covariance, so it is identical to the one-spectrum covariance of that
+    spectrum prepared on its own from the same fiducial total power. Physical
+    validation of the total power is the caller's responsibility (normally
+    already performed by gaussian_covariance on the joint selection); only
+    finite, strictly positive variances are accepted here.
+    """
+    if not isinstance(selection, PairSelection):
+        raise ValueError("selection must be a prepared PairSelection")
+    power = _power_array(total_power, "total_power")
+    if power.shape[1] != len(selection.required_pairs):
+        raise ValueError(
+            f"total_power needs exactly {len(selection.required_pairs)} required columns"
+        )
+    counts = real_array(mode_counts, "mode_counts")
+    if counts.shape != (power.shape[0],) or np.any(counts <= 0):
+        raise ValueError(
+            "mode_counts must have shape (n_node,) and be strictly positive"
+        )
+    out = np.empty((len(power), len(selection.selected_pairs)), dtype=np.float64)
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        _gaussian_variance_kernel(
+            power, counts, selection.im, selection.jn, selection.in_, selection.jm, out
+        )
+    valid = np.isfinite(out) & (out > 0)
+    if not np.all(valid):
+        node, spectrum = np.argwhere(~valid)[0]
+        raise ValueError(
+            f"nonfinite or nonpositive variance of selected spectrum {spectrum} at "
+            f"node {node}; check power magnitudes, mode counts, and units"
         )
     return out

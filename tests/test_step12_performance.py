@@ -312,3 +312,29 @@ def test_explicit_underflow_policy_is_preserved(monkeypatch, policy):
                 result = str(error)
         outcomes.append((result, [str(w.message) for w in caught]))
     assert outcomes[0] == outcomes[1]
+
+
+def test_unset_backend_selects_compiled_contraction_when_available(monkeypatch):
+    if importlib.util.find_spec("numba") is None:
+        pytest.skip("optional compiler unavailable")
+    import fishhighz.kernels._compiled_fisher as compiled
+
+    rng = np.random.default_rng(12)
+    raw = rng.normal(size=(9, 3, 3))
+    factors = factor_covariance(raw @ raw.swapaxes(1, 2) + 3 * np.eye(3))
+    jac = rng.normal(size=(9, 3, 2))
+    calls = []
+    original = compiled.contract
+
+    def spy(*args):
+        calls.append(args)
+        return original(*args)
+
+    monkeypatch.setattr(compiled, "contract", spy)
+    monkeypatch.delenv("FISHHIGHZ_FISHER_BACKEND", raising=False)
+    default = fisher_from_factors(jac, factors)
+    assert len(calls) == 1
+    monkeypatch.setenv("FISHHIGHZ_FISHER_BACKEND", "numpy")
+    reference = fisher_from_factors(jac, factors)
+    assert len(calls) == 1
+    assert relative(default, reference) <= 5e-15

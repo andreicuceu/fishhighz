@@ -5,10 +5,19 @@ preparation boundary for callers that choose the bundled Planck18 background:
 CAMB is imported only by :func:`prepare_camb`.  The complete requested set is
 solved in one strictly decreasing-redshift CAMB run; its returned redshift
 metadata is validated before growth arrays are mapped back to caller order.
+
+The transfer-function solve is only needed for sigma8(z) and f(z)sigma8(z).
+Those arrays are cached on disk, keyed by the CAMB ini bytes, the requested
+redshift set and the CAMB version; a cache hit recomputes the background (H,
+D_M), which CAMB reproduces bitwise without transfer functions.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
@@ -107,6 +116,91 @@ def _returned_redshifts(results, parameters, requested):
     )
 
 
+_CAMB_CACHE_SCHEMA = 1
+_CACHE_DISABLED = ("0", "false", "no", "off")
+
+
+def _camb_cache_dir(cache_dir, camb_module):
+    """Resolve the growth cache directory, or None when caching is disabled.
+
+    ``FISHHIGHZ_CAMB_CACHE=0`` disables caching. An explicit ``cache_dir`` wins;
+    otherwise ``$FISHHIGHZ_CACHE_DIR/camb``, ``$XDG_CACHE_HOME/fishhighz/camb``
+    or ``~/.cache/fishhighz/camb``. Injected CAMB test surfaces are only
+    cached when a directory is given explicitly.
+    """
+    setting = os.environ.get("FISHHIGHZ_CAMB_CACHE", "1").strip().lower()
+    if setting in _CACHE_DISABLED:
+        return None
+    if cache_dir is not None:
+        return Path(cache_dir).expanduser()
+    if camb_module is not None:
+        return None
+    root = os.environ.get("FISHHIGHZ_CACHE_DIR")
+    if root:
+        return Path(root).expanduser() / "camb"
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    base = Path(xdg).expanduser() if xdg else Path.home() / ".cache"
+    return base / "fishhighz" / "camb"
+
+
+def _camb_cache_identity(ini_bytes, camb_order, camb):
+    identity = dict(
+        schema=_CAMB_CACHE_SCHEMA,
+        ini_sha256=hashlib.sha256(ini_bytes).hexdigest(),
+        redshifts=[float(z).hex() for z in camb_order],
+        camb_version=str(getattr(camb, "__version__", "unknown")),
+    )
+    text = json.dumps(identity, sort_keys=True)
+    return hashlib.sha256(text.encode()).hexdigest(), text
+
+
+def _read_growth_cache(path, identity, camb_order):
+    """Return cached (sigma8, fsigma8) in CAMB order, or None if unusable."""
+    try:
+        with np.load(path, allow_pickle=False) as stored:
+            if str(stored["identity"]) != identity:
+                return None
+            redshifts = np.asarray(stored["redshifts"], dtype=np.float64)
+            sigma8 = np.array(stored["sigma8"], dtype=np.float64)
+            fsigma8 = np.array(stored["fsigma8"], dtype=np.float64)
+    except (OSError, KeyError, ValueError):
+        return None
+    shape = (len(camb_order),)
+    if (
+        not np.array_equal(redshifts, np.asarray(camb_order, dtype=np.float64))
+        or sigma8.shape != shape
+        or fsigma8.shape != shape
+        or not np.all(np.isfinite(sigma8))
+        or not np.all(np.isfinite(fsigma8))
+    ):
+        return None
+    return sigma8, fsigma8
+
+
+def _write_growth_cache(path, identity, camb_order, sigma8, fsigma8):
+    """Atomically store growth arrays; return False when the cache is unwritable."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            dir=path.parent, prefix=".tmp-", suffix=".npz", delete=False
+        ) as handle:
+            np.savez(
+                handle,
+                identity=np.asarray(identity),
+                redshifts=np.asarray(camb_order, dtype=np.float64),
+                sigma8=np.asarray(sigma8, dtype=np.float64),
+                fsigma8=np.asarray(fsigma8, dtype=np.float64),
+            )
+        os.replace(handle.name, path)
+    except OSError:
+        try:
+            os.unlink(handle.name)
+        except (OSError, NameError):
+            pass
+        return False
+    return True
+
+
 def _load_camb(camb_module):
     if camb_module is not None:
         return camb_module
@@ -143,6 +237,7 @@ class CAMBBackground:
     H0: float
     _geometry_results: object = field(repr=False, compare=False)
     _z_to_index: MappingProxyType = field(repr=False, compare=False)
+    cache: MappingProxyType | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self):
         n = len(self.redshifts)
@@ -299,6 +394,7 @@ def prepare_camb(
     template_redshift=None,
     damping_reference_redshift=2.3,
     camb_module=None,
+    cache_dir=None,
 ):
     """Prepare the native CAMB background at an exact, explicit redshift set.
 
@@ -319,6 +415,12 @@ def prepare_camb(
     camb_module : module-like, optional
         Test surface or already imported CAMB module.  Normal callers should
         leave this unset; importing CAMB remains lazy.
+    cache_dir : path-like, optional
+        Directory for the sigma8/fsigma8 cache.  By default the user cache
+        directory is used for the real CAMB module (see ``_camb_cache_dir``);
+        ``FISHHIGHZ_CAMB_CACHE=0`` disables caching.  A hit skips only the
+        transfer-function solve: the ini is read, the redshifts are set and the
+        background is recomputed with ``camb.get_background``.
     """
     if template_growth_redshift is not None and template_redshift is not None:
         raise ValueError(
@@ -349,21 +451,43 @@ def prepare_camb(
     # then map values back to the caller's original order.
     camb_order = tuple(sorted(ordered, reverse=True))
 
+    directory = _camb_cache_dir(cache_dir, camb_module)
+
     def run_bulk(path):
         parameters = camb.read_ini(str(path))
         _set_redshifts(parameters, camb_order)
-        return parameters, camb.get_results(parameters)
+        record = None
+        if directory is not None:
+            key, identity = _camb_cache_identity(
+                Path(path).read_bytes(), camb_order, camb
+            )
+            cache_path = directory / f"{key}.npz"
+            record = dict(key=key, path=str(cache_path))
+            cached = _read_growth_cache(cache_path, identity, camb_order)
+            if cached is not None and hasattr(camb, "get_background"):
+                record["status"] = "hit"
+                return parameters, camb.get_background(parameters), cached, record
+        results = camb.get_results(parameters)
+        returned = _returned_redshifts(results, parameters, camb_order)
+        growth = (
+            _growth_values(results, "get_sigma8", returned),
+            _growth_values(results, "get_fsigma8", returned),
+        )
+        if record is not None:
+            written = _write_growth_cache(cache_path, identity, returned, *growth)
+            record["status"] = "miss, stored" if written else "miss, unwritable"
+        return parameters, results, growth, record
 
     if ini is None:
         with bundled_path("camb_configs/Planck18.ini") as path:
-            parameters, results = run_bulk(path)
+            parameters, results, growth, record = run_bulk(path)
     else:
         path = Path(ini).expanduser().resolve(strict=True)
-        parameters, results = run_bulk(path)
+        parameters, results, growth, record = run_bulk(path)
 
-    returned = _returned_redshifts(results, parameters, camb_order)
-    sigma_returned = _growth_values(results, "get_sigma8", returned)
-    fsigma8_returned = _growth_values(results, "get_fsigma8", returned)
+    # A cache entry is only accepted for exactly this decreasing request order.
+    returned = camb_order
+    sigma_returned, fsigma8_returned = growth
     returned_index = {redshift: index for index, redshift in enumerate(returned)}
     sigma_by_z = {
         redshift: sigma_returned[index] for redshift, index in returned_index.items()
@@ -433,6 +557,7 @@ def prepare_camb(
         H0=h0,
         _geometry_results=geometry_results,
         _z_to_index=MappingProxyType({z: i for i, z in enumerate(ordered)}),
+        cache=None if record is None else MappingProxyType(record),
     )
     return background
 

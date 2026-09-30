@@ -40,9 +40,17 @@ Optional extras are selected by the operation being performed:
 | `cosmology` | Optional Astropy cosmology preparation |
 | `camb` | CAMB background and growth preparation |
 | `survey` | Survey-table interpolation with SciPy |
-| `compiled` | Optional Numba Fisher contractions |
+| `compiled` | Numba Fisher contractions, used by default when installed |
 | `docs` | Sphinx documentation builds |
 | `dev` | Tests, Ruff checks, and distribution builds |
+
+With `compiled` installed, Fisher contractions use the Numba kernel;
+`FISHHIGHZ_FISHER_BACKEND=numpy` forces the NumPy reference loop. The CAMB
+transfer solve (about a minute on one thread for the bundled Planck18 ini) is
+only needed for sigma8(z) and f(z)sigma8(z); these are cached in
+`$FISHHIGHZ_CACHE_DIR/camb` (default `~/.cache/fishhighz/camb`), keyed by the
+ini bytes, redshifts and CAMB version. H and D_M are recomputed exactly on a
+cache hit. Set `FISHHIGHZ_CAMB_CACHE=0` to disable the cache.
 
 The native interface uses packaged inputs and does not require Vega or
 lyaforecast installations. Historical compatibility examples have separate

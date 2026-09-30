@@ -124,6 +124,34 @@ def _factor_batch(block):
     return factors
 
 
+def _fisher_one_spectrum(jacobian, factors):
+    """Vectorized one-spectrum (1x1 factor) form of the reference node loop.
+
+    The one-row forward substitution is a single division and np.add.accumulate
+    sums node contributions in the loop's order, so the result is identical to
+    the loop. Workspace is O(n_node*n_global**2) for the supplied node batch.
+    Returns None whenever any check or value would fail, so the caller replays
+    the reference loop and its first-node diagnostics.
+    """
+    lower = factors[:, 0, 0]
+    if (
+        lower.dtype.kind != "f"
+        or jacobian.dtype.kind != "f"
+        or not np.all(np.isfinite(lower))
+        or np.any(lower <= 0)
+        or not np.all(np.isfinite(jacobian))
+    ):
+        return None
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        solved = (
+            jacobian[:, 0, :].astype(np.float64) / lower.astype(np.float64)[:, None]
+        )
+        partial = np.add.accumulate(solved[:, :, None] * solved[:, None, :], axis=0)
+    if not np.all(np.isfinite(solved)) or not np.all(np.isfinite(partial)):
+        return None
+    return np.array(partial[-1], dtype=np.float64, order="C", copy=True)
+
+
 def fisher_from_factors(jacobian, factors):
     """Accumulate sum_q (L_q^-1 J_q).T @ (L_q^-1 J_q), reusing factors.
 
@@ -158,7 +186,9 @@ def fisher_from_factors(jacobian, factors):
         raise ValueError(
             "jacobian: expected matching nonempty (n_node,n_selected,n_global)"
         )
-    backend = os.environ.get("FISHHIGHZ_FISHER_BACKEND", "numpy")
+    # Unset selects the compiled contraction when Numba is installed; "numpy"
+    # forces the reference loop below.
+    backend = os.environ.get("FISHHIGHZ_FISHER_BACKEND", "numba")
     if backend not in ("numpy", "numba"):
         raise ValueError("FISHHIGHZ_FISHER_BACKEND must be numpy or numba")
     if (
@@ -167,16 +197,29 @@ def fisher_from_factors(jacobian, factors):
         and np.geterr()["under"] == "ignore"
     ):
         try:
+            # Numba matrix products call SciPy's BLAS; without it the compiled
+            # kernel aborts the interpreter instead of raising.
+            import scipy.linalg.cython_blas  # noqa: F401
+
             from .kernels._compiled_fisher import contract
         except ImportError:
             # The NumPy-only installation remains executable even when an
             # optional backend was requested but is not installed.
             pass
         else:
-            matrix, status = contract(factors, jacobian)
+            # One writable C-contiguous signature avoids recompiling for sliced
+            # or read-only (prepared, immutable) inputs.
+            matrix, status = contract(
+                np.require(factors, requirements=("C", "W")),
+                np.require(jacobian, requirements=("C", "W")),
+            )
             if status == 0:
                 return np.array(matrix, dtype=np.float64, order="C", copy=True)
             # Reproduce reference validation order and first-cell diagnostics.
+    if factors.shape[1] == 1 and np.geterr()["under"] == "ignore":
+        matrix = _fisher_one_spectrum(jacobian, factors)
+        if matrix is not None:
+            return matrix
     upper = np.triu_indices(factors.shape[1], 1)
     result = np.zeros((jacobian.shape[2], jacobian.shape[2]), dtype=np.float64)
     solved = np.empty(jacobian.shape[1:], dtype=np.float64)
