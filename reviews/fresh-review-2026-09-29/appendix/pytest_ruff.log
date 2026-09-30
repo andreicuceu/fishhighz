@@ -1,0 +1,27 @@
+            [sys.executable, "-I", "-c", script],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+>       assert result.returncode == 0, result.stderr
+E       AssertionError: Traceback (most recent call last):
+E           File "<string>", line 3, in <module>
+E             import fishhighz
+E         ModuleNotFoundError: No module named 'fishhighz'
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['/global/homes/a/acuceu/.conda/envs/vega_test/bin/python', '-I', '-c', "\nimport sys\nimport fi...:\n  File "<string>", line 3, in <module>\n    import fishhighz\nModuleNotFoundError: No module named \'fishhighz\'\n').returncode
+
+tests/test_templates.py:558: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_forecast_imports.py::test_blocked_optional_multi_bin - Asse...
+FAILED tests/test_import.py::test_import_is_quiet_and_independent - Assertion...
+FAILED tests/test_kaiser.py::test_builtin_import_keeps_preparation_libraries_lazy
+FAILED tests/test_step12_performance.py::test_independent_accuracy_check[production]
+FAILED tests/test_step12_performance.py::test_independent_accuracy_check[oracle]
+FAILED tests/test_survey_imports.py::test_blocked_optional_core_and_adapter
+FAILED tests/test_templates.py::test_quiet_lazy_module_imports - AssertionErr...
+7 failed, 1576 passed in 335.76s (0:05:35)
+---RUFF---
+All checks passed!
