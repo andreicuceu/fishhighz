@@ -14,23 +14,38 @@ from fishhighz.results import FisherResult
 
 
 def selection(n=1, selected=None):
+    """Construct a selected-spectrum inventory for synthetic galaxy fields.
+
+    Parameters
+    ----------
+    n : int, optional
+        Number of synthetic observed fields. Default is 1.
+    selected : sequence of pair or None, optional
+        Selected field pairs; None selects every unique pair. Default is None.
+
+    Returns
+    -------
+    selection : PairSelection
+        Observable pairs and the covariance-required pair closure.
+    """
     return PairSelection(
         [ObservedField(str(i), "galaxy", "model") for i in range(n)], selected
     )
 
 
 def test_amplitude_normalization_and_volume():
+    """Check amplitude normalization and volume."""
     grid = gauss_legendre_grid([0.1, 0.2, 0.4], k_order=2, mu_order=3, h_fid=0.7)
-    n = 300 * grid.q_mode  # includes fractional mode counts
+    mode_counts = 300 * grid.q_mode  # includes fractional mode counts
     total = 2 + grid.k_flat
     derivative = 1 - grid.mu_flat
-    covariance = gaussian_covariance(total[:, None], n, selection())
+    covariance = gaussian_covariance(total[:, None], mode_counts, selection())
     jacobian = derivative[:, None, None]
     fisher = fisher_matrix(jacobian, covariance)
-    expected = np.sum(n * derivative**2 / (2 * total**2))
+    expected = np.sum(mode_counts * derivative**2 / (2 * total**2))
     np.testing.assert_allclose(fisher, [[expected]], rtol=2e-15)
     doubled = fisher_matrix(
-        jacobian, gaussian_covariance(total[:, None], 2 * n, selection())
+        jacobian, gaussian_covariance(total[:, None], 2 * mode_counts, selection())
     )
     np.testing.assert_allclose(doubled, 2 * fisher, rtol=2e-15)
     reg = ParameterRegistry([Parameter("A", 1, "target")])
@@ -41,6 +56,7 @@ def test_amplitude_normalization_and_volume():
 
 
 def test_dense_oracle_signed_derivatives_and_triangular_solve():
+    """Check dense oracle signed derivatives and triangular solve."""
     rng = np.random.default_rng(183)
     raw = rng.normal(size=(5, 4, 4))
     covariance = raw @ raw.transpose(0, 2, 1) + np.eye(4)
@@ -59,6 +75,13 @@ def test_dense_oracle_signed_derivatives_and_triangular_solve():
 
 @pytest.mark.parametrize("chosen", [None, [(3, 1), (0, 0), (4, 2)], [(0, 1)]])
 def test_five_fields_selected_order(chosen):
+    """Check five fields selected order.
+
+    Parameters
+    ----------
+    chosen : list or None
+        Selected indices or metadata, supplied by pytest parametrization.
+    """
     rng = np.random.default_rng(76)
     fields = selection(5, chosen)
     raw = rng.normal(size=(3, 5, 5))
@@ -73,6 +96,14 @@ def test_five_fields_selected_order(chosen):
 
 
 def test_reuse_batching_ownership_and_no_refactorization(monkeypatch):
+    """Check reuse batching ownership and no refactorization.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that restores patched callables, attributes, and environment
+        variables after the test.
+    """
     covariance = np.tile([[4.0, 1.0], [1.0, 2.0]], (8, 1, 1))[::2]
     jacobian = np.arange(48.0).reshape(8, 2, 3)[::2] - 10
     covariance.flags.writeable = jacobian.flags.writeable = False
@@ -82,6 +113,20 @@ def test_reuse_batching_ownership_and_no_refactorization(monkeypatch):
     factors.flags.writeable = False
 
     def forbidden(*args):
+        """Fail if a supposedly frozen or unused operation is invoked.
+
+        Parameters
+        ----------
+        *args : tuple
+            Positional arguments forwarded to the original callable or accepted by
+            the test callback.
+
+        Raises
+        ------
+        AssertionError
+            Deliberately raised to exercise the rejection path in the enclosing
+            test.
+        """
         raise AssertionError("factorization attempted on reuse path")
 
     monkeypatch.setattr(assembly, "_cholesky", forbidden)
@@ -106,6 +151,7 @@ def test_reuse_batching_ownership_and_no_refactorization(monkeypatch):
 
 
 def test_selected_covariance_not_parent_rank():
+    """Check selected covariance not parent rank."""
     full = gaussian_covariance([[4.0, -6.0, 9.0]], [2.0], selection(2))
     with pytest.raises(ValueError, match="node 1.*rank"):
         factor_covariance(np.concatenate([np.eye(3)[None], full]))
@@ -115,6 +161,14 @@ def test_selected_covariance_not_parent_rank():
 
 @pytest.mark.parametrize("scale", [np.ones(2), np.array([1e-80, 1e80])])
 def test_covariance_rank_tolerance_symmetry_and_units(scale):
+    """Check covariance rank tolerance symmetry and units.
+
+    Parameters
+    ----------
+    scale : ndarray
+        Multiplicative scale used to test invariance or numerical range,
+        supplied by pytest parametrization.
+    """
     for delta in (1e-15, 1e-12):
         normalized = np.array([[1.0, 1 - delta], [1 - delta, 1.0]])
         covariance = normalized * scale[:, None] * scale[None, :]
@@ -136,6 +190,7 @@ def test_covariance_rank_tolerance_symmetry_and_units(scale):
 
 
 def test_roundoff_asymmetry_local_copy_and_observable_units():
+    """Check roundoff asymmetry local copy and observable units."""
     covariance = np.array([[[2.0, 0.5 + 1e-15], [0.5, 3.0]]])
     saved = covariance.copy()
     factors = factor_covariance(covariance)
@@ -171,6 +226,14 @@ def test_roundoff_asymmetry_local_copy_and_observable_units():
     ],
 )
 def test_bad_covariance_and_factor_arrays(bad):
+    """Check bad covariance and factor arrays.
+
+    Parameters
+    ----------
+    bad : ndarray or list
+        Invalid input exercising the specified rejection path, supplied by
+        pytest parametrization.
+    """
     with pytest.raises(ValueError):
         factor_covariance(bad)
     with pytest.raises(ValueError):
@@ -193,6 +256,14 @@ def test_bad_covariance_and_factor_arrays(bad):
     ],
 )
 def test_bad_jacobians(bad):
+    """Check bad jacobians.
+
+    Parameters
+    ----------
+    bad : ndarray or list
+        Invalid input exercising the specified rejection path, supplied by
+        pytest parametrization.
+    """
     with pytest.raises(ValueError):
         fisher_from_factors(bad, [[[1.0]]])
 
@@ -202,11 +273,20 @@ def test_bad_jacobians(bad):
     [[[1.0, 1e-300], [0.0, 1.0]], [[0.0, 0.0], [0.0, 1.0]], [[-1.0, 0.0], [0.0, 1.0]]],
 )
 def test_malformed_factors(lower):
+    """Check malformed factors.
+
+    Parameters
+    ----------
+    lower : list
+        Lower-triangular factor or boundary used by this case, supplied by
+        pytest parametrization.
+    """
     with pytest.raises(ValueError, match="node 0.*lower triangle"):
         fisher_from_factors(np.ones((1, 2, 1)), [lower])
 
 
 def test_zero_columns_and_nonfinite_arithmetic():
+    """Check zero columns and nonfinite arithmetic."""
     np.testing.assert_array_equal(
         fisher_matrix(np.zeros((3, 2, 4)), np.tile(np.eye(2), (3, 1, 1))),
         np.zeros((4, 4)),
@@ -220,6 +300,7 @@ def test_zero_columns_and_nonfinite_arithmetic():
 
 
 def test_integer_inputs_normalize_to_float64():
+    """Check integer inputs normalize to float64."""
     factors = factor_covariance([[[4, 0], [0, 9]]])
     assert factors.dtype == np.float64
     np.testing.assert_array_equal(factors, [[[2, 0], [0, 3]]])

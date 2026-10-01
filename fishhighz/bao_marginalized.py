@@ -13,7 +13,22 @@ NUISANCES = ("b_lya", "b_qso", "b_lbg", "b_lae", "beta_lya")
 
 
 def active_names(config, index, pairs=None):
-    """Two BAO coordinates and nuisances represented in selected spectra."""
+    """Two BAO coordinates and nuisances represented in selected spectra.
+
+    Parameters
+    ----------
+    config : SurveyConfig
+        Parsed native survey configuration.
+    index : int
+        Zero-based redshift-bin index.
+    pairs : sequence of tuple of str or None, optional
+        Selected field-ID pairs; None uses the configured selection.
+
+    Returns
+    -------
+    names : tuple of str
+        Ordered dilation/growth targets and active tracer nuisance names.
+    """
     pairs = config.bins[index].selected_pairs if pairs is None else pairs
     ids = {name for pair in pairs for name in pair}
     tracers = {item.tracer for item in config.fields if item.observed.id in ids}
@@ -25,7 +40,29 @@ def active_names(config, index, pairs=None):
 
 
 def make_registry(config, background):
-    """Construct independent target and nuisance parameters for nonempty bins."""
+    """Construct independent fiducial target and nuisance parameters by bin.
+
+    Parameters
+    ----------
+    config : SurveyConfig
+        Parsed native survey configuration.
+    background : CAMBBackground or object
+        Prepared background with exact growth and geometry.
+
+    Returns
+    -------
+    registry : ParameterRegistry
+        Parameters for nonempty bins with configured numerical steps.
+
+    Raises
+    ------
+    ValueError
+        If fields sharing one forest bias have inconsistent fiducials.
+
+    Notes
+    -----
+    Shared forest biases must agree within the existing relative tolerance.
+    """
     parameters = []
     for index, bin_config in enumerate(config.bins):
         if not bin_config.selected_pairs:
@@ -65,7 +102,42 @@ def make_registry(config, background):
 def make_model(
     config, bin_config, registry, template, fields, biases, betas, widths, f, growth
 ):
-    """Bind selected tracer nuisances while keeping the shared galaxy f fixed."""
+    """Bind bin-local tracer nuisances and dilation parameters.
+
+    Parameters
+    ----------
+    config : SurveyConfig
+        Parsed native survey configuration.
+    bin_config : BinConfig
+        Redshift bin and its selected spectra.
+    registry : ParameterRegistry
+        Global bin-local parameter registry.
+    template : object
+        Prepared smooth and wiggle matter-power template.
+    fields : sequence of ObservedField
+        Ordered observed fields.
+    biases : mapping
+        Dimensionless fiducial density biases by field ID.
+    betas : mapping
+        Dimensionless forest redshift-space distortion parameters.
+    widths : mapping
+        Parallel/transverse damping widths by field ID, in Mpc/h_fid.
+    f : float
+        Dimensionless fiducial logarithmic growth rate.
+    growth : float
+        Dimensionless power-growth factor relative to the template redshift.
+
+    Returns
+    -------
+    model : KaiserModel
+        Intrinsic power-spectrum model with fixed damping widths.
+    binding : BoundParameters
+        Binding from model-local names to bin-local registry IDs.
+
+    Notes
+    -----
+    The fiducial growth rate stays fixed for the marginalized BAO mode.
+    """
     index = bin_config.index - 1
     active = active_names(config, index)
     bindings = {name: f"{name}_{index}" for name in TARGETS}
@@ -97,7 +169,27 @@ def make_model(
 
 
 def reported_constraint(result, target_ids):
-    """Marginalize active nuisances only for a full-rank Fisher matrix."""
+    """Marginalize active nuisances only for a full-rank Fisher matrix.
+
+    Parameters
+    ----------
+    result : FisherResult
+        Fisher matrix restricted to active parameters.
+    target_ids : sequence of str
+        Ordered target parameter IDs.
+
+    Returns
+    -------
+    status : str
+        available for full rank, otherwise unavailable.
+    covariance : ndarray or None
+        Marginalized dimensionless target covariance, shape (n_target,
+        n_target).
+    errors : ndarray or None
+        Target standard deviations, shape (n_target,).
+    correlations : ndarray or None
+        Dimensionless target correlations, shape (n_target, n_target).
+    """
     if result.diagnostics.rank != len(result.registry.ids):
         return "unavailable", None, None, None
     covariance = result.marginalized_covariance(target_ids)
@@ -113,7 +205,31 @@ def reported_constraint(result, target_ids):
 def run_bao_marginalized(
     forecast, *, batch_size, step_scale, numerical, individuals=True
 ):
-    """Compute selected joint and individual constraints with fixed covariance."""
+    """Calculate selected joint and individual constraints at fixed covariance.
+
+    Parameters
+    ----------
+    forecast : Forecast
+        Native forecast facade; prepared state is reused when available.
+    batch_size : int
+        Maximum number of Fourier nodes per derivative batch.
+    step_scale : float
+        Positive multiplier of registered finite-difference steps.
+    numerical : bool
+        Force numerical derivatives when True.
+    individuals : bool, optional
+        Also calculate individual spectra; default is True.
+
+    Returns
+    -------
+    result : SurveyResult
+        Bin-local constraints, combined Fisher matrix and resolved numerical
+        provenance.
+
+    Notes
+    -----
+    Disjoint wavenumber intervals are summed before marginalization. Rank-deficient target constraints remain unavailable.
+    """
     from .fields import PairSelection
     from .public import SpectrumConstraint, SurveyResult, _convergence
     from .results import combine_results
@@ -145,6 +261,23 @@ def run_bao_marginalized(
         targets = tuple(f"{name}_{index}" for name in TARGETS)
 
         def record(result, pair, status=None):
+            """Record active parameters and target constraints for one bin selection.
+
+            Parameters
+            ----------
+            result : FisherResult or None
+                Fisher calculation, or None for an excluded selection.
+            pair : tuple of str or None
+                Selected field IDs, or None for the joint result.
+            status : str or None, optional
+                Status for an absent result; default None. Computed results set their
+                own rank status.
+
+            Returns
+            -------
+            constraint : SpectrumConstraint
+                Result and availability status, retaining the enclosing bin metadata.
+            """
             ids = tuple(
                 f"{name}_{index}"
                 for name in (
@@ -242,7 +375,24 @@ def run_bao_marginalized(
 
 
 def save_bao_marginalized(result, output):
-    """Write named Fisher and marginalized target matrices in schema version 1."""
+    """Write marginalized BAO matrices and metadata in schema version 1.
+
+    Parameters
+    ----------
+    result : SurveyResult
+        Completed marginalized BAO forecast.
+    output : pathlib.Path
+        Existing destination directory.
+
+    Returns
+    -------
+    output : pathlib.Path
+        Destination containing settings.json and results.npz.
+
+    Notes
+    -----
+    Writes the result files, replacing existing files with the same names.
+    """
     from .full_shape import save_full_shape
 
     return save_full_shape(

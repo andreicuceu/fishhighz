@@ -22,6 +22,18 @@ def build_tables(records):
     records : iterable of (record, arrays)
         Evidence records with task/report metadata and saved arrays, or None on
         failure. Numerical qualification is explicit metadata, never inferred.
+
+    Returns
+    -------
+    table : dict
+        Uncut joint/individual numerical rows, pairwise profile ratios and saved
+        forest-weight diagnostics.
+
+    Raises
+    ------
+    ValueError
+        If the records do not contain exactly the declared three profiles and
+        six bins, or their identities and field selections differ.
     """
     rows, weights = [], []
     seen = set()
@@ -100,6 +112,25 @@ def build_tables(records):
             )
 
             def get(name):
+                """Select a saved joint or individual-spectrum diagnostic.
+
+                Parameters
+                ----------
+                name : str
+                    Numerical field name such as rank, errors, or fisher; the current pair
+                    determines the stored key prefix.
+
+                Returns
+                -------
+                value : ndarray or numpy scalar
+                    Joint diagnostic or the selected pair entry. Rank is dimensionless;
+                    errors and covariance retain the saved BAO parameter units. Shape
+                    follows the named diagnostic.
+
+                Notes
+                -----
+                Uses the enclosing record and pair selection without modifying saved arrays.
+                """
                 value = np.asarray(arrays[prefix + name])
                 return value if pair is None else value[position]
 
@@ -120,7 +151,7 @@ def build_tables(records):
                 else "failed_or_unconstrained"
             )
             fisher = get("fisher") if not excluded and arrays is not None else None
-            rho = float(get("correlation")[0, 1]) if available else None
+            correlation = float(get("correlation")[0, 1]) if available else None
             area = (
                 float(np.sqrt(np.linalg.det(get("covariance")))) if available else None
             )
@@ -138,7 +169,7 @@ def build_tables(records):
                     scientific_status="diagnostic; scientific acceptance not inferred",
                     sigma_parallel=float(errors[0]) if available else None,
                     sigma_transverse=float(errors[1]) if available else None,
-                    correlation=rho,
+                    correlation=correlation,
                     rank=rank,
                     ellipse_area_over_pi=area,
                     fisher=fisher.tolist()
@@ -153,38 +184,59 @@ def build_tables(records):
     lookup = {(r["profile"], r["bin"], r["spectrum"]): r for r in rows}
     ratios = []
     for numerator, denominator in COMPARISONS:
-        for a in [r for r in rows if r["profile"] == numerator]:
-            b = lookup[denominator, a["bin"], a["spectrum"]]
-            valid = a["availability"] == b["availability"] == "available"
+        for numerator_row in [r for r in rows if r["profile"] == numerator]:
+            denominator_row = lookup[
+                denominator, numerator_row["bin"], numerator_row["spectrum"]
+            ]
+            valid = (
+                numerator_row["availability"]
+                == denominator_row["availability"]
+                == "available"
+            )
             ratios.append(
                 dict(
                     comparison=f"{numerator}/{denominator}",
-                    bin=a["bin"],
-                    z=a["z"],
-                    spectrum=a["spectrum"],
-                    sigma_parallel_fraction=a["sigma_parallel"] / b["sigma_parallel"]
+                    bin=numerator_row["bin"],
+                    z=numerator_row["z"],
+                    spectrum=numerator_row["spectrum"],
+                    sigma_parallel_fraction=numerator_row["sigma_parallel"]
+                    / denominator_row["sigma_parallel"]
                     - 1
                     if valid
                     else None,
-                    sigma_transverse_fraction=a["sigma_transverse"]
-                    / b["sigma_transverse"]
+                    sigma_transverse_fraction=numerator_row["sigma_transverse"]
+                    / denominator_row["sigma_transverse"]
                     - 1
                     if valid
                     else None,
-                    ellipse_area_ratio=a["ellipse_area_over_pi"]
-                    / b["ellipse_area_over_pi"]
+                    ellipse_area_ratio=numerator_row["ellipse_area_over_pi"]
+                    / denominator_row["ellipse_area_over_pi"]
                     if valid
                     else None,
-                    numerator_status=a["numerical_status"],
-                    denominator_status=b["numerical_status"],
-                    plot_omission=a["plot_omission"] or b["plot_omission"],
+                    numerator_status=numerator_row["numerical_status"],
+                    denominator_status=denominator_row["numerical_status"],
+                    plot_omission=numerator_row["plot_omission"]
+                    or denominator_row["plot_omission"],
                 )
             )
     return dict(rows=rows, ratios=ratios, weighting=weights)
 
 
 def render(table, output):
-    """Save full JSON tables and matched panels with paired-component masking."""
+    """Save full JSON tables and matched panels with paired-component masking.
+
+    Parameters
+    ----------
+    table : dict
+        Complete numerical comparison and forest-weight tables returned by
+        build_tables.
+    output : str or pathlib.Path
+        Destination directory for the generated evidence or figures.
+
+    Notes
+    -----
+    Creates the destination if needed, writes the complete JSON table and PNG figures, and closes each figure after saving. Plot masking does not alter the numerical table.
+    """
     import matplotlib
 
     matplotlib.use("Agg")

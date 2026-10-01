@@ -17,6 +17,29 @@ from .kernels.fisher import _accumulate_fisher, _cholesky, _forward_substitute
 def _numeric_input(value, name):
     # Preserve existing array views. Dtype conversion and finite checks happen
     # one node at a time, avoiding an all-node float64 Jacobian copy.
+    """Validate real numeric dtype without copying every Fourier node.
+
+    Parameters
+    ----------
+    value : array_like
+        Real numeric input of arbitrary shape and units.
+    name : str
+        Quantity name used in errors.
+
+    Returns
+    -------
+    array : ndarray
+        Input view when possible, preserving dtype, shape, and units.
+
+    Raises
+    ------
+    ValueError
+        If the input is not real integer or floating-point data.
+
+    Notes
+    -----
+    Float64 conversion and finite checks are deferred to the node evaluation.
+    """
     array = np.asarray(value)
     if array.dtype.kind not in "iuf":
         raise ValueError(f"{name}: expected real numeric data")
@@ -24,6 +47,25 @@ def _numeric_input(value, name):
 
 
 def _blocks(value, name):
+    """Validate the shape of a batch of square numerical matrices.
+
+    Parameters
+    ----------
+    value : array_like of shape (n_node, n_selected, n_selected)
+        Real numeric blocks; units are retained.
+    name : str
+        Quantity name used in errors.
+
+    Returns
+    -------
+    array : ndarray
+        Input array without an unconditional float64 copy.
+
+    Raises
+    ------
+    ValueError
+        If dtype or nonempty square-block shape is invalid.
+    """
     array = _numeric_input(value, name)
     if array.ndim != 3 or 0 in array.shape or array.shape[1] != array.shape[2]:
         raise ValueError(f"{name}: expected nonempty (n_node,n_selected,n_selected)")
@@ -31,18 +73,25 @@ def _blocks(value, name):
 
 
 def _factor_covariance_scalar(covariance, offset=0):
-    """Prepare reusable lower Cholesky factors for independent covariance blocks.
+    """Factor covariance blocks with scalar normalized-rank diagnostics.
 
     Parameters
     ----------
-    covariance : array_like, shape (n_node,n_selected,n_selected)
-        Real finite fixed fiducial covariance in the selected mean-spectrum order.
+    covariance : array_like of shape (n_node, n_selected, n_selected)
+        Fixed covariance blocks in (Mpc/h_fid)^6, in selected-spectrum order.
+    offset : int, default=0
+        Global Fourier-node index of the first block, used in errors.
 
     Returns
     -------
-    factors : ndarray
-        Owned C-contiguous float64 factors L, with C=L@L.T. Inputs are unchanged.
-        Roundoff-level asymmetry is averaged only in the local factorization copy.
+    factors : ndarray of shape (n_node, n_selected, n_selected)
+        Owned float64 lower Cholesky factors in (Mpc/h_fid)^3.
+
+    Raises
+    ------
+    ValueError
+        If a block is invalid, rank deficient, or cannot be factored without
+        regularization.
 
     Notes
     -----
@@ -84,6 +133,23 @@ def _factor_covariance_scalar(covariance, offset=0):
 def factor_covariance(covariance):
     """Return reusable factors with the scalar normalized-rank/error contract.
 
+    Parameters
+    ----------
+    covariance : array_like of shape (n_node, n_selected, n_selected)
+        Fixed covariance blocks in (Mpc/h_fid)^6, in selected-spectrum order.
+
+    Returns
+    -------
+    factors : ndarray of shape (n_node, n_selected, n_selected)
+        Owned float64 lower Cholesky factors in (Mpc/h_fid)^3.
+
+    Raises
+    ------
+    ValueError
+        If a covariance block is invalid, singular, or numerically unresolved.
+
+    Notes
+    -----
     Validation and factorization use batches of at most 256 cells. Exceptional
     batches are replayed in cell order through the scalar diagnostic, including
     cells near the rank threshold where eigvalsh/eigh rounding can differ.
@@ -103,6 +169,31 @@ def factor_covariance(covariance):
 
 
 def _factor_batch(block):
+    """Factor a covariance batch sufficiently far from rank boundaries.
+
+    Parameters
+    ----------
+    block : ndarray of shape (n_node, n_selected, n_selected)
+        Covariance blocks in (Mpc/h_fid)^6.
+
+    Returns
+    -------
+    factors : ndarray of shape (n_node, n_selected, n_selected)
+        Owned float64 lower Cholesky factors in (Mpc/h_fid)^3.
+
+    Raises
+    ------
+    ValueError
+        If scalar diagonal, symmetry, rank, or factor diagnostics are required.
+    numpy.linalg.LinAlgError
+        If the eigensolve or Cholesky factorization fails.
+
+    Notes
+    -----
+    The doubled rank tolerance selects the fast calculation only. A rejected
+    batch is replayed through scalar diagnostics with the original acceptance
+    threshold; no eigenvalue is modified.
+    """
     from ._information import normalize_positive_batch
 
     normalized, scales = normalize_positive_batch(block)
@@ -127,6 +218,23 @@ def _factor_batch(block):
 def _fisher_one_spectrum(jacobian, factors):
     """Vectorized one-spectrum (1x1 factor) form of the reference node loop.
 
+    Parameters
+    ----------
+    jacobian : array_like of shape (n_node, 1, n_global)
+        Mean derivatives in (Mpc/h_fid)^3 per global parameter unit.
+    factors : ndarray of shape (n_node, 1, 1)
+        Owned float64 lower Cholesky factors in (Mpc/h_fid)^3.
+
+    Returns
+    -------
+    matrix : ndarray of shape (n_global, n_global) or None
+        Float64 Fisher information in inverse products of global parameter
+        units.
+        Return None if any input or arithmetic check fails, requesting replay
+        through the reference loop.
+
+    Notes
+    -----
     The one-row forward substitution is a single division and np.add.accumulate
     sums node contributions in the loop's order, so the result is identical to
     the loop. Workspace is O(n_node*n_global**2) for the supplied node batch.
@@ -247,19 +355,29 @@ def fisher_from_factors(jacobian, factors):
 
 
 def fisher_matrix(jacobian, covariance):
-    """Factor fixed covariance once and assemble data Fisher from supplied J.
+    """Factor the fixed covariance and contract the mean-power derivatives.
 
     Parameters
     ----------
-    jacobian : array_like
-        (node,selected,global) derivatives of the predicted mean.
-    covariance : array_like
-        (node,selected,selected) fixed fiducial covariance.
+    jacobian : array_like of shape (n_node, n_selected, n_global)
+        Mean derivatives in (Mpc/h_fid)^3 per global parameter unit.
+    covariance : array_like of shape (n_node, n_selected, n_selected)
+        Fixed covariance blocks in (Mpc/h_fid)^6, in selected-spectrum order.
 
     Returns
     -------
-    matrix : ndarray
-        Owned C-contiguous float64 (global,global) Fisher matrix. See
-        factor_covariance and fisher_from_factors for validation conventions.
+    matrix : ndarray of shape (n_global, n_global)
+        Float64 Fisher information in inverse products of global parameter
+        units.
+
+    Raises
+    ------
+    ValueError
+        If covariance or Jacobian validation or numerical contraction fails.
+
+    Notes
+    -----
+    No covariance derivatives, additional mode counts, or quadrature factors
+    are added. See factor_covariance and fisher_from_factors for validation.
     """
     return fisher_from_factors(jacobian, factor_covariance(covariance))

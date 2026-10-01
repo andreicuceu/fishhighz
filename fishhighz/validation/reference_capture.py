@@ -21,7 +21,25 @@ from .evidence import digest
 
 
 def imported_reference(root):
-    """Require the actually imported reference package to be the inventoried tree."""
+    """Require the actually imported reference package to be the inventoried tree.
+
+    Parameters
+    ----------
+    root : str or pathlib.Path
+        Root directory of the input checkout or saved evidence bundle.
+
+    Returns
+    -------
+    identity : dict
+        Actual reference origin, interpreter, dependency versions and Python-
+        source hashes.
+
+    Raises
+    ------
+    ValueError :
+        If inputs, declared identities or numerical validation conditions are
+        inconsistent.
+    """
     import camb
     import lyaforecast
 
@@ -43,7 +61,27 @@ def imported_reference(root):
 
 
 def resolved_resources(root, config):
-    """Verify resolved files/directories against the explicitly requested checkout."""
+    """Verify resolved files/directories against the explicitly requested checkout.
+
+    Parameters
+    ----------
+    root : str or pathlib.Path
+        Root directory of the input checkout or saved evidence bundle.
+    config : configparser.ConfigParser
+        Original case configuration containing cosmology, density and SNR
+        resource references.
+
+    Returns
+    -------
+    resources : dict of str to str
+        Resolved resource paths mapped to SHA-256 hashes.
+
+    Raises
+    ------
+    ValueError :
+        If inputs, declared identities or numerical validation conditions are
+        inconsistent.
+    """
     from lyaforecast.utils import get_dir, get_file
 
     root = Path(root).resolve()
@@ -63,7 +101,37 @@ def resolved_resources(root, config):
 
 
 def capture_case(root, original, destination, *, case):
-    """Run one actual NewForecast, preserving upstream arrays for every bin."""
+    """Run one actual NewForecast, preserving upstream arrays for every bin.
+
+    Parameters
+    ----------
+    root : str or pathlib.Path
+        Root directory of the input checkout or saved evidence bundle.
+    original : str or pathlib.Path
+        Original reference INI configuration to copy without changing its
+        contents.
+    destination : str or pathlib.Path
+        New case directory for captured inputs, arrays and metadata.
+    case : str
+        Identifier of one of the seven original DESI-2 validation
+        configurations.
+
+    Returns
+    -------
+    metadata : dict
+        Original/effective input hashes, execution time and exact per-bin
+        capture inventory.
+
+    Raises
+    ------
+    ValueError :
+        If inputs, declared identities or numerical validation conditions are
+        inconsistent.
+
+    Notes
+    -----
+    Runs the actual reference forecast and writes a new case directory. Temporarily replaces the reference module Fisher class with an observing subclass and restores it in a finally block.
+    """
     import lyaforecast.forecast_new as module
     from lyaforecast.fisher import Fisher
 
@@ -89,26 +157,49 @@ def capture_case(root, original, destination, *, case):
 
     class CaptureFisher(Fisher):
         def compute_fisher(self, models, measurements, spectra_list):
+            """Record upstream powers and derivatives while retaining its Fisher result.
+
+            Parameters
+            ----------
+            models : dict of str to ndarray
+                Observed mean spectra with shape (n_mu, n_k), keyed by pair name.
+            measurements : dict of str to ndarray
+                Total measured powers, including noise, on the same grid.
+            spectra_list : sequence of str
+                Ordered selected spectra passed to the upstream estimator.
+
+            Returns
+            -------
+            fisher : ndarray, shape (2, 2)
+                Unmodified upstream BAO Fisher matrix in parallel/transverse dilation
+                order.
+
+            Notes
+            -----
+            Writes per-bin compressed arrays and appends physical source metadata when the complete requested selection is evaluated.
+            """
             value = super().compute_fisher(models, measurements, spectra_list)
             index = int(self.zbin_index)
             if len(spectra_list) == 1:
                 single.setdefault(index, {})[spectra_list[0]] = value.copy()
             if list(spectra_list) != selected_labels:
                 return value
-            pk = self._power_spec
+            power_spectrum = self._power_spec
             derivative = np.stack(
                 [
                     self.compute_derivatives(
-                        np.stack([models[n][i] for n in spectra_list]), mu, spectra_list
+                        np.stack([models[n][i] for n in spectra_list]),
+                        mu_grid,
+                        spectra_list,
                     ).T
-                    for i, mu in enumerate(pk.mu)
+                    for i, mu_grid in enumerate(power_spectrum.mu)
                 ]
             )
-            k = np.tile(pk.k, len(pk.mu))
-            mu = np.repeat(pk.mu, len(pk.k))
+            k_grid = np.tile(power_spectrum.k, len(power_spectrum.mu))
+            mu_grid = np.repeat(power_spectrum.mu, len(power_spectrum.k))
             observed_j = (
                 derivative.reshape(-1, len(spectra_list))[:, :, None]
-                * np.column_stack((mu**2, 1 - mu**2))[:, None, :]
+                * np.column_stack((mu_grid**2, 1 - mu_grid**2))[:, None, :]
             )
             total = np.column_stack(
                 [measurements[label].reshape(-1) for label in all_labels]
@@ -117,9 +208,9 @@ def capture_case(root, original, destination, *, case):
                 [models[label].reshape(-1) for label in spectra_list]
             )
             arrays = dict(
-                k=k,
-                mu=mu,
-                modes=np.tile(self._num_modes, len(pk.mu)),
+                k=k_grid,
+                mu=mu_grid,
+                modes=np.tile(self._num_modes, len(power_spectrum.mu)),
                 mean=mean,
                 total=total,
                 observed_j=observed_j,
@@ -129,16 +220,16 @@ def capture_case(root, original, destination, *, case):
                 legacy_pair_fisher=np.stack(
                     [single[index][n] for n in selected_labels]
                 ),
-                k_axis=pk.k,
-                mu_axis=pk.mu,
-                dlogk=pk.dlogk,
+                k_axis=power_spectrum.k,
+                mu_axis=power_spectrum.mu,
+                dlogk=power_spectrum.dlogk,
             )
             name = f"bin-{index:02d}.npz"
             np.savez_compressed(out / name, **arrays)
             pair_inputs = {}
-            for label, cov in forecast._covariance.items():
+            for label, pair_covariance in forecast._covariance.items():
                 row = {
-                    key: plain(getattr(cov, key, None))
+                    key: plain(getattr(pair_covariance, key, None))
                     for key in (
                         "_z_mean",
                         "_zq",
@@ -153,7 +244,7 @@ def capture_case(root, original, destination, *, case):
                         "_volume",
                     )
                 }
-                weights = cov._weights
+                weights = pair_covariance._weights
                 row["magnitudes"] = weights.maglist.tolist()
                 if weights._lya_tracer is not None:
                     row.update(
@@ -217,7 +308,25 @@ def capture_case(root, original, destination, *, case):
 
 
 def capture(root, output):
-    """Serial fresh seven-case capture; failures remain visible and never resume."""
+    """Serial fresh seven-case capture; failures remain visible and never resume.
+
+    Parameters
+    ----------
+    root : str or pathlib.Path
+        Root directory of the input checkout or saved evidence bundle.
+    output : str or pathlib.Path
+        Destination directory for the generated evidence or figures.
+
+    Returns
+    -------
+    manifest : dict
+        Ordered seven-case execution inventory with retained failures and
+        completion status.
+
+    Notes
+    -----
+    Creates a fresh output directory, runs the seven reference cases serially and writes logs and a manifest after every attempt.
+    """
     root, out = Path(root).resolve(), Path(output).resolve()
     inventory = verify_inventory(root / "examples/desi2")
     out.mkdir(parents=True, exist_ok=False)
@@ -230,6 +339,12 @@ def capture(root, output):
     )
 
     def save():
+        """Write the current reference-capture manifest.
+
+        Notes
+        -----
+        Replaces manifest.json in the enclosing output directory.
+        """
         (out / "manifest.json").write_text(
             json.dumps(manifest, indent=2, allow_nan=False) + "\n"
         )

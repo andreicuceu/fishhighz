@@ -33,19 +33,76 @@ PROFILES = ("compatibility", "accuracy", "full-compatibility", "fixed-compatibil
 
 
 def canonical(value):
+    """Hash a deterministic JSON representation of scientific metadata.
+
+    Parameters
+    ----------
+    value : object
+        JSON-compatible metadata, allowing NumPy values through plain
+        conversion.
+
+    Returns
+    -------
+    digest : str
+        SHA-256 hexadecimal digest of the sorted finite JSON representation.
+    """
     return hashlib.sha256(
         json.dumps(plain(value), sort_keys=True, allow_nan=False).encode()
     ).hexdigest()
 
 
 def token(value):
+    """Encode a canonical metadata hash as a numerical evidence token.
+
+    Parameters
+    ----------
+    value : object
+        JSON-compatible scientific metadata.
+
+    Returns
+    -------
+    token : ndarray of uint8, shape (32,)
+        Owned byte array containing the canonical SHA-256 digest.
+    """
     return np.frombuffer(bytes.fromhex(canonical(value)), dtype=np.uint8).copy()
 
 
 def request(
     case, index, profile, *, kind="real_bao", diagnostic_id=None, recipe_revision=None
 ):
-    """Bind fixed recipe identities, targets and thresholds before worker execution."""
+    """Bind fixed recipe identities, targets and thresholds before worker execution.
+
+    Parameters
+    ----------
+    case : str
+        Identifier of one of the seven original DESI-2 validation
+        configurations.
+    index : int
+        Zero-based redshift-bin index.
+    profile : str
+        Declared accuracy or compatibility profile.
+    kind : str
+        Scientific record type used to distinguish primary and diagnostic
+        evidence. Default is ``'real_bao'``.
+    diagnostic_id : str or None
+        Nonempty identifier required only for diagnostic records. Default is
+        ``None``.
+    recipe_revision : str or None
+        Declared revision of the physical recipe; None retains historical
+        request semantics. Default is ``None``.
+
+    Returns
+    -------
+    request : dict
+        Exact case/bin/profile identity with ordered fields, pairs, parameters
+        and thresholds.
+
+    Raises
+    ------
+    ValueError :
+        If inputs, declared identities or numerical validation conditions are
+        inconsistent.
+    """
     if profile not in PROFILES or kind not in KINDS:
         raise ValueError("unknown profile/payload kind")
     if (
@@ -70,9 +127,9 @@ def request(
 
         if recipe_revision != REVISION:
             raise ValueError("unknown recipe revision")
-        sel = forecast_selection(case, index)
+        pair_selection = forecast_selection(case, index)
     else:
-        sel = selection(case)
+        pair_selection = selection(case)
     parameters = ["A"] if kind.endswith("amplitude") else [f"ap_{index}", f"at_{index}"]
     result = dict(
         case=case,
@@ -85,10 +142,10 @@ def request(
             dict(
                 id=f.id, kind=f.kind, physical=f.physical_model, background=f.background
             )
-            for f in sel.fields
+            for f in pair_selection.fields
         ],
-        selected_pairs=sel.selected_pairs.tolist(),
-        required_pairs=sel.required_pairs.tolist(),
+        selected_pairs=pair_selection.selected_pairs.tolist(),
+        required_pairs=pair_selection.required_pairs.tolist(),
         parameters=parameters,
         original_hash=canonical(recipe(case)),
         thresholds=dict(LIMITS),
@@ -101,6 +158,20 @@ def request(
 
 
 def validate_request(task):
+    """Check a request against the declared scientific recipe.
+
+    Parameters
+    ----------
+    task : dict
+        Declared case, bin, selected field pairs, parameter order and validation
+        thresholds.
+
+    Raises
+    ------
+    ValueError :
+        If inputs, declared identities or numerical validation conditions are
+        inconsistent.
+    """
     if task != request(
         task["case"],
         task["bin"],
@@ -115,65 +186,142 @@ def validate_request(task):
 
 
 def grid_nodes(settings):
-    """Reconstruct expected ordered paired nodes and measure from declared controls."""
-    g = settings["grid"]
-    volume = float(g["volume"])
+    """Reconstruct expected ordered paired nodes and measure from declared controls.
+
+    Parameters
+    ----------
+    settings : dict
+        Declared grid, volume, derivative and physical-model settings.
+
+    Returns
+    -------
+    k_grid : ndarray, shape (n_cell,)
+        Paired Fourier wavenumbers in h/Mpc.
+    mu_grid : ndarray, shape (n_cell,)
+        Paired dimensionless direction cosines.
+    modes : ndarray, shape (n_cell,)
+        Independent Fourier-mode counts including the declared volume.
+
+    Raises
+    ------
+    ValueError :
+        If inputs, declared identities or numerical validation conditions are
+        inconsistent.
+    """
+    grid_settings = settings["grid"]
+    volume = float(grid_settings["volume"])
     if not np.isfinite(volume) or volume <= 0:
         raise ValueError("positive finite volume required")
-    if g["kind"] == "gauss_legendre":
+    if grid_settings["kind"] == "gauss_legendre":
         for name in ("k_intervals", "k_order", "mu_order"):
             if (
-                isinstance(g[name], bool)
-                or not isinstance(g[name], int)
-                or g[name] <= 0
+                isinstance(grid_settings[name], bool)
+                or not isinstance(grid_settings[name], int)
+                or grid_settings[name] <= 0
             ):
                 raise ValueError("invalid quadrature count")
         grid = gauss_legendre_grid(
-            np.linspace(0.01, 0.5, g["k_intervals"] + 1),
-            k_order=g["k_order"],
-            mu_order=g["mu_order"],
-            h_fid=g["h_fid"],
+            np.linspace(0.01, 0.5, grid_settings["k_intervals"] + 1),
+            k_order=grid_settings["k_order"],
+            mu_order=grid_settings["mu_order"],
+            h_fid=grid_settings["h_fid"],
         )
         return grid.k_flat, grid.mu_flat, volume * grid.q_mode
-    if g["kind"] == "legacy":
+    if grid_settings["kind"] == "legacy":
         # These seven explicit INIs share the literal legacy grid; no normalized endpoint fix.
-        k = np.linspace(0.01, 0.5, 500)
-        mu = (np.arange(10) + 0.5) / 10
-        nodes = np.tile(k, len(mu))
-        angles = np.repeat(mu, len(k))
-        return nodes, angles, volume * nodes**2 * (k[1] - k[0]) * 0.1 / (2 * np.pi**2)
+        k_grid = np.linspace(0.01, 0.5, 500)
+        mu_grid = (np.arange(10) + 0.5) / 10
+        nodes = np.tile(k_grid, len(mu_grid))
+        angles = np.repeat(mu_grid, len(k_grid))
+        return (
+            nodes,
+            angles,
+            volume * nodes**2 * (k_grid[1] - k_grid[0]) * 0.1 / (2 * np.pi**2),
+        )
     raise ValueError("unknown evidence grid contract")
 
 
 def assemble(task, total, observed_j, settings, *, extra=None):
-    """Construct a scientifically bound payload with FishHighz independent F."""
+    """Construct a scientifically bound payload with FishHighz independent F.
+
+    Parameters
+    ----------
+    task : dict
+        Declared case, bin, selected field pairs, parameter order and validation
+        thresholds.
+    total : array_like, shape (n_cell, n_required_pair)
+        Signed total field-pair powers, including noise, in (Mpc/h)^3.
+    observed_j : ndarray, shape (n_cell, n_selected_pair, n_parameter)
+        Observed mean-spectrum derivatives, including field responses, in power
+        units per parameter unit.
+    settings : dict
+        Declared grid, volume, derivative and physical-model settings.
+    extra : dict or None
+        Additional numerical evidence arrays to append. Default is ``None``.
+
+    Returns
+    -------
+    arrays : dict of str to ndarray
+        Ordered grid, powers, derivatives, Wick covariance and rank-aware Fisher
+        summaries.
+    report : dict
+        Bound request, physical settings and initial validation metadata.
+    """
     return _assemble(task, total, observed_j, settings, extra=extra)
 
 
 def _assemble(task, total, observed_j, settings, *, extra=None, factors=None):
-    """Internal assembly; only owned prepared state may supply reusable factors."""
+    """Internal assembly; only owned prepared state may supply reusable factors.
+
+    Parameters
+    ----------
+    task : dict
+        Declared case, bin, selected field pairs, parameter order and validation
+        thresholds.
+    total : array_like, shape (n_cell, n_required_pair)
+        Signed total field-pair powers, including noise, in (Mpc/h)^3.
+    observed_j : ndarray, shape (n_cell, n_selected_pair, n_parameter)
+        Observed mean-spectrum derivatives, including field responses, in power
+        units per parameter unit.
+    settings : dict
+        Declared grid, volume, derivative and physical-model settings.
+    extra : dict or None
+        Additional numerical evidence arrays to append. Default is ``None``.
+    factors : ndarray, shape (n_cell, n_selected_pair, n_selected_pair), or None
+        Lower Cholesky factors in (Mpc/h)^3 from the same owned prepared state; None
+        computes factors during contraction. Default is ``None``.
+
+    Returns
+    -------
+    arrays : dict of str to ndarray
+        Ordered grid, powers, derivatives, Wick covariance and rank-aware Fisher
+        summaries.
+    report : dict
+        Bound request, physical settings and initial validation metadata.
+    """
     validate_request(task)
-    k, mu, modes = grid_nodes(settings)
+    k_grid, mu_grid, modes = grid_nodes(settings)
     selected = np.asarray(task["selected_pairs"], dtype=np.int64)
     required = np.asarray(task["required_pairs"], dtype=np.int64)
-    c = wick(total, modes, required, selected, len(task["fields"]))
+    covariance = wick(total, modes, required, selected, len(task["fields"]))
     if factors is None:
-        f, single = contract(c, np.asarray(observed_j))
+        joint_fisher, single = contract(covariance, np.asarray(observed_j))
     else:
-        f = fisher_from_factors(observed_j, factors)
+        joint_fisher = fisher_from_factors(observed_j, factors)
         single = np.einsum(
             "nsi,nsj,ns->sij",
             observed_j,
             observed_j,
-            1 / np.diagonal(c, axis1=1, axis2=2),
+            1 / np.diagonal(covariance, axis1=1, axis2=2),
         )
+
     arrays = dict(
-        k=k,
-        mu=mu,
+        k=k_grid,
+        mu=mu_grid,
         modes=modes,
         total=np.asarray(total),
         observed_j=np.asarray(observed_j),
-        selected_covariance=c,
+        selected_covariance=covariance,
         selected_pairs=selected,
         required_pairs=required,
         bin_bounds=np.asarray(task["bounds"]),
@@ -182,9 +330,10 @@ def _assemble(task, total, observed_j, settings, *, extra=None, factors=None):
         field_min_eigenvalue=np.linalg.eigvalsh(
             field_matrix(total, required, len(task["fields"]))
         )[:, 0],
-        **summaries(f, single),
+        **summaries(joint_fisher, single),
     )
     arrays.update(extra or {})
+
     report = dict(
         context=task,
         settings=plain(settings),
@@ -197,7 +346,23 @@ def _assemble(task, total, observed_j, settings, *, extra=None, factors=None):
 
 
 def metric_values(arrays, names):
-    """Recompute convergence values from saved paired Fisher/volume controls."""
+    """Recompute convergence values from saved paired Fisher/volume controls.
+
+    Parameters
+    ----------
+    arrays : dict of str to ndarray
+        Numerical evidence arrays; Fourier-cell axes and pair order follow the
+        declared task. Powers use (Mpc/h)^3 and volumes use (Mpc/h)^3 unless
+        separately labeled.
+    names : sequence of str
+        Ordered names of the quantities to process.
+
+    Returns
+    -------
+    metrics : list of dict
+        Relative information, error, individual-error and volume changes for
+        each named refinement.
+    """
     return [
         change(
             *arrays["metric_fisher"][i],
@@ -209,6 +374,30 @@ def metric_values(arrays, names):
 
 
 def add_metrics(arrays, report, names, fisher, pairs, volumes):
+    """Attach actual refinement operands and recomputed convergence metrics.
+
+    Parameters
+    ----------
+    arrays : dict of str to ndarray
+        Numerical evidence arrays; Fourier-cell axes and pair order follow the
+        declared task. Powers use (Mpc/h)^3 and volumes use (Mpc/h)^3 unless
+        separately labeled.
+    report : dict
+        Scientific settings, provenance, array inventory and validation outcomes
+        associated with the numerical evidence.
+    names : sequence of str
+        Ordered names of the quantities to process.
+    fisher : array_like, shape (n_metric, 2, n_parameter, n_parameter)
+        Lower and upper joint Fisher matrices for each refinement.
+    pairs : array_like, shape (n_metric, 2, n_pair, n_parameter, n_parameter)
+        Corresponding individual-spectrum Fisher matrices.
+    volumes : array_like, shape (n_metric, 2)
+        Corresponding volumes in (Mpc/h)^3.
+
+    Notes
+    -----
+    Updates arrays and report in place, including the numerical pass flag.
+    """
     arrays.update(
         metric_fisher=np.asarray(fisher),
         metric_pair_fisher=np.asarray(pairs),
@@ -223,6 +412,25 @@ def add_metrics(arrays, report, names, fisher, pairs, volumes):
 
 
 def _close(a, b, name, rtol=5e-12):
+    """Check numerical evidence against an independent reconstruction.
+
+    Parameters
+    ----------
+    a : array_like
+        Saved quantity or stack of quantities.
+    b : array_like
+        Reconstructed quantity with the same shape and units.
+    name : str
+        Quantity or record label used in diagnostics.
+    rtol : float
+        Dimensionless relative numerical tolerance. Default is ``5e-12``.
+
+    Raises
+    ------
+    ValueError :
+        If inputs, declared identities or numerical validation conditions are
+        inconsistent.
+    """
     if (
         np.shape(a) != np.shape(b)
         or not np.isfinite(relative(a, b))
@@ -232,7 +440,26 @@ def _close(a, b, name, rtol=5e-12):
 
 
 def _close_blocks(a, b, name, *, ndim=2):
-    """Compare each matrix (or scalar) on its own scale, never a stack norm."""
+    """Compare each matrix (or scalar) on its own scale, never a stack norm.
+
+    Parameters
+    ----------
+    a : array_like
+        Saved quantity or stack of quantities.
+    b : array_like
+        Reconstructed quantity with the same shape and units.
+    name : str
+        Quantity or record label used in diagnostics.
+    ndim : int
+        Number of trailing dimensions in each independently scaled block; zero
+        compares scalars. Default is ``2``.
+
+    Raises
+    ------
+    ValueError :
+        If inputs, declared identities or numerical validation conditions are
+        inconsistent.
+    """
     a, b = np.asarray(a), np.asarray(b)
     if a.shape != b.shape or a.ndim < ndim:
         raise ValueError(f"{name}: inconsistent numerical dimensions")
@@ -242,7 +469,39 @@ def _close_blocks(a, b, name, *, ndim=2):
 
 
 def validate_payload(task, arrays, report, *, require_pass=True, schema=3):
-    """Validate semantic meaning even for consistently rehashed corruptions."""
+    """Validate semantic meaning even for consistently rehashed corruptions.
+
+    Parameters
+    ----------
+    task : dict
+        Declared case, bin, selected field pairs, parameter order and validation
+        thresholds.
+    arrays : dict of str to ndarray
+        Numerical evidence arrays; Fourier-cell axes and pair order follow the
+        declared task. Powers use (Mpc/h)^3 and volumes use (Mpc/h)^3 unless
+        separately labeled.
+    report : dict
+        Scientific settings, provenance, array inventory and validation outcomes
+        associated with the numerical evidence.
+    require_pass : bool
+        Whether to require numerical qualification as well as internally
+        consistent evidence. Default is ``True``.
+    schema : int
+        Evidence schema version controlling trial-binding requirements. Default
+        is ``3``.
+
+    Returns
+    -------
+    valid : bool
+        True when all required identities, numerical reconstructions and
+        requested pass conditions agree.
+
+    Raises
+    ------
+    ValueError :
+        If inputs, declared identities or numerical validation conditions are
+        inconsistent.
+    """
     validate_request(task)
     if not isinstance(report.get("passed"), bool):
         raise ValueError("passed must be an explicit boolean")
@@ -257,40 +516,42 @@ def validate_payload(task, arrays, report, *, require_pass=True, schema=3):
     ):
         raise ValueError("wrong profile or named parameter order")
     if settings.get("bounds") != task["bounds"] or settings.get("fields") != [
-        f["id"] for f in task["fields"]
+        field["id"] for field in task["fields"]
     ]:
         raise ValueError("wrong effective bin/field identity")
-    npar = len(task["parameters"])
-    nsel = len(task["selected_pairs"])
-    nreq = len(task["required_pairs"])
-    nf = len(task["fields"])
-    k, mu, modes = grid_nodes(settings)
-    nn = len(k)
+
+    # Establish physical axis sizes before checking saved numerical arrays.
+    n_parameters = len(task["parameters"])
+    n_selected_pairs = len(task["selected_pairs"])
+    n_required_pairs = len(task["required_pairs"])
+    n_fields = len(task["fields"])
+    k_grid, mu_grid, modes = grid_nodes(settings)
+    n_cells = len(k_grid)
     shapes = dict(
-        k=(nn,),
-        mu=(nn,),
-        modes=(nn,),
-        total=(nn, nreq),
-        observed_j=(nn, nsel, npar),
-        selected_covariance=(nn, nsel, nsel),
-        selected_pairs=(nsel, 2),
-        required_pairs=(nreq, 2),
+        k=(n_cells,),
+        mu=(n_cells,),
+        modes=(n_cells,),
+        total=(n_cells, n_required_pairs),
+        observed_j=(n_cells, n_selected_pairs, n_parameters),
+        selected_covariance=(n_cells, n_selected_pairs, n_selected_pairs),
+        selected_pairs=(n_selected_pairs, 2),
+        required_pairs=(n_required_pairs, 2),
         bin_bounds=(2,),
         request_token=(32,),
         effective_token=(32,),
-        field_min_eigenvalue=(nn,),
-        fisher=(npar, npar),
-        covariance=(npar, npar),
-        errors=(npar,),
-        correlation=(npar, npar),
-        constrained=(npar,),
+        field_min_eigenvalue=(n_cells,),
+        fisher=(n_parameters, n_parameters),
+        covariance=(n_parameters, n_parameters),
+        errors=(n_parameters,),
+        correlation=(n_parameters, n_parameters),
+        constrained=(n_parameters,),
         rank=(1,),
-        pair_fisher=(nsel, npar, npar),
-        pair_covariance=(nsel, npar, npar),
-        pair_errors=(nsel, npar),
-        pair_correlation=(nsel, npar, npar),
-        pair_constrained=(nsel, npar),
-        pair_rank=(nsel,),
+        pair_fisher=(n_selected_pairs, n_parameters, n_parameters),
+        pair_covariance=(n_selected_pairs, n_parameters, n_parameters),
+        pair_errors=(n_selected_pairs, n_parameters),
+        pair_correlation=(n_selected_pairs, n_parameters, n_parameters),
+        pair_constrained=(n_selected_pairs, n_parameters),
+        pair_rank=(n_selected_pairs,),
     )
     if not set(shapes) <= arrays.keys():
         raise ValueError(f"missing scientific payload: {set(shapes) - arrays.keys()}")
@@ -323,29 +584,35 @@ def validate_payload(task, arrays, report, *, require_pass=True, schema=3):
     ]:
         if not np.array_equal(arrays[name], expected):
             raise ValueError(f"{name}: wrong payload identity/content/order")
-    for name, expected in [("k", k), ("mu", mu), ("modes", modes)]:
+    for name, expected in [("k", k_grid), ("mu", mu_grid), ("modes", modes)]:
         _close(arrays[name], expected, name, 5e-13)
-    c = wick(
-        arrays["total"], modes, arrays["required_pairs"], arrays["selected_pairs"], nf
+
+    # Rebuild Wick covariance from total powers, independently of saved factors.
+    covariance = wick(
+        arrays["total"],
+        modes,
+        arrays["required_pairs"],
+        arrays["selected_pairs"],
+        n_fields,
     )
-    _close(arrays["selected_covariance"], c, "Wick covariance")
+    _close(arrays["selected_covariance"], covariance, "Wick covariance")
     eigen = np.linalg.eigvalsh(
-        field_matrix(arrays["total"], arrays["required_pairs"], nf)
+        field_matrix(arrays["total"], arrays["required_pairs"], n_fields)
     )[:, 0]
     _close(arrays["field_min_eigenvalue"], eigen, "field eigenvalues")
     if task["profile"] == "accuracy" and task["kind"] in ("real_bao", "diagnostic"):
         from ..covariance import _validate_field_power
         from .profile_definitions import forecast_selection
 
-        sel = (
+        pair_selection = (
             forecast_selection(task["case"], task["bin"])
             if task.get("recipe_revision")
             else selection(task["case"])
         )
-        _validate_field_power(arrays["total"], sel)
+        _validate_field_power(arrays["total"], pair_selection)
     # Direct solve, independently of the factor kernel used by the writer.
-    f, single = contract(c, arrays["observed_j"], independent=True)
-    expected = summaries(f, single)
+    joint_fisher, single = contract(covariance, arrays["observed_j"], independent=True)
+    expected = summaries(joint_fisher, single)
     for name, value in expected.items():
         if name.startswith("pair_"):
             _close_blocks(arrays[name], value, name, ndim=value.ndim - 1)
@@ -357,6 +624,7 @@ def validate_payload(task, arrays, report, *, require_pass=True, schema=3):
     information(arrays["fisher"])
     for matrix in arrays["pair_fisher"]:
         information(matrix)
+
     names = report.get("metric_names")
     stored = report.get("metrics")
     if (
@@ -372,8 +640,11 @@ def validate_payload(task, arrays, report, *, require_pass=True, schema=3):
         validate(arrays, report)
     if names:
         for key, shape in [
-            ("metric_fisher", (len(names), 2, npar, npar)),
-            ("metric_pair_fisher", (len(names), 2, nsel, npar, npar)),
+            ("metric_fisher", (len(names), 2, n_parameters, n_parameters)),
+            (
+                "metric_pair_fisher",
+                (len(names), 2, n_selected_pairs, n_parameters, n_parameters),
+            ),
             ("metric_volume", (len(names), 2)),
         ]:
             if key not in arrays or arrays[key].shape != shape:
@@ -416,7 +687,7 @@ def validate_payload(task, arrays, report, *, require_pass=True, schema=3):
             if (
                 not isinstance(sha, str)
                 or len(sha) != 64
-                or any(c not in "0123456789abcdef" for c in sha)
+                or any(character not in "0123456789abcdef" for character in sha)
             ):
                 raise ValueError("invalid source/resource digest")
         if task["profile"] == "accuracy":
@@ -437,12 +708,12 @@ def validate_payload(task, arrays, report, *, require_pass=True, schema=3):
                 raise ValueError("incomplete accuracy convergence inventory")
         if task["profile"] == "compatibility":
             if arrays.get("reference_fisher", np.empty(0)).shape != (
-                npar,
-                npar,
+                n_parameters,
+                n_parameters,
             ) or arrays.get("reference_pair_fisher", np.empty(0)).shape != (
-                nsel,
-                npar,
-                npar,
+                n_selected_pairs,
+                n_parameters,
+                n_parameters,
             ):
                 raise ValueError("missing matched reference information")
             comp = change(
@@ -466,7 +737,9 @@ def validate_payload(task, arrays, report, *, require_pass=True, schema=3):
             ):
                 if require_pass:
                     raise ValueError("compatibility comparison failed")
-    metrics_pass = all(all(m[k] <= LIMITS[k] for k in LIMITS) for m in stored)
+    metrics_pass = all(
+        all(m[k_grid] <= LIMITS[k_grid] for k_grid in LIMITS) for m in stored
+    )
     if require_pass and (report["passed"] is not True or not metrics_pass):
         raise ValueError("scientific validation failed")
     if report["passed"] is True and report.get("unresolved_controls"):

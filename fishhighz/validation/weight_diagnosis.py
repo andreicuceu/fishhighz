@@ -8,7 +8,28 @@ from ..kernels.weights import _integrals, _iterate
 
 
 def first_underflow(masses, weights, variance):
-    """Locate the first guarded multiply and report its exact decimal operands."""
+    """Locate the first guarded multiply and report its exact decimal operands.
+
+    Parameters
+    ----------
+    masses : array_like, shape (n_magnitude,)
+        Nonnegative source-density quadrature masses, in deg^-2 (km/s)^-1.
+    weights : array_like, shape (n_magnitude,)
+        Dimensionless source weights, retaining their common amplitude.
+    variance : array_like, shape (n_magnitude,)
+        Nonnegative dimensionless pixel-noise variance at each magnitude node.
+
+    Returns
+    -------
+    failure : dict or None
+        First failing operation, magnitude index, exact decimal product and
+        floating-point exception; None if every product is representable.
+
+    Raises
+    ------
+    AssertionError :
+        If the requested operation cannot be completed.
+    """
     value = masses
     for name, factor in (
         ("r*w", weights),
@@ -43,7 +64,33 @@ def first_underflow(masses, weights, variance):
 
 
 def diagnose(masses, variance, length, pixel, signal, alias, counts=(3, 6, 12, 24)):
-    """Replay the accepted finite updates and preserve unavailable coefficients."""
+    """Replay the accepted finite updates and preserve unavailable coefficients.
+
+    Parameters
+    ----------
+    masses : array_like, shape (n_magnitude,)
+        Nonnegative source-density quadrature masses, in deg^-2 (km/s)^-1.
+    variance : array_like, shape (n_magnitude,)
+        Nonnegative dimensionless pixel-noise variance at each magnitude node.
+    length : float
+        Positive forest length in km/s.
+    pixel : float
+        Positive pixel width in km/s.
+    signal : float
+        Intrinsic auxiliary three-dimensional power in deg^2 km/s.
+    alias : float
+        Positive one-dimensional auxiliary forest power in km/s.
+    counts : sequence of int
+        Finite update counts to replay. Default is ``(3, 6, 12, 24)``.
+
+    Returns
+    -------
+    arrays : dict of str to ndarray
+        Finite weight vectors and update changes for each successful count.
+    report : dict
+        Coefficient availability, first arithmetic failures and zero-weight
+        Jacobian diagnostics.
+    """
     masses, variance = np.asarray(masses), np.asarray(variance)
     rows = []
     arrays = {}
@@ -52,12 +99,12 @@ def diagnose(masses, variance, length, pixel, signal, alias, counts=(3, 6, 12, 2
             with np.errstate(
                 over="raise", invalid="raise", divide="raise", under="ignore"
             ):
-                w, changes = _iterate(
+                weights, changes = _iterate(
                     masses, variance, length, pixel, signal, alias, count
                 )
-            arrays[f"weights_{count}"] = w
+            arrays[f"weights_{count}"] = weights
             arrays[f"changes_{count}"] = changes
-            failure = first_underflow(masses, w, variance)
+            failure = first_underflow(masses, weights, variance)
             if failure is not None:
                 rows.append(
                     dict(
@@ -65,15 +112,17 @@ def diagnose(masses, variance, length, pixel, signal, alias, counts=(3, 6, 12, 2
                     )
                 )
                 continue
-            _, _, _, a, p = _integrals(masses, w, variance, length, pixel)
+            _, _, _, aliasing_coefficient, pixel_noise_power = _integrals(
+                masses, weights, variance, length, pixel
+            )
             rows.append(
                 dict(
                     iterations=count,
                     available=True,
-                    A=float(a),
-                    P_pixel=float(p),
-                    max_weight=float(w.max()),
-                    min_weight=float(w.min()),
+                    A=float(aliasing_coefficient),
+                    P_pixel=float(pixel_noise_power),
+                    max_weight=float(weights.max()),
+                    min_weight=float(weights.min()),
                 )
             )
         except (FloatingPointError, ValueError) as error:

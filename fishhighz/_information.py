@@ -11,6 +11,38 @@ from ._arrays import real_array
 def inspect_information(value, context):
     """Return symmetric copy, normalized matrix, scales, eigensystem, tolerance.
 
+    Parameters
+    ----------
+    value : array_like of shape (n, n)
+        Real symmetric covariance or Fisher matrix; entry units depend on the
+        observables or parameters.
+    context : str
+        Quantity and location used in numerical diagnostics.
+
+    Returns
+    -------
+    matrix : ndarray of shape (n, n)
+        Symmetric float64 copy in input units.
+    normalized : ndarray of shape (n, n)
+        Dimensionless diagonally normalized matrix.
+    scales : ndarray of shape (n,)
+        Square roots of the input diagonal, with one substituted for exactly
+        zero rows.
+    eigenvalues : ndarray of shape (n,)
+        Ascending eigenvalues of the normalized matrix.
+    eigenvectors : ndarray of shape (n, n)
+        Corresponding normalized eigenvectors stored as columns.
+    tolerance : float
+        Dimensionless normalized rank/positivity tolerance.
+
+    Raises
+    ------
+    ValueError
+        If matrix shape, finiteness, symmetry, zero-row consistency, or positive
+        semidefiniteness fails.
+
+    Notes
+    -----
     Negative diagonals fail exactly, and zero diagonals require exact zero rows
     and columns. scales=sqrt(diag), with scale=1 for zero rows. R=M/scales/scales.
     Symmetry uses elementwise 64*eps*n*max(1,abs(Rij),abs(Rji)). Accepted asymmetry
@@ -26,11 +58,11 @@ def inspect_information(value, context):
         raise ValueError(
             f"{context}: negative diagonal at index {index}: {diagonal[index]:.17g}"
         )
-    zero = diagonal == 0
-    if np.any(matrix[zero] != 0) or np.any(matrix[:, zero] != 0):
+    zero_mask = diagonal == 0
+    if np.any(matrix[zero_mask] != 0) or np.any(matrix[:, zero_mask] != 0):
         raise ValueError(f"{context}: zero diagonal requires exact zero row and column")
     scales = np.sqrt(diagonal)
-    scales[zero] = 1.0
+    scales[zero_mask] = 1.0
     with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
         normalized = matrix / scales[:, None] / scales[None, :]
     if not np.all(np.isfinite(normalized)):
@@ -40,17 +72,17 @@ def inspect_information(value, context):
         1.0, np.maximum(np.abs(normalized), np.abs(normalized.T))
     )
     with np.errstate(over="ignore", invalid="ignore"):
-        asymmetric = np.abs(normalized - normalized.T) > symmetry_tolerance
-    if np.any(asymmetric):
-        i, j = np.argwhere(asymmetric)[0]
+        asymmetric_mask = np.abs(normalized - normalized.T) > symmetry_tolerance
+    if np.any(asymmetric_mask):
+        i, j = np.argwhere(asymmetric_mask)[0]
         raise ValueError(
             f"{context}: asymmetric at ({i},{j}) in normalized basis; "
             f"entries {normalized[i, j]:.17g}, {normalized[j, i]:.17g}"
         )
     # Average off-diagonals only; preserve tiny diagonal values without halving.
     i, j = np.triu_indices(len(matrix), 1)
-    different = matrix[i, j] != matrix[j, i]
-    a, b = i[different], j[different]
+    different_mask = matrix[i, j] != matrix[j, i]
+    a, b = i[different_mask], j[different_mask]
     # Leave exactly symmetric entries untouched, including subnormal powers.
     matrix[a, b] = matrix[a, b] + 0.5 * (matrix[b, a] - matrix[a, b])
     matrix[b, a] = matrix[a, b]
@@ -74,6 +106,27 @@ def inspect_information(value, context):
 def normalize_positive_batch(value):
     """Normalize a positive-diagonal batch; caller replays scalar failures.
 
+    Parameters
+    ----------
+    value : array_like of shape (n_node, n, n)
+        Finite matrix blocks with strictly positive diagonal; units follow the
+        input quantities.
+
+    Returns
+    -------
+    normalized : ndarray of shape (n_node, n, n)
+        Dimensionless normalized and symmetrized blocks.
+    scales : ndarray of shape (n_node, n)
+        Square roots of the input diagonal in the corresponding quantity units.
+
+    Raises
+    ------
+    ValueError
+        If scalar diagnostics are needed for nonfinite values, nonpositive
+        diagonal, or excessive asymmetry.
+
+    Notes
+    -----
     This private fast-path helper has no acceptance authority near boundaries.
     It preserves sequential divisions and off-diagonal averaging from
     inspect_information, but does not compute unused eigenvectors.
@@ -92,8 +145,8 @@ def normalize_positive_batch(value):
             * matrix.shape[-1]
             * np.maximum(1.0, np.maximum(np.abs(normalized), np.abs(transpose)))
         )
-        asymmetric = np.abs(normalized - transpose) > tolerance
-    if not np.all(np.isfinite(normalized)) or np.any(asymmetric):
+        asymmetric_mask = np.abs(normalized - transpose) > tolerance
+    if not np.all(np.isfinite(normalized)) or np.any(asymmetric_mask):
         raise ValueError("scalar symmetry diagnostic required")
     i, j = np.triu_indices(matrix.shape[-1], 1)
     normalized[:, i, j] = 0.5 * normalized[:, i, j] + 0.5 * normalized[:, j, i]

@@ -8,7 +8,29 @@ from .public import Forecast
 
 
 def main(argv=None):
-    """Run one native INI forecast and save its result directory."""
+    """Run one native INI forecast and save its result directory.
+
+    Parameters
+    ----------
+    argv : sequence of str or None, optional
+        Command-line arguments; None reads the process arguments.
+
+    Returns
+    -------
+    status : int
+        Zero after successful calculation and serialization.
+
+    Raises
+    ------
+    SystemExit
+        If argument parsing fails.
+    FileExistsError
+        If the output directory already exists.
+
+    Notes
+    -----
+    Runs the requested forecast and creates the required --output directory.
+    """
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("ini", nargs="?", default=None, help="native FishHighz INI")

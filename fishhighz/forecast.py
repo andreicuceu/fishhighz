@@ -23,6 +23,24 @@ from .weights import prepare_forest_weights, sample_auxiliary
 
 
 def _validate_spec(spec):
+    """Validate bin model, response, and noise preparation contracts.
+
+    Parameters
+    ----------
+    spec : BinSpec
+        Fixed geometry, Fourier grid, model routes, and explicit noise inputs.
+
+    Returns
+    -------
+    None
+        Validate structural and physical context without evaluating model power.
+
+    Raises
+    ------
+    ValueError
+        If built-in model context, per-field responses, noise settings, or
+        positive galaxy densities are inconsistent.
+    """
     if not isinstance(spec, BinSpec):
         raise ValueError("require BinSpec")
     from .models.kaiser import KaiserModel
@@ -73,36 +91,61 @@ def _validate_spec(spec):
 
 
 def prepare_bin(spec):
-    """Fix covariance at registry fiducials, evaluating active inputs once.
+    """Fix per-field weights, known noise, and covariance at registry fiducials.
 
-    Returns PreparedBin, with immutable (node,required_pair) N/R/P/T, (node,)
-    modes/k/mu, (node,field) W and (node,selected,selected) Cholesky factors.
-    ForestWeights (including adaptive status) and preparation diagnostics are
-    retained by field. No derivative schedule is assumed until run_bin's
-    explicit options arrive. Weighting failure raises; no partial PreparedBin is
-    returned.
+    Parameters
+    ----------
+    spec : BinSpec
+        Complete bin definition with fixed geometry, quadrature, model bindings,
+        responses, and either generated or full supplied noise.
+
+    Returns
+    -------
+    prepared : PreparedBin
+        Immutable fiducial state: power/noise/total arrays (n_node,
+        n_required_pair) in (Mpc/h_fid)^3, dimensionless field and pair
+        responses, observed k in h_fid/Mpc and mu, mode counts, and Cholesky
+        factors (n_node, n_selected, n_selected) in power units.
+
+    Raises
+    ------
+    ValueError
+        If bin context, weighting, provider evaluation, physical noise, or
+        covariance factorization fails; errors include bin and field context.
+
+    Notes
+    -----
+    Active inputs are evaluated during preparation only. Per-field forest
+    weights, convergence metadata, provenance, and model call counts are
+    retained. Numerical derivative schedules are checked later when run
+    options are supplied. Failed preparation returns no partial bin.
     """
     _validate_spec(spec)
     selection, geometry = spec.p3d.selection, spec.geometry
-    k, mu = spec.grid.k_flat, spec.grid.mu_flat
+    k_grid, mu_grid = spec.grid.k_flat, spec.grid.mu_flat
     theta = _immutable(spec.p3d.registry.fiducials)
     weights, provenance, p1d_counts = {}, {}, {}
     model_counts = {r.provider.label: 0 for r in spec.p3d.routes}
+
     try:
         modes = mode_counts(geometry, spec.grid)
         response = prepare_response(
-            selection.fields, k, mu, a_v=geometry.a_v, settings=spec.responses
+            selection.fields, k_grid, mu_grid, a_v=geometry.a_v, settings=spec.responses
         )
         products = pair_response(response, selection)
+
+        # Prepare noise once per field, independently of the derivative calls.
         if spec.full_noise is not None:
-            noise = prepare_noise(selection, len(k), full=spec.full_noise)
+            noise = prepare_noise(selection, len(k_grid), full=spec.full_noise)
             convention = "full replacement"
         else:
             diagonal = {
-                name: np.full(len(k), galaxy_noise(n))
+                name: np.full(len(k_grid), galaxy_noise(n))
                 for name, n in (spec.galaxies or {}).items()
             }
-            q = wavenumber_comoving_to_velocity(k * mu, a_v=geometry.a_v)
+            velocity_wavenumber = wavenumber_comoving_to_velocity(
+                k_grid * mu_grid, a_v=geometry.a_v
+            )
             for field in selection.fields:
                 if field.id not in (spec.forests or {}):
                     continue
@@ -111,7 +154,9 @@ def prepare_bin(spec):
                 p1d_counts[field.id] = 0
                 try:
                     if source.auxiliary_coordinates is not None:
-                        kt, kp = source.auxiliary_coordinates
+                        transverse_angular_wavenumber, parallel_velocity_wavenumber = (
+                            source.auxiliary_coordinates
+                        )
                         options["auxiliary"] = sample_auxiliary(
                             field,
                             geometry,
@@ -121,15 +166,16 @@ def prepare_bin(spec):
                             p1d_model=source.p1d_model,
                             p1d_parameters=source.p1d_parameters,
                             theta_p1d=source.theta_p1d,
-                            k_t_deg=kt,
-                            k_p_velocity=kp,
+                            k_t_deg=transverse_angular_wavenumber,
+                            k_p_velocity=parallel_velocity_wavenumber,
                         )
                         index = selection.fields.index(field)
                         for route in spec.p3d.routes:
                             if np.any(np.all(route.pairs == (index, index), axis=1)):
                                 model_counts[route.provider.label] += 1
                         p1d_counts[field.id] += 1
-                    w = prepare_forest_weights(
+
+                    forest_weights = prepare_forest_weights(
                         field, geometry, spec.responses[field.id], **options
                     )
                     power1d = evaluate_p1d(
@@ -137,17 +183,23 @@ def prepare_bin(spec):
                         source.p1d_parameters,
                         source.theta_p1d,
                         geometry.z_eval,
-                        q,
+                        velocity_wavenumber,
                     )
                     p1d_counts[field.id] += 1
                     diagonal[field.id] = forest_noise(
-                        w, field, geometry, spec.responses[field.id], k, mu, power1d
+                        forest_weights,
+                        field,
+                        geometry,
+                        spec.responses[field.id],
+                        k_grid,
+                        mu_grid,
+                        power1d,
                     ).total
                 except Exception as error:
                     raise ValueError(
                         f"field {field.id}, P1D/weights: {error}"
                     ) from error
-                weights[field.id] = w
+                weights[field.id] = forest_weights
                 provenance[field.id] = dict(
                     source=source.provenance,
                     theta_p1d=source.theta_p1d,
@@ -160,24 +212,27 @@ def prepare_bin(spec):
                     ),
                 )
             noise = prepare_noise(
-                selection, len(k), diagonal=diagonal, independent_sampling=True
+                selection, len(k_grid), diagonal=diagonal, independent_sampling=True
             )
             convention = "independent sampling"
-        power = evaluate_p3d(spec.p3d, theta, geometry.z_eval, k, mu)
+
+        # The fiducial total power fixes covariance for the entire bin run.
+        power = evaluate_p3d(spec.p3d, theta, geometry.z_eval, k_grid, mu_grid)
         for name in model_counts:
             model_counts[name] += 1
         total = combine_observed_power(products * power, noise)
         factors = factor_covariance(gaussian_covariance(total, modes, selection))
     except Exception as error:
         raise ValueError(
-            f"bin {spec.id}, preparation nodes [0:{len(k)}): {error}"
+            f"bin {spec.id}, preparation nodes [0:{len(k_grid)}): {error}"
         ) from error
+
     arrays = {
         name: _immutable(value)
         for name, value in dict(
             theta=theta,
-            k=k,
-            mu=mu,
+            k=k_grid,
+            mu=mu_grid,
             modes=modes,
             response=response,
             products=products,
@@ -189,7 +244,7 @@ def prepare_bin(spec):
     }
     diagnostics = freeze(
         dict(
-            node_count=len(k),
+            node_count=len(k_grid),
             selected_pair_count=len(selection.selected_pairs),
             required_pair_count=len(selection.required_pairs),
             volume=geometry.volume,
@@ -244,12 +299,51 @@ class ForecastRun:
 
 
 def _batch_size(batch_size, n):
+    """Resolve the requested maximum number of Fourier nodes per batch.
+
+    Parameters
+    ----------
+    batch_size : int or None
+        Positive explicit node count, or None for all nodes.
+    n : int
+        Number of prepared Fourier nodes.
+
+    Returns
+    -------
+    size : int
+        Explicit batch size or n when batch_size is None.
+
+    Raises
+    ------
+    ValueError
+        If the explicit batch size is not a positive integer.
+    """
     return n if batch_size is None else integer(batch_size, "batch_size", minimum=1)
 
 
 def _individual_factors(prepared):
     """One-spectrum (node,1,1) factors from the diagonal of the fixed covariance.
 
+    Parameters
+    ----------
+    prepared : PreparedBin
+        Fixed fiducial total power, mode counts, and selected spectrum
+        definitions.
+
+    Returns
+    -------
+    factors : list of ndarray
+        One array of shape (n_node, 1, 1) per selected spectrum, containing
+        Cholesky factors in (Mpc/h_fid)^3.
+
+    Raises
+    ------
+    ValueError
+        If an individual variance cannot be factored; includes selected-pair
+        context.
+
+    Notes
+    -----
     Each factor is exactly what factor_covariance returns for the one-spectrum
     covariance of an independently prepared single-pair bin, because forest
     weights, noise and response are per field and the variance arithmetic is
@@ -277,6 +371,39 @@ def run_bin(
 ):
     """Reuse fixed factors; transient required-pair Jacobians are node-bounded.
 
+    Parameters
+    ----------
+    prepared : PreparedBin
+        Validated immutable fiducial bin state.
+    batch_size : int, optional
+        Positive maximum Fourier nodes per consecutive batch. Default None
+        processes all nodes at once.
+    steps : mapping of str to float, optional
+        Absolute finite-difference steps by global ID in parameter units.
+        Default None uses registry steps.
+    step_scale : float, default=1.0
+        Positive dimensionless multiplier of the numerical steps.
+    numerical : bool, default=False
+        Force numerical evaluation of otherwise analytic derivative columns.
+    individual : bool, default=False
+        Also accumulate each selected spectrum using its own one-spectrum
+        covariance.
+
+    Returns
+    -------
+    run : BinRun
+        Zero-prior global Fisher information in inverse products of parameter
+        units, derivative/call diagnostics, node slices, and optional
+        individual-spectrum results.
+
+    Raises
+    ------
+    ValueError
+        If the prepared type, derivative schedule, provider evaluation, or
+        contraction fails; includes bin and node context.
+
+    Notes
+    -----
     Batches are consecutive C-order nodes, never spectra. Derivative evaluation
     may repeat fiducial P3D calls. Survey quantities and factors are never rebuilt.
     Only the scheduled (nonzero) global columns enter the contraction; the other
@@ -286,8 +413,8 @@ def run_bin(
     """
     if not isinstance(prepared, PreparedBin):
         raise ValueError("require PreparedBin")
-    n = len(prepared.k)
-    size = _batch_size(batch_size, n)
+    n_node = len(prepared.k)
+    size = _batch_size(batch_size, n_node)
     schedules = _schedule(prepared.p3d, prepared.theta, steps, step_scale, numerical)
     active = np.array(
         sorted({index for schedule in schedules for index, _ in schedule}),
@@ -302,8 +429,8 @@ def run_bin(
     if individual:
         own_factors = _individual_factors(prepared)
         own_data = [np.zeros_like(data) for _ in own_factors]
-    for start in range(0, n, size):
-        stop = min(start + size, n)
+    for start in range(0, n_node, size):
+        stop = min(start + size, n_node)
         part = slice(start, stop)
         try:
             derivative = evaluate_derivatives(
@@ -316,14 +443,16 @@ def run_bin(
                 step_scale=step_scale,
                 numerical=numerical,
             )
-            jac = (prepared.products[part, :, None] * derivative.jacobian)[
-                :, selected, :
-            ][:, :, active]
-            data[block] += fisher_from_factors(jac, prepared.factors[part])
+            observed_jacobian = (
+                prepared.products[part, :, None] * derivative.jacobian
+            )[:, selected, :][:, :, active]
+            data[block] += fisher_from_factors(
+                observed_jacobian, prepared.factors[part]
+            )
             if individual:
                 for spectrum, factor in enumerate(own_factors):
                     own_data[spectrum][block] += fisher_from_factors(
-                        jac[:, spectrum : spectrum + 1], factor[part]
+                        observed_jacobian[:, spectrum : spectrum + 1], factor[part]
                     )
         except Exception as error:
             raise ValueError(
@@ -347,6 +476,24 @@ def run_bin(
 
 
 def _validate_bins(bins):
+    """Validate independent prepared bins in a shared global parameter basis.
+
+    Parameters
+    ----------
+    bins : iterable of PreparedBin
+        Nonempty sequence with unique bin IDs and disjoint redshift interiors.
+
+    Returns
+    -------
+    bins : tuple of PreparedBin
+        Input bin order retained after validation.
+
+    Raises
+    ------
+    ValueError
+        If bin types, IDs, registry identity, fiducials, h_fid, field
+        identities, or redshift independence are inconsistent.
+    """
     bins = tuple(bins)
     if not bins or any(not isinstance(b, PreparedBin) for b in bins):
         raise ValueError("require nonempty sequence of PreparedBin")
@@ -385,6 +532,40 @@ def run_forecast(
 ):
     """Run prepared independent bins in one registry; add prior exactly once.
 
+    Parameters
+    ----------
+    bins : iterable of PreparedBin
+        Independent prepared bins in the same exact registry and fiducial state.
+    prior_fisher : array_like of shape (n_global, n_global), optional
+        Shared prior information in inverse products of parameter units; default
+        None applies no prior.
+    batch_size : int, optional
+        Positive maximum Fourier nodes per consecutive batch. Default None
+        processes all nodes at once.
+    steps : mapping of str to float, optional
+        Absolute finite-difference steps by global ID in parameter units.
+        Default None uses registry steps.
+    step_scale : float, default=1.0
+        Positive dimensionless multiplier of the numerical steps.
+    numerical : bool, default=False
+        Force numerical evaluation of otherwise analytic derivative columns.
+    individual : bool, default=False
+        Also accumulate each selected spectrum using its own one-spectrum
+        covariance.
+
+    Returns
+    -------
+    run : ForecastRun
+        Ordered zero-prior bin results and their combined unmarginalized data
+        information with the supplied prior added exactly once.
+
+    Raises
+    ------
+    ValueError
+        If bins, prior, derivative options, or any bin calculation fail.
+
+    Notes
+    -----
     No per-bin marginalization, implicit preparation/cache refresh or partial
     success return. Changing priors reuses the same prepared bins. The returned
     ForecastRun exposes each zero-prior bin result and ``combined``, where the

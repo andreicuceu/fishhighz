@@ -14,7 +14,25 @@ from .schema import validate_payload
 
 
 def records(root):
-    """Read exact inventory and validate mathematics, retaining scientific failures."""
+    """Read exact inventory and validate mathematics, retaining scientific failures.
+
+    Parameters
+    ----------
+    root : str or pathlib.Path
+        Root directory of the input checkout or saved evidence bundle.
+
+    Returns
+    -------
+    records : iterator of tuple
+        Manifest records paired with verified numerical arrays, or None for
+        records without numerical output.
+
+    Raises
+    ------
+    ValueError :
+        If inputs, declared identities or numerical validation conditions are
+        inconsistent.
+    """
     root = Path(root).resolve()
     manifest = json.loads((root / "manifest.json").read_text())
     expected = modern_requests(
@@ -49,8 +67,8 @@ def records(root):
                 raise ValueError("plot source hash/path")
             if canonical(row["report"]) != row["effective_hash"]:
                 raise ValueError("plot report hash")
-            with np.load(path, allow_pickle=False) as f:
-                arrays = {k: f[k] for k in f.files}
+            with np.load(path, allow_pickle=False) as archive:
+                arrays = {k: archive[k] for k in archive.files}
             if {k: list(v.shape) for k, v in arrays.items()} != row["inventory"]:
                 raise ValueError("plot array inventory")
             validate_payload(
@@ -64,6 +82,19 @@ def records(root):
 
 
 def values(fisher):
+    """Extract rank-aware two-parameter BAO uncertainties and correlation.
+
+    Parameters
+    ----------
+    fisher : array_like, shape (n_parameter, n_parameter)
+        Fisher information in inverse products of parameter units.
+
+    Returns
+    -------
+    values : list of float or None
+        Parallel error, transverse error and correlation; unconstrained
+        quantities are None.
+    """
     info = information(fisher)
     return [
         float(info["errors"][i]) if info["constrained"][i] else None for i in range(2)
@@ -71,6 +102,21 @@ def values(fisher):
 
 
 def difference(a, b):
+    """Compare available BAO errors and correlation in their reported units.
+
+    Parameters
+    ----------
+    a : list of float or None
+        Comparison parallel error, transverse error and correlation.
+    b : list of float or None
+        Reference parallel error, transverse error and correlation.
+
+    Returns
+    -------
+    differences : list of float or None
+        Percentage changes in both errors and absolute correlation change; all
+        None if either result is unavailable.
+    """
     return (
         [
             (x / y - 1) * 100
@@ -86,14 +132,32 @@ def difference(a, b):
 
 
 def tables(bundle, output):
-    """Every primary and selected pair survives even if execution/science failed."""
+    """Every primary and selected pair survives even if execution/science failed.
+
+    Parameters
+    ----------
+    bundle : str or pathlib.Path
+        Saved validation evidence directory.
+    output : str or pathlib.Path
+        Destination directory for the generated evidence or figures.
+
+    Returns
+    -------
+    table : dict
+        All primary, individual-spectrum, sensitivity and sequential-attribution
+        rows with explicit failures.
+
+    Notes
+    -----
+    Creates a new directory and writes JSON/CSV tables plus any successful attribution arrays.
+    """
     out = Path(output)
     out.mkdir(parents=True, exist_ok=False)
     rows = {}
     diagnostics = []
     attributions = []
     pending = {}
-    for record, a in records(bundle):
+    for record, record_arrays in records(bundle):
         task = record["task"]
         key = (task["case"], task["bin"])
         if task["kind"] == "diagnostic":
@@ -110,7 +174,7 @@ def tables(bundle, output):
             )
             continue
         if key not in rows:
-            sel = selection(key[0])
+            pair_selection = selection(key[0])
             lo, hi = bins(key[0])[key[1]]
             rows[key] = dict(
                 case=key[0],
@@ -122,38 +186,47 @@ def tables(bundle, output):
                 pairs=[
                     dict(
                         pair=[int(i), int(j)],
-                        label=f"{sel.fields[i].id} x {sel.fields[j].id}",
+                        label=f"{pair_selection.fields[i].id} x {pair_selection.fields[j].id}",
                         profiles={},
                     )
-                    for i, j in sel.selected_pairs
+                    for i, j in pair_selection.selected_pairs
                 ],
             )
         row = rows[key]
-        p = task["profile"]
-        row["profiles"][p] = dict(
-            values=values(a["fisher"]) if a is not None else [None] * 3,
+        profile = task["profile"]
+        row["profiles"][profile] = dict(
+            values=values(record_arrays["fisher"])
+            if record_arrays is not None
+            else [None] * 3,
             passed=record.get("scientific_passed", False),
             metrics=record.get("report", {}).get("metrics"),
             controls=record.get("report", {}).get("final_controls"),
             error=record.get("scientific_error", record.get("error")),
         )
         for i, pair in enumerate(row["pairs"]):
-            pair["profiles"][p] = (
-                values(a["pair_fisher"][i]) if a is not None else [None] * 3
+            pair["profiles"][profile] = (
+                values(record_arrays["pair_fisher"][i])
+                if record_arrays is not None
+                else [None] * 3
             )
-        if a is not None and p == "compatibility":
+        if record_arrays is not None and profile == "compatibility":
             row["profiles"]["reference"] = dict(
-                values=values(a["reference_fisher"]), passed=True
+                values=values(record_arrays["reference_fisher"]), passed=True
             )
             for i, pair in enumerate(row["pairs"]):
-                pair["profiles"]["reference"] = values(a["reference_pair_fisher"][i])
-            pending[key] = (a, record["report"]["settings"]["grid"]["volume"])
-        elif a is not None and key in pending:
+                pair["profiles"]["reference"] = values(
+                    record_arrays["reference_pair_fisher"][i]
+                )
+            pending[key] = (
+                record_arrays,
+                record["report"]["settings"]["grid"]["volume"],
+            )
+        elif record_arrays is not None and key in pending:
             legacy, volume = pending.pop(key)
             try:
                 arrays, report = chain(
                     legacy,
-                    a,
+                    record_arrays,
                     task,
                     volume,
                     record["report"]["settings"]["grid"]["volume"],
@@ -171,17 +244,20 @@ def tables(bundle, output):
                     dict(context=task, error=str(error), complete=False)
                 )
             row["fisher_accuracy_compatibility"] = relative(
-                a["fisher"], legacy["fisher"]
+                record_arrays["fisher"], legacy["fisher"]
             )
-        if p == "accuracy":
+        if profile == "accuracy":
             for entry in [row, *row["pairs"]]:
                 profiles = entry["profiles"]
-                v = {
+                profile_values = {
                     name: (item["values"] if entry is row else item)
                     for name, item in profiles.items()
                 }
                 entry["differences"] = {
-                    f"{x}/{y}": difference(v.get(x, [None] * 3), v.get(y, [None] * 3))
+                    f"{x}/{y}": difference(
+                        profile_values.get(x, [None] * 3),
+                        profile_values.get(y, [None] * 3),
+                    )
                     for x, y in [
                         ("compatibility", "reference"),
                         ("accuracy", "reference"),
@@ -202,9 +278,9 @@ def tables(bundle, output):
     (out / "tables.json").write_text(
         json.dumps(table, indent=2, allow_nan=False) + "\n"
     )
-    with (out / "tables.csv").open("w") as f:
-        w = csv.writer(f)
-        w.writerow(
+    with (out / "tables.csv").open("w") as table_stream:
+        table_writer = csv.writer(table_stream)
+        table_writer.writerow(
             [
                 "case",
                 "bin",
@@ -221,19 +297,20 @@ def tables(bundle, output):
         )
         for row in table["rows"]:
             for entry in [row, *row["pairs"]]:
-                for p, v in entry["profiles"].items():
-                    value = v["values"] if entry is row else v
+                for profile, profile_values in entry["profiles"].items():
+                    value = profile_values["values"] if entry is row else profile_values
                     diff = entry.get("differences", {}).get(
-                        p + "/reference", [0, 0, 0] if p == "reference" else [None] * 3
+                        profile + "/reference",
+                        [0, 0, 0] if profile == "reference" else [None] * 3,
                     )
-                    w.writerow(
+                    table_writer.writerow(
                         [
                             row["case"],
                             row["bin"],
                             entry.get("label", "combined"),
-                            p,
+                            profile,
                             *value,
-                            row["profiles"].get(p, {}).get("passed", False),
+                            row["profiles"].get(profile, {}).get("passed", False),
                             *diff,
                         ]
                     )
@@ -241,23 +318,53 @@ def tables(bundle, output):
 
 
 def draw_case(plt, case, rows, pair=None):
+    """Draw one case using saved bin centres and availability flags.
+
+    Parameters
+    ----------
+    plt : module
+        Imported matplotlib.pyplot module.
+    case : str
+        Identifier of one of the seven original DESI-2 validation
+        configurations.
+    rows : list of dict
+        Checked table rows for this case, containing bounds and profile
+        comparisons.
+    pair : int or None
+        Individual-spectrum index; None draws the joint result. Default is
+        ``None``.
+
+    Returns
+    -------
+    figure : matplotlib.figure.Figure
+        Joint or individual-spectrum BAO errors, correlation and reference
+        differences.
+    """
     fig, axes = plt.subplots(2, 3, figsize=(13, 7), sharex=True)
     styles = dict(
         reference=("black", "o", "actual lyaforecast"),
         compatibility=("tab:blue", "D", "FishHighz maximum compatibility"),
         accuracy=("tab:orange", "x", "FishHighz maximum accuracy"),
     )
-    z = [r["centre"] for r in rows]
+    redshift_centres = [r["centre"] for r in rows]
     width = [(r["bounds"][1] - r["bounds"][0]) / 2 for r in rows]
     entries = [r if pair is None else r["pairs"][pair] for r in rows]
-    for p, (color, marker, label) in styles.items():
-        val = [e["profiles"].get(p, {"values": [None] * 3}) for e in entries]
-        val = [v["values"] if isinstance(v, dict) else v for v in val]
+    for profile, (color, marker, label) in styles.items():
+        val = [e["profiles"].get(profile, {"values": [None] * 3}) for e in entries]
+        val = [
+            profile_values["values"]
+            if isinstance(profile_values, dict)
+            else profile_values
+            for profile_values in val
+        ]
         for j in range(3):
-            y = [np.nan if v[j] is None else v[j] for v in val]
+            plotted_values = [
+                np.nan if profile_values[j] is None else profile_values[j]
+                for profile_values in val
+            ]
             axes[0, j].errorbar(
-                z,
-                y,
+                redshift_centres,
+                plotted_values,
                 xerr=width,
                 color=color,
                 marker=marker,
@@ -267,14 +374,14 @@ def draw_case(plt, case, rows, pair=None):
                 ms=5,
                 capsize=2,
             )
-            if p != "reference":
-                d = [
-                    e.get("differences", {}).get(p + "/reference", [None] * 3)[j]
+            if profile != "reference":
+                profile_differences = [
+                    e.get("differences", {}).get(profile + "/reference", [None] * 3)[j]
                     for e in entries
                 ]
                 axes[1, j].plot(
-                    z,
-                    [np.nan if x is None else x for x in d],
+                    redshift_centres,
+                    [np.nan if x is None else x for x in profile_differences],
                     color=color,
                     marker=marker,
                     mfc="none",
@@ -306,7 +413,24 @@ def draw_case(plt, case, rows, pair=None):
 
 
 def plot(table, output):
-    """Render only checked table values; optional Matplotlib is imported lazily."""
+    """Render only checked table values; optional Matplotlib is imported lazily.
+
+    Parameters
+    ----------
+    table : dict
+        Checked comparison table returned by tables.
+    output : str or pathlib.Path
+        Destination directory for the generated evidence or figures.
+
+    Returns
+    -------
+    manifest : dict
+        Table/source hashes and hashes of every generated figure.
+
+    Notes
+    -----
+    Selects the noninteractive Agg backend, writes PNG/PDF figures and a figure manifest, and closes created figures.
+    """
     import matplotlib
 
     matplotlib.use("Agg")
@@ -317,6 +441,19 @@ def plot(table, output):
     files = []
 
     def save(fig, name):
+        """Write both figure formats and retain their paths.
+
+        Parameters
+        ----------
+        fig : matplotlib.figure.Figure
+            Completed scientific comparison figure.
+        name : str
+            Quantity or record label used in diagnostics.
+
+        Notes
+        -----
+        Writes PNG and PDF files, appends their paths to the enclosing list, then closes the figure.
+        """
         for suffix in ("png", "pdf"):
             path = out / f"{name}.{suffix}"
             fig.savefig(path, dpi=140)
@@ -336,10 +473,10 @@ def plot(table, output):
                 plt.close(fig)
         files.append(path)
     fig, axes = plt.subplots(2, 1, figsize=(14, 8), sharex=True)
-    for p, color in [("compatibility", "tab:blue"), ("accuracy", "tab:orange")]:
+    for profile, color in [("compatibility", "tab:blue"), ("accuracy", "tab:orange")]:
         for j, ax in enumerate(axes):
             vals = [
-                r.get("differences", {}).get(p + "/reference", [None] * 3)[j]
+                r.get("differences", {}).get(profile + "/reference", [None] * 3)[j]
                 for r in table["rows"]
             ]
             ax.plot(
@@ -347,13 +484,13 @@ def plot(table, output):
                 [np.nan if x is None else x for x in vals],
                 marker="o",
                 ms=4,
-                label=p,
+                label=profile,
                 color=color,
             )
             bad = [
                 i
                 for i, r in enumerate(table["rows"])
-                if not r["profiles"].get(p, {}).get("passed")
+                if not r["profiles"].get(profile, {}).get("passed")
             ]
             ax.scatter(
                 bad,
@@ -361,7 +498,7 @@ def plot(table, output):
                 marker="x",
                 s=60,
                 color="red",
-                label="unresolved" if p == "accuracy" else None,
+                label="unresolved" if profile == "accuracy" else None,
             )
             ax.set_ylabel(("ap" if j == 0 else "at") + " change to legacy (%)")
             ax.grid(alpha=0.2)
@@ -401,10 +538,10 @@ def plot(table, output):
         axes[0].set_xlabel("bin")
         axes[0].legend(fontsize=6)
         for a in attr:
-            v = np.array(a["values"])
+            stage_values = np.array(a["values"])
             axes[1].plot(
                 range(5),
-                100 * (v[:, 0] / v[0, 0] - 1),
+                100 * (stage_values[:, 0] / stage_values[0, 0] - 1),
                 marker=".",
                 label="bin " + str(a["context"]["bin"]),
             )
@@ -422,7 +559,7 @@ def plot(table, output):
     manifest = dict(
         table_sha256=digest(out / "tables.json"),
         source_sha256=table["source_sha256"],
-        files={p.name: digest(p) for p in files},
+        files={path.name: digest(path) for path in files},
     )
     (out / "plots-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     return manifest

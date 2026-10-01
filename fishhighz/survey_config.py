@@ -47,10 +47,44 @@ class UnsupportedSchemaError(ValueError):
 
 
 def _plain_mapping(value):
+    """Copy a mapping into a read-only view.
+
+    Parameters
+    ----------
+    value : mapping or iterable of pairs
+        Configuration values to snapshot.
+
+    Returns
+    -------
+    mapping : mappingproxy
+        Read-only shallow copy of the input.
+    """
     return MappingProxyType(dict(value))
 
 
 def _float_list(value, name, minimum=1):
+    """Parse a finite comma- or whitespace-separated numeric list.
+
+    Parameters
+    ----------
+    value : str
+        Numeric tokens separated by commas or whitespace.
+    name : str
+        Configuration label for errors.
+    minimum : int, optional
+        Minimum number of entries; default 1.
+
+    Returns
+    -------
+    values : tuple of float
+        Finite values in input order, with units set by the configuration
+        option.
+
+    Raises
+    ------
+    ValueError
+        If parsing fails or too few finite values are supplied.
+    """
     try:
         tokens = value.replace(",", " ").split()
         result = np.asarray([float(token) for token in tokens], dtype=float)
@@ -66,6 +100,25 @@ def _float_list(value, name, minimum=1):
 
 
 def _tokens(value, name):
+    """Parse a nonempty list of configuration tokens.
+
+    Parameters
+    ----------
+    value : str
+        Tokens separated by commas or whitespace.
+    name : str
+        Configuration label for errors.
+
+    Returns
+    -------
+    tokens : tuple of str
+        Nonempty tokens in input order.
+
+    Raises
+    ------
+    ValueError
+        If the token list is empty.
+    """
     values = tuple(x.strip() for x in value.replace(",", " ").split() if x.strip())
     if not values:
         raise ValueError(f"{name}: require a nonempty list")
@@ -73,6 +126,29 @@ def _tokens(value, name):
 
 
 def _section_options(parser, section, allowed, required=()):
+    """Validate required and allowed options in one INI section.
+
+    Parameters
+    ----------
+    parser : configparser.ConfigParser
+        Parsed INI configuration.
+    section : str
+        Existing section to validate.
+    allowed : iterable of str
+        Supported option names.
+    required : iterable of str, optional
+        Mandatory option names; default empty.
+
+    Returns
+    -------
+    None
+        No value is returned.
+
+    Raises
+    ------
+    ValueError
+        If options are unsupported or required options are missing.
+    """
     actual = set(parser[section])
     unknown = actual - set(allowed)
     if unknown:
@@ -134,10 +210,24 @@ class SurveyConfig:
 
     @property
     def observed_fields(self):
+        """Return observed fields in configured order.
+
+        Returns
+        -------
+        fields : tuple of ObservedField
+            Ordered observed populations, including separate forest backgrounds.
+        """
         return tuple(field.observed for field in self.fields)
 
     @property
     def provenance(self):
+        """Snapshot all resolved native configuration values.
+
+        Returns
+        -------
+        provenance : mappingproxy
+            Immutable schema, input identity, model, field and bin metadata.
+        """
         return freeze(
             {
                 "schema": {"name": self.schema_name, "version": self.schema_version},
@@ -190,12 +280,39 @@ class PreparedSurvey:
 
     @property
     def bin_specs(self):
-        """Alias making the preparation boundary explicit."""
+        """Return the prepared survey bin specifications.
+
+        Returns
+        -------
+        bins : tuple of BinSpec
+            Nonempty configured bins and their prepared model/noise inputs.
+        """
 
         return self.bins
 
 
 def _read_parser(source):
+    """Read an INI and retain its exact input digest.
+
+    Parameters
+    ----------
+    source : path-like or None
+        Native INI path, or None for bundled desi2_accuracy.ini.
+
+    Returns
+    -------
+    parser : configparser.ConfigParser
+        Strict parser with interpolation disabled.
+    path : pathlib.Path or None
+        Resolved external path, or None for the package resource.
+    identity : mappingproxy
+        Stable input identifier and SHA256 digest.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the external input does not exist.
+    """
     if source is None:
         with bundled_path("desi2_accuracy.ini") as path:
             parser = configparser.ConfigParser(interpolation=None, strict=True)
@@ -225,10 +342,31 @@ def _read_parser(source):
 
 
 def parse_survey_ini(source=None):
-    """Parse and strictly validate a native FishHighz INI.
+    """Parse and strictly validate a native FishHighz survey INI.
 
-    The default source is the bundled DESI-2 accuracy recipe.  A lyaforecast
-    INI is rejected as an unsupported schema; no option translation is made.
+    Parameters
+    ----------
+    source : path-like or None, optional
+        Native INI path; None selects the bundled DESI-2 accuracy recipe.
+
+    Returns
+    -------
+    config : SurveyConfig
+        Immutable validated configuration, preserving explicit spectrum
+        selections.
+
+    Raises
+    ------
+    UnsupportedSchemaError
+        If the input is not a supported native schema.
+    ValueError
+        If options or physical/numerical domains are invalid.
+    FileNotFoundError
+        If the external INI is absent.
+
+    Notes
+    -----
+    The parser expands the selected accuracy prescription and checks supported model, input and numerical conventions. It reads no survey tables and invokes no CAMB calculation.
     """
 
     parser, path, source_identity = _read_parser(source)
@@ -260,6 +398,7 @@ def parse_survey_ini(source=None):
             f"unsupported FishHighz INI schema version {version}; supported version is {SCHEMA_VERSION}"
         )
 
+    # Expand defaults only within the explicitly selected scientific model.
     mode = parser.get("model", "mode", fallback="bao")
     full_shape = mode == "full_shape"
     bao_marginalized = mode == "bao_marginalized"
@@ -334,6 +473,7 @@ def parse_survey_ini(source=None):
             if section in parser:
                 parser[section][key] = value
 
+    # Validate section structure before reading physical and numerical controls.
     required_sections = {
         "schema",
         "cosmology",
@@ -659,12 +799,13 @@ def parse_survey_ini(source=None):
             "[numerical] weight_rtol must match [input policies] weighting_rtol"
         )
 
+    # Survey limits and quadrature controls are validated in their native units.
     edges = _float_list(parser["survey"]["z_edges"], "[survey] z_edges", 2)
     try:
         area = float(parser["survey"]["area_deg2"])
         min_mag = float(parser["survey"]["min_band_mag"])
         max_mag = float(parser["survey"]["max_band_mag"])
-        nbin = parser["survey"].getint("num_z_bins")
+        n_bins = parser["survey"].getint("num_z_bins")
         resolution = float(parser["survey"]["resolution"])
         reconstruction_factor = float(parser["survey"]["reconstruction_factor"])
         lya_rest = float(parser["survey"]["lya_rest_angstrom"])
@@ -710,7 +851,7 @@ def parse_survey_ini(source=None):
         raise ValueError(
             "[survey] magnitude limits must be finite and strictly ordered"
         )
-    if nbin < 1 or not np.isfinite(resolution) or resolution <= 0:
+    if n_bins < 1 or not np.isfinite(resolution) or resolution <= 0:
         raise ValueError(
             "[survey] num_z_bins must be positive and resolution must be positive finite"
         )
@@ -743,7 +884,7 @@ def parse_survey_ini(source=None):
         raise ValueError(
             "[input policies] weighting stopping controls have invalid domains"
         )
-    if len(edges) != nbin + 1 or any(b <= a for a, b in zip(edges[:-1], edges[1:])):
+    if len(edges) != n_bins + 1 or any(b <= a for a, b in zip(edges[:-1], edges[1:])):
         raise ValueError(
             "[survey] z_edges must contain num_z_bins+1 strictly increasing edges"
         )
@@ -754,6 +895,7 @@ def parse_survey_ini(source=None):
     if len(set(field_names)) != len(field_names):
         raise ValueError("[fields] ids must be unique")
 
+    # Field declarations distinguish source populations from physical tracers.
     allowed_field = {
         "kind",
         "physical_model",
@@ -897,6 +1039,7 @@ def parse_survey_ini(source=None):
             )
         )
 
+    # Preserve each bin selection in canonical observed-field order.
     bins = []
     ids = {field.observed.id for field in fields}
     field_order = [field.observed.id for field in fields]
@@ -962,12 +1105,53 @@ def parse_survey_ini(source=None):
 
 
 def parse_ini(source=None):
-    """Short alias for :func:`parse_survey_ini`."""
+    """Parse and strictly validate a native FishHighz survey INI.
+
+    Parameters
+    ----------
+    source : path-like or None, optional
+        Native INI path; None selects the bundled DESI-2 accuracy recipe.
+
+    Returns
+    -------
+    config : SurveyConfig
+        Immutable validated configuration, preserving explicit spectrum
+        selections.
+
+    Raises
+    ------
+    UnsupportedSchemaError
+        If the input is not a supported native schema.
+    ValueError
+        If options or physical/numerical domains are invalid.
+    FileNotFoundError
+        If the external INI is absent.
+
+    Notes
+    -----
+    The parser expands the selected accuracy prescription and checks supported model, input and numerical conventions. It reads no survey tables and invokes no CAMB calculation.
+    """
 
     return parse_survey_ini(source)
 
 
 def _resolve_resource(value, config):
+    """Classify package resources and resolve external input paths.
+
+    Parameters
+    ----------
+    value : str or path-like
+        Configured input reference.
+    config : SurveyConfig
+        Parsed native survey configuration.
+
+    Returns
+    -------
+    kind : str
+        package or external resource category.
+    path : str or pathlib.Path
+        Package-relative name or resolved external path.
+    """
     value = str(value)
     if value.startswith("package:"):
         return "package", value[len("package:") :]
@@ -977,9 +1161,41 @@ def _resolve_resource(value, config):
 
 
 def _reader_samples(field, density, snr, z_source, magnitudes, wavelength):
+    """Sample density and forest noise at the explicit source coordinates.
+
+    Parameters
+    ----------
+    field : FieldConfig
+        Observed population and instrument settings.
+    density : object
+        Density adapter exposing sample or query.
+    snr : object or None
+        Forest SNR adapter exposing sample or variance; unused for galaxies.
+    z_source : float
+        Dimensionless source redshift.
+    magnitudes : array_like
+        Magnitude nodes, shape (n_magnitude,).
+    wavelength : float
+        Observed Ly-alpha wavelength in angstrom.
+
+    Returns
+    -------
+    sample : dict
+        Density in deg^-2 redshift^-1 mag^-1 and, for forests, dimensionless
+        pixel variance; arrays have shape (n_magnitude,). Reader provenance is
+        retained.
+
+    Raises
+    ------
+    ValueError
+        If a required reader method is unavailable or reader validation fails.
+    """
     if hasattr(density, "sample"):
-        d = density.sample(z_source, magnitudes)
-        density_values, density_provenance = d["values"], d["provenance"]
+        density_sample = density.sample(z_source, magnitudes)
+        density_values, density_provenance = (
+            density_sample["values"],
+            density_sample["provenance"],
+        )
     elif hasattr(density, "query"):
         density_values = density.query(z_source, magnitudes)
         density_provenance = getattr(density, "provenance", {})
@@ -993,15 +1209,15 @@ def _reader_samples(field, density, snr, z_source, magnitudes, wavelength):
     }
     if field.observed.kind == "forest":
         if hasattr(snr, "sample"):
-            s = snr.sample(
+            snr_sample = snr.sample(
                 z_source=z_source,
                 magnitudes=magnitudes,
                 wavelength=wavelength,
                 pixel_width_angstrom=field.pixel_width_angstrom,
                 exposure_count=field.num_exposures,
             )
-            result["variance"] = np.asarray(s["values"])
-            result["snr_diagnostics"] = s["provenance"]
+            result["variance"] = np.asarray(snr_sample["values"])
+            result["snr_diagnostics"] = snr_sample["provenance"]
         elif hasattr(snr, "variance"):
             result["variance"] = np.asarray(
                 snr.variance(
@@ -1021,6 +1237,27 @@ def _reader_samples(field, density, snr, z_source, magnitudes, wavelength):
 
 
 def _background_values(background, z):
+    """Read sigma8 and logarithmic growth rate at an exact redshift.
+
+    Parameters
+    ----------
+    background : object
+        Background with scalar growth methods or exact-redshift arrays.
+    z : float
+        Dimensionless evaluation redshift.
+
+    Returns
+    -------
+    sigma8 : float
+        Dimensionless rms density fluctuation amplitude.
+    growth_rate : float
+        Dimensionless logarithmic growth rate f.
+
+    Raises
+    ------
+    ValueError
+        If exact redshift growth values cannot be obtained.
+    """
     for sigma_name, growth_name in (
         ("sigma8_at", "growth_rate_at"),
         ("sigma8", "growth_rate"),
@@ -1041,6 +1278,31 @@ def _background_values(background, z):
 
 
 def _require_scalar_match(actual, expected, name):
+    """Require agreement within a float64 roundoff allowance.
+
+    Parameters
+    ----------
+    actual : float
+        Prepared value.
+    expected : float
+        Configured reference, in the same units.
+    name : str
+        Quantity label for errors.
+
+    Returns
+    -------
+    None
+        No value is returned.
+
+    Raises
+    ------
+    ValueError
+        If inputs are not finite or differ beyond the allowance.
+
+    Notes
+    -----
+    The absolute allowance is 64*eps64 times the larger of unity and both magnitudes.
+    """
     try:
         actual, expected = float(actual), float(expected)
     except (TypeError, ValueError) as error:
@@ -1053,6 +1315,27 @@ def _require_scalar_match(actual, expected, name):
 
 
 def _require_finite_scalar(value, name, *, positive=False):
+    """Validate a finite scalar configuration value.
+
+    Parameters
+    ----------
+    value : float
+        Candidate value; units depend on the named quantity.
+    name : str
+        Quantity label for errors.
+    positive : bool, optional
+        Also require strict positivity; default False.
+
+    Returns
+    -------
+    result : float
+        Validated finite value.
+
+    Raises
+    ------
+    ValueError
+        If conversion, finiteness or requested positivity fails.
+    """
     try:
         result = float(value)
     except (TypeError, ValueError) as error:
@@ -1064,7 +1347,31 @@ def _require_finite_scalar(value, name, *, positive=False):
 
 
 def _build_readers(config, fields, stack):
-    """Build adopted density/SNR adapters while package paths are materialized."""
+    """Build density and SNR adapters from materialized resources.
+
+    Parameters
+    ----------
+    config : SurveyConfig
+        Parsed native survey configuration.
+    fields : sequence of FieldConfig
+        Ordered field configurations.
+    stack : contextlib.ExitStack
+        Context retaining materialized package resources.
+
+    Returns
+    -------
+    readers : dict
+        Density/SNR adapters keyed by observed-field ID.
+
+    Raises
+    ------
+    ValueError
+        If reader data or the density policy is unsupported.
+
+    Notes
+    -----
+    Reads configured survey tables and constructs interpolation objects with the adopted explicit compatibility policies.
+    """
 
     from .adapters.legacy_compat import LegacyDensity, LegacySNR
     from .adapters.legacy_inputs import DensityReader, SNRReader
@@ -1106,6 +1413,29 @@ def _build_readers(config, fields, stack):
 
 
 def _normalise_readers(config, fields, readers, stack):
+    """Validate supplied reader coverage or construct configured readers.
+
+    Parameters
+    ----------
+    config : SurveyConfig
+        Parsed native survey configuration.
+    fields : sequence of FieldConfig
+        Fields that must be covered exactly.
+    readers : mapping or None
+        Injected readers, or None to load configured resources.
+    stack : contextlib.ExitStack
+        Context retaining materialized package resources.
+
+    Returns
+    -------
+    normalized : dict
+        Per-field dictionaries containing density and snr adapters.
+
+    Raises
+    ------
+    ValueError
+        If injected readers do not cover exactly the configured fields.
+    """
     if readers is None:
         return _build_readers(config, fields, stack)
     if set(readers) != {field.observed.id for field in fields}:
@@ -1124,15 +1454,37 @@ def _normalise_readers(config, fields, readers, stack):
 
 
 def prepare_survey(config, *, background, template, readers=None, prepare=False):
-    """Assemble native :class:`~fishhighz.survey.BinSpec` objects from a parsed configuration.
+    """Assemble native bin geometry, spectra and noise inputs.
 
-    ``background`` and ``template`` are caller-prepared objects.  This function
-    never invokes CAMB.  ``readers`` may inject deterministic density/SNR
-    adapters; when omitted, the configured Step-1 resources are read through
-    the strict readers and explicitly named accuracy adapters.  ``prepare=True``
-    additionally runs the existing fixed-bin preparation, returning it as
-    ``PreparedSurvey.prepared_bins`` is intentionally deferred to Step 4 and
-    therefore currently rejected.
+    Parameters
+    ----------
+    config : SurveyConfig
+        Parsed native survey configuration.
+    background : object
+        Prepared background providing exact growth, geometry and normalization
+        metadata.
+    template : object
+        Prepared smooth/wiggle template with z_ref and h_fid metadata.
+    readers : mapping or None, optional
+        Density/SNR adapters keyed by field ID; None loads the configured
+        resources.
+    prepare : bool, optional
+        Reserved preparation flag; only the default False is accepted.
+
+    Returns
+    -------
+    survey : PreparedSurvey
+        Field registry, nonempty bin specifications and immutable provenance.
+
+    Raises
+    ------
+    ValueError
+        If configuration or injected inputs disagree, a numerical domain is
+        invalid, or prepare=True is requested.
+
+    Notes
+    -----
+    This function never invokes CAMB. It validates prepared background/template consistency, integrates bin geometry, constructs quadrature, and samples density/SNR inputs. Fixed covariance preparation is performed by Forecast.prepare.
     """
 
     if not isinstance(config, SurveyConfig):
@@ -1199,6 +1551,7 @@ def prepare_survey(config, *, background, template, readers=None, prepare=False)
         config.cosmology["damping_reference_redshift"],
         "background damping_reference_redshift/configured damping_reference_redshift",
     )
+    # Bind only the configured target/nuisance parameterization.
     fields = config.observed_fields
     mode = config.model.get("mode", "bao")
     full_shape = mode == "full_shape"
@@ -1252,6 +1605,8 @@ def prepare_survey(config, *, background, template, readers=None, prepare=False)
                 hubble=background.hubble_parameter,
                 transverse_distance=background.transverse_comoving_distance,
             )
+
+            # Include every category boundary explicitly in the observed k grid.
             k_min = float(config.numerical["k_min"])
             field_kinds = {field.id: field.kind for field in fields}
             category_cuts = []
@@ -1281,6 +1636,8 @@ def prepare_survey(config, *, background, template, readers=None, prepare=False)
                 mu_order=int(config.numerical["mu_order"]),
                 h_fid=float(h_fid),
             )
+
+            # Growth and damping normalizations retain distinct reference redshifts.
             selection = PairSelection(fields, bin_config.selected_pairs)
             sigma8, growth_rate = _background_values(background, z_eval)
             sigma8_template, _ = _background_values(background, float(template.z_ref))
@@ -1369,6 +1726,8 @@ def prepare_survey(config, *, background, template, readers=None, prepare=False)
                     )
                 ],
             )
+
+            # Instrument response uses the foreground absorption wavelength.
             wavelength = float(config.survey["lya_rest_angstrom"]) * (1 + z_eval)
             responses = {
                 item.observed.id: (
@@ -1385,6 +1744,8 @@ def prepare_survey(config, *, background, template, readers=None, prepare=False)
                 )
                 for item in config.fields
             }
+
+            # Forest density and SNR use the representative background-source redshift.
             z_sources = {
                 item.observed.id: (
                     wavelength
@@ -1395,12 +1756,16 @@ def prepare_survey(config, *, background, template, readers=None, prepare=False)
                 )
                 for item in config.fields
             }
-            lo = float(config.survey["min_band_mag"])
-            hi = float(config.survey["max_band_mag"])
-            partition = breakpoints(densities, snrs, z_sources, lo, hi)
+            magnitude_min = float(config.survey["min_band_mag"])
+            magnitude_max = float(config.survey["max_band_mag"])
+            partition = breakpoints(
+                densities, snrs, z_sources, magnitude_min, magnitude_max
+            )
             magnitudes, quadrature = composite(
                 partition, int(config.numerical["magnitude_order"])
             )
+
+            # Sample active populations once on the shared magnitude quadrature.
             active = set(np.unique(selection.selected_pairs).tolist())
             forests, galaxies = {}, {}
             for field_index, item in enumerate(config.fields):
@@ -1451,7 +1816,7 @@ def prepare_survey(config, *, background, template, readers=None, prepare=False)
                             "snr_policy": dict(sample["snr_diagnostics"]),
                             "input_policies": dict(config.input_policies),
                             "weighting_status": "pending_bin_preparation",
-                            "magnitude_bounds": [lo, hi],
+                            "magnitude_bounds": [magnitude_min, magnitude_max],
                             "z_source": z_sources[item.observed.id],
                         },
                     )
@@ -1497,7 +1862,35 @@ def prepare_survey(config, *, background, template, readers=None, prepare=False)
 
 
 def prepare_ini(source=None, *, background, template, readers=None):
-    """Parse ``source`` and assemble its native :class:`~fishhighz.survey.BinSpec` objects."""
+    """Parse an INI and assemble native survey bin specifications.
+
+    Parameters
+    ----------
+    source : path-like or None, optional
+        Native INI path; None selects the bundled accuracy recipe.
+    background : object
+        Prepared background providing exact growth, geometry and normalization
+        metadata.
+    template : object
+        Prepared smooth/wiggle template with z_ref and h_fid metadata.
+    readers : mapping or None, optional
+        Density/SNR adapters keyed by field ID; None loads the configured
+        resources.
+
+    Returns
+    -------
+    survey : PreparedSurvey
+        Parsed configuration and prepared model/noise bin specifications.
+
+    Raises
+    ------
+    ValueError
+        If the configuration or supplied preparation inputs are invalid.
+
+    Notes
+    -----
+    Reads configured inputs when readers are omitted; background and template must already be prepared.
+    """
 
     return prepare_survey(
         parse_survey_ini(source),

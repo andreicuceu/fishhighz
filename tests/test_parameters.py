@@ -13,6 +13,13 @@ from fishhighz.parameters import (
 
 
 def registry():
+    """Construct the parameter registry used to test scope and equality bindings.
+
+    Returns
+    -------
+    registry : ParameterRegistry
+        One target and two bin-specific nuisance parameters.
+    """
     return ParameterRegistry(
         [
             Parameter("cosmo_(f)", 0, "target"),
@@ -23,6 +30,7 @@ def registry():
 
 
 def test_scopes_order_and_chain_rule():
+    """Check scopes order and chain rule."""
     reg = registry()
     one = ParameterBinding(
         reg, ["b", "f1", "f2"], {"b": "bin_1:b", "f1": "cosmo_(f)", "f2": "cosmo_(f)"}
@@ -37,8 +45,22 @@ def test_scopes_order_and_chain_rule():
     np.testing.assert_array_equal(mapped, [[[5, 7, 0]]])
 
     def analytic(global_theta):
-        b, x, y = gather_local(global_theta, one.local_to_global)
-        return 7 * b + 2 * x + 3 * y
+        """Evaluate a linear model after gathering tied local parameters.
+
+        Parameters
+        ----------
+        global_theta : ndarray of shape (n_parameters,)
+            Global model parameters in registry order.
+
+        Returns
+        -------
+        value : float
+            Dimensionless synthetic observable for the supplied global vector.
+        """
+        local_bias, first_tied_parameter, second_tied_parameter = gather_local(
+            global_theta, one.local_to_global
+        )
+        return 7 * local_bias + 2 * first_tied_parameter + 3 * second_tied_parameter
 
     eps = 1e-5
     finite = [
@@ -58,6 +80,7 @@ def test_scopes_order_and_chain_rule():
 
 
 def test_empty_and_ownership():
+    """Check empty and ownership."""
     values = [Parameter("x", -1, "target")]
     reg = ParameterRegistry(values)
     values.clear()
@@ -96,6 +119,14 @@ def test_empty_and_ownership():
     ],
 )
 def test_parameter_errors(kwargs):
+    """Check parameter errors.
+
+    Parameters
+    ----------
+    kwargs : dict
+        Keyword arguments selecting the parametrized case, supplied by pytest
+        parametrization.
+    """
     args = dict(id="x", fiducial=0, role="target")
     args.update(kwargs)
     with pytest.raises(ValueError):
@@ -113,12 +144,28 @@ def test_parameter_errors(kwargs):
     ],
 )
 def test_binding_errors(names, ties):
+    """Check binding errors.
+
+    Parameters
+    ----------
+    names : list
+        Ordered parameter names, supplied by pytest parametrization.
+    ties : dict
+        Explicit equality bindings, supplied by pytest parametrization.
+    """
     with pytest.raises(ValueError):
         ParameterBinding(registry(), names, ties)
 
 
 @pytest.mark.parametrize("idx", [[True], [0, False], [0.0], [-1], [3], [[0]], ["0"]])
 def test_index_errors(idx):
+    """Check index errors.
+
+    Parameters
+    ----------
+    idx : list
+        Index under examination, supplied by pytest parametrization.
+    """
     with pytest.raises(ValueError):
         gather_local([0, 1, 2], idx)
     with pytest.raises(ValueError):
@@ -126,11 +173,12 @@ def test_index_errors(idx):
 
 
 def test_shape_registry_errors_and_open_bounds():
+    """Check shape registry errors and open bounds."""
     with pytest.raises(ValueError):
         ParameterRegistry([])
-    p = Parameter("x", 0, "target", (None, 1))
+    parameter = Parameter("x", 0, "target", (None, 1))
     with pytest.raises(ValueError):
-        ParameterRegistry([p, p])
+        ParameterRegistry([parameter, parameter])
     for theta in ([[1, 2]], [np.nan], [True]):
         with pytest.raises(ValueError):
             gather_local(theta, [])

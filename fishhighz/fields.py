@@ -21,6 +21,19 @@ class ObservedField:
     background: str | None = None
 
     def __post_init__(self):
+        """Validate the observed-field identity and tracer classification.
+
+        Returns
+        -------
+        None
+            Validate the initialized dataclass without changing field values.
+
+        Raises
+        ------
+        ValueError
+            If labels are empty, kind is neither galaxy nor forest, or a forest
+            lacks a valid background-source label.
+        """
         label(self.id, "field ID")
         label(self.physical_model, "physical model")
         if self.kind not in ("galaxy", "forest"):
@@ -49,6 +62,31 @@ class PairSelection:
     jm: np.ndarray = field(repr=False)
 
     def __init__(self, fields, selected=None):
+        """Prepare the selected spectra and their Gaussian covariance dependencies.
+
+        Parameters
+        ----------
+        fields : iterable of ObservedField
+            Nonempty ordered field definitions with unique identifiers.
+        selected : iterable of pairs, optional
+            Pairs of field IDs or integer indices, in the desired observable order.
+            Default None selects every canonical auto- and cross-spectrum.
+
+        Returns
+        -------
+        None
+            Store fields and owned, read-only int64 pair and covariance lookup arrays.
+
+        Raises
+        ------
+        ValueError
+            If field identities or selected pairs are empty, duplicated, or invalid.
+
+        Notes
+        -----
+        Canonicalizing a pair does not change the order of selected observables.
+        Unselected spectra needed by Gaussian covariance remain in required_pairs.
+        """
         fields = tuple(fields)
         if not fields or any(not isinstance(f, ObservedField) for f in fields):
             raise ValueError("fields must be nonempty ObservedField records")

@@ -7,6 +7,7 @@ from fishhighz.grids import IntegrationGrid, gauss_legendre_grid
 
 
 def test_polynomial_moments_mode_volume_and_order():
+    """Check polynomial moments mode volume and order."""
     edges = [0.1, 0.23, 0.8]
     grid = gauss_legendre_grid(edges, k_order=3, mu_order=4, h_fid=0.67)
     assert (grid.n_k, grid.n_mu) == (6, 4)
@@ -33,6 +34,18 @@ def test_polynomial_moments_mode_volume_and_order():
 
 
 def custom(**changes):
+    """Construct a small custom Fourier quadrature with explicit overrides.
+
+    Parameters
+    ----------
+    **changes : dict
+        IntegrationGrid overrides for k in h/Mpc, mu, quadrature weights, fixed k cuts, and fiducial h.
+
+    Returns
+    -------
+    grid : IntegrationGrid
+        Two radial nodes in h/Mpc and three dimensionless angular nodes.
+    """
     args = dict(
         k=[1.0, 2.0],
         w_k=[0.5, 0.5],
@@ -47,10 +60,11 @@ def custom(**changes):
 
 
 def test_custom_rule_ownership_and_reference_h():
-    k = np.array([1.0, 2.0])
+    """Check custom rule ownership and reference h."""
+    k_grid = np.array([1.0, 2.0])
     weights = [0.5, 0.5]
-    grid = custom(k=k, w_k=weights)
-    k[0], weights[0] = 1.2, 0.9
+    grid = custom(k=k_grid, w_k=weights)
+    k_grid[0], weights[0] = 1.2, 0.9
     assert grid.k.tolist() == [1, 2]
     assert grid.w_k.tolist() == [0.5, 0.5]
     np.testing.assert_allclose(grid.k @ grid.w_k, 1.5)
@@ -98,6 +112,14 @@ def test_custom_rule_ownership_and_reference_h():
     ],
 )
 def test_custom_errors(changes):
+    """Check custom errors.
+
+    Parameters
+    ----------
+    changes : dict
+        Fixture modifications defining this case, supplied by pytest
+        parametrization.
+    """
     with pytest.raises(ValueError):
         custom(**changes)
 
@@ -117,11 +139,23 @@ def test_custom_errors(changes):
     ],
 )
 def test_factory_errors(edges, ko, mo):
+    """Check factory errors.
+
+    Parameters
+    ----------
+    edges : list
+        Wavenumber-bin edges, supplied by pytest parametrization.
+    ko : bool or int
+        Radial quadrature order, supplied by pytest parametrization.
+    mo : int or float
+        Angular quadrature order, supplied by pytest parametrization.
+    """
     with pytest.raises(ValueError):
         gauss_legendre_grid(edges, k_order=ko, mu_order=mo, h_fid=0.7)
 
 
 def test_unrepresentable_interior_nodes():
+    """Check unrepresentable interior nodes."""
     with pytest.raises(ValueError, match="interior"):
         gauss_legendre_grid(
             [1.0, np.nextafter(1.0, 2.0)], k_order=1, mu_order=1, h_fid=0.7

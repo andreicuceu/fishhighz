@@ -16,6 +16,7 @@ spec.loader.exec_module(s4)
 
 
 def test_direct_legacy_peak_recovers_native_signed_estimator():
+    """Check direct legacy peak recovers native signed estimator."""
     direct = s4.Direct.__new__(s4.Direct)
     direct.ka = np.linspace(0.01, 0.5, 500)
     direct.pairs = [(0, 0), (0, 1)]
@@ -42,6 +43,7 @@ def test_direct_legacy_peak_recovers_native_signed_estimator():
 
 
 def test_cross_width_mean_retains_auto_limits():
+    """Check cross width mean retains auto limits."""
     direct = s4.Direct.__new__(s4.Direct)
     direct.fields = [SimpleNamespace(kind="forest"), SimpleNamespace(kind="galaxy")]
     direct.pairs = [(0, 0), (0, 1), (1, 1)]
@@ -58,6 +60,7 @@ def test_cross_width_mean_retains_auto_limits():
 
 
 def test_response_width_conventions_against_explicit_gaussian_sinc():
+    """Check response width conventions against explicit gaussian sinc."""
     direct = s4.Direct.__new__(s4.Direct)
     direct.active = [0]
     direct.fields = [SimpleNamespace(kind="forest", id="forest")]
@@ -75,11 +78,11 @@ def test_response_width_conventions_against_explicit_gaussian_sinc():
             "_res_kms": 299800.0 / 3000,
         }
     }
-    k = np.array([0.03, 0.1, 0.3])
-    mu = np.array([0.3, 0.6, 0.9])
-    q = k * mu / 100.0
+    k_grid = np.array([0.03, 0.1, 0.3])
+    mu_grid = np.array([0.3, 0.6, 0.9])
+    velocity_k = k_grid * mu_grid / 100.0
     for physical in (False, True):
-        c = {
+        response_controls = {
             **s4.FIXED,
             "response": physical,
             "constants": physical,
@@ -87,8 +90,12 @@ def test_response_width_conventions_against_explicit_gaussian_sinc():
         }
         speed = 299792.458 if physical else 299800.0
         sigma = speed / 3000 / (np.sqrt(8 * np.log(2)) if physical else 1)
-        argument = q * speed / (1215.67 * 3.4) / 2
-        expected = (np.sin(argument) / argument) ** 2 * np.exp(-((q * sigma) ** 2))
+        argument = velocity_k * speed / (1215.67 * 3.4) / 2
+        expected = (np.sin(argument) / argument) ** 2 * np.exp(
+            -((velocity_k * sigma) ** 2)
+        )
         np.testing.assert_allclose(
-            direct.response(k, mu, 2.4, c)[:, 0], expected, rtol=5e-15
+            direct.response(k_grid, mu_grid, 2.4, response_controls)[:, 0],
+            expected,
+            rtol=5e-15,
         )

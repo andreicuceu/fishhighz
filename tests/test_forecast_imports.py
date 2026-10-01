@@ -66,6 +66,7 @@ print('NumPy-only two-bin/scalar and normalized forest oracles passed; both miss
 
 
 def test_blocked_optional_multi_bin():
+    """Check blocked optional multi bin."""
     result = subprocess.run(
         [sys.executable, "-I", "-c", BASE_PROGRAM],
         capture_output=True,
@@ -81,6 +82,7 @@ def test_blocked_optional_multi_bin():
 
 
 def test_raw_example():
+    """Check raw example."""
     import runpy
     from pathlib import Path
 

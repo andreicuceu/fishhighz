@@ -58,14 +58,40 @@ for count in (4, 8, 15):
 
 
 def write_json(path, value):
-    """Write strict JSON for the controller."""
+    """Write strict JSON for the synthetic capture controller.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Path of the temporary test artifact to read or write.
+    value : object
+        JSON-serializable value written to the temporary artifact.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, allow_nan=False) + "\n")
 
 
 def array(values, dtype="float64", shape=None):
-    """Return a typed-array JSON node."""
+    """Encode numerical values as a typed-array JSON node.
+
+    Parameters
+    ----------
+    values : list
+        Numerical values stored in the typed-array JSON representation.
+    dtype : str, optional
+        NumPy dtype name stored in the typed-array JSON representation. Default
+        is 'float64'.
+    shape : sequence of int or None, optional
+        Serialized array dimensions; None uses a one-dimensional shape. Default
+        is None.
+
+    Returns
+    -------
+    encoded : dict
+        Array kind, dtype, shape, and values in the capture serialization
+        format.
+    """
     return {
         "kind": "ndarray",
         "dtype": dtype,
@@ -75,7 +101,19 @@ def array(values, dtype="float64", shape=None):
 
 
 def forecast(selected):
-    """Return one selected or zero-filled pair result."""
+    """Build dimensionless AP constraints for a selected or omitted pair.
+
+    Parameters
+    ----------
+    selected : bool
+        Whether the pair is included in the selected observable set.
+
+    Returns
+    -------
+    encoded : dict
+        Serialized two-bin AP errors and correlations; omitted pairs contain
+        zeros.
+    """
     values = [0.1, 0.2] if selected else [0.0, 0.0]
     correlations = [-0.2, 0.3] if selected else [0.0, 0.0]
     return {
@@ -89,7 +127,20 @@ def forecast(selected):
 
 
 def result(case, role):
-    """Return a complete synthetic result for one authoritative case."""
+    """Build synthetic results with the authoritative pair inventory.
+
+    Parameters
+    ----------
+    case : str
+        Authoritative forecast-case identifier.
+    role : str
+        Capture role used to select repeat or quick-run mutations.
+
+    Returns
+    -------
+    encoded : dict
+        Serialized redshifts, per-pair constraints, and combined AP constraints.
+    """
     pairs, count, _ = CASE_PAIRS[case]
     selected = pairs[:count]
     items = [
@@ -127,7 +178,18 @@ def result(case, role):
 
 
 def read_config(path):
-    """Read a test INI without interpolation."""
+    """Read a synthetic INI while preserving case and disabling interpolation.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Path of the temporary test artifact to read or write.
+
+    Returns
+    -------
+    config : configparser.ConfigParser
+        Parsed test configuration.
+    """
     parser = configparser.ConfigParser(interpolation=None)
     parser.optionxform = str
     parser.read(path)
@@ -135,7 +197,19 @@ def read_config(path):
 
 
 def resolve(args):
-    """Resolve fixture paths under the synthetic reference checkout."""
+    """Resolve resource paths inside the temporary synthetic checkout.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed paths for the configuration and synthetic reference checkout.
+
+    Returns
+    -------
+    resolution : dict
+        Configuration, resolver, and input paths reported to the capture
+        controller.
+    """
     config = read_config(args.config)
     requests = [("cosmo", "filename", "file")]
     for section in config.sections():
@@ -167,7 +241,25 @@ def resolve(args):
 
 
 def run(args):
-    """Create the artifacts normally emitted by the real scientific worker."""
+    """Write the artifacts emitted by a synthetic forecast worker.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Parsed request and synthetic reference-checkout paths.
+
+    Returns
+    -------
+    status : dict
+        Round-trip status, fixed synthetic timings in seconds, module path, and
+        thread settings.
+
+    Raises
+    ------
+    RuntimeError
+        Deliberately raised to exercise the rejection path in the enclosing
+        test.
+    """
     request = json.loads(args.request.read_text())
     case = request["case"]
     if (
@@ -240,7 +332,7 @@ def run(args):
 
 
 def main():
-    """Run one stub worker action."""
+    """Parse and execute one synthetic capture-worker action."""
     parser = argparse.ArgumentParser()
     parser.add_argument("action", choices=("probe", "resolve", "run"))
     parser.add_argument("--reference-checkout", required=True, type=Path)

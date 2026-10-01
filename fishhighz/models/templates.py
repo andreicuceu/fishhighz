@@ -21,6 +21,25 @@ _ROUNDOFF = 64 * np.finfo(np.float64).eps
 
 
 def _positive(value, name):
+    """Validate a finite positive template scalar.
+
+    Parameters
+    ----------
+    value : float
+        Scalar value in the named quantity's units.
+    name : str
+        Quantity label used in errors.
+
+    Returns
+    -------
+    value : float
+        Validated scalar in unchanged units.
+
+    Raises
+    ------
+    ValueError
+        If the value is not a finite positive real scalar.
+    """
     result = scalar(value, name)
     if result <= 0:
         raise ValueError(f"{name} must be positive")
@@ -28,6 +47,25 @@ def _positive(value, name):
 
 
 def _redshift(value, name):
+    """Validate a finite nonnegative template redshift.
+
+    Parameters
+    ----------
+    value : float
+        Dimensionless template redshift.
+    name : str
+        Quantity label used in errors.
+
+    Returns
+    -------
+    redshift : float
+        Validated dimensionless redshift.
+
+    Raises
+    ------
+    ValueError
+        If the redshift is invalid.
+    """
     result = scalar(value, name)
     if result < 0:
         raise ValueError(f"{name} must be nonnegative")
@@ -35,10 +73,40 @@ def _redshift(value, name):
 
 
 def _agrees(a, b):
+    """Compare scalar metadata using the established roundoff tolerance.
+
+    Parameters
+    ----------
+    a, b : float
+        Values in the same unit convention.
+
+    Returns
+    -------
+    agrees : bool
+        Whether abs(a-b) <= 64*eps64*max(1, abs(a), abs(b)).
+    """
     return abs(a - b) <= _ROUNDOFF * max(1.0, abs(a), abs(b))
 
 
 def _metadata(values):
+    """Copy scalar template provenance into an immutable mapping.
+
+    Parameters
+    ----------
+    values : mapping or None
+        String keys with plain finite scalar, string, Boolean, or None values;
+        None produces an empty mapping.
+
+    Returns
+    -------
+    metadata : types.MappingProxyType
+        Copied provenance with NumPy scalar values converted to Python scalars.
+
+    Raises
+    ------
+    ValueError
+        If keys or values violate the plain finite-scalar contract.
+    """
     output = {}
     for key, value in ({} if values is None else values).items():
         if not isinstance(key, str):
@@ -81,7 +149,14 @@ class PowerTemplate:
 
     @property
     def domain(self):
-        """Closed converted domain in h_fid/Mpc, not forecast scale cuts."""
+        """Return the closed converted wavenumber domain of the template.
+
+        Returns
+        -------
+        domain : tuple of float
+            Minimum and maximum template wavenumbers in h_fid/Mpc; these do not set
+            forecast cuts.
+        """
         return float(self.k[0]), float(self.k[-1])
 
     def evaluate(self, k, *, derivative=0, z=None, growth=None):
@@ -92,7 +167,7 @@ class PowerTemplate:
         k : array_like
             Nonempty 1D positive finite queries in h_fid/Mpc, in any order.
             The closed converted domain is enforced before logarithms.
-        derivative : {0, 1}
+        derivative : {0, 1}, default=0
             0 returns power in (Mpc/h_fid)^3; 1 returns its derivative with
             respect to k (not ln(k)), in (Mpc/h_fid)^4.
         z : float, optional
@@ -101,6 +176,18 @@ class PowerTemplate:
             Explicit positive power factor G=[D(z)/D(z_ref)]^2, applied once.
             Required away from z_ref. At z_ref require unity within
             64*eps64*max(1,abs(G)); no other growth inference is performed.
+
+        Returns
+        -------
+        values : ndarray of shape (n_node, 2)
+            Owned float64 smooth and signed wiggle components, in (Mpc/h_fid)^3
+            for power or (Mpc/h_fid)^4 for dP/dk.
+
+        Raises
+        ------
+        ValueError
+            If the query, derivative order, redshift, growth factor, or represented
+            output is invalid. Queries outside the closed template domain fail.
         """
         derivative = integer(derivative, "derivative")
         if derivative not in (0, 1):
@@ -158,6 +245,14 @@ def prepare_template(k, pk, pksb, *, z_ref, h_template, h_fid, metadata=None):
         Owned source/converted arrays and coefficients. Component order is
         (smooth,wiggle), with wiggle=PK-PKSB. Neither amplitude is logged.
         SciPy is needed here only; repeated evaluation requires just NumPy.
+
+    Raises
+    ------
+    ImportError
+        If the optional SciPy spline-preparation dependency is unavailable.
+    ValueError
+        If source samples, metadata, h-unit conversion, or spline coefficients
+        are invalid or unrepresentable.
     """
     z_ref = _redshift(z_ref, "z_ref")
     h_template, h_fid = _positive(h_template, "h_template"), _positive(h_fid, "h_fid")
@@ -230,6 +325,34 @@ def prepare_template(k, pk, pksb, *, z_ref, h_template, h_fid, metadata=None):
 
 
 def _required_metadata(header, key, explicit, *, divisor=1.0, positive=False):
+    """Reconcile explicit template metadata with the corresponding FITS header.
+
+    Parameters
+    ----------
+    header : mapping
+        Metadata from the PK binary-table header.
+    key : str
+        Header keyword, normally ZREF or H0.
+    explicit : float or None
+        Optional explicit dimensionless z_ref or h_template, already in output
+        units.
+    divisor : float, default=1.0
+        Factor dividing the header value; 100 converts H0 in km/s/Mpc to
+        dimensionless h.
+    positive : bool, default=False
+        Require strict positivity when True, otherwise a nonnegative redshift.
+
+    Returns
+    -------
+    value : float
+        Validated metadata value; consistent header values take precedence.
+
+    Raises
+    ------
+    ValueError
+        If both values are absent, either is invalid, or explicit and header
+        metadata disagree beyond roundoff.
+    """
     validate = _positive if positive else _redshift
     original = None
     if key in header:
@@ -252,6 +375,25 @@ def _required_metadata(header, key, explicit, *, divisor=1.0, positive=False):
 
 
 def _check_unit(name, unit):
+    """Check FITS column units against the bounded Vega spelling convention.
+
+    Parameters
+    ----------
+    name : str
+        Column name K, PK, or PKSB.
+    unit : str or None
+        FITS TUNIT value; None implies the documented Vega convention.
+
+    Returns
+    -------
+    None
+        Accept supported h/Mpc or (Mpc/h)^3 spellings without unit conversion.
+
+    Raises
+    ------
+    ValueError
+        If the supplied unit is unsupported or inconsistent with the column.
+    """
     if unit is None:
         return
     # Deliberately bounded spelling table: no physical-Mpc or general conversions.
@@ -278,6 +420,38 @@ def _check_unit(name, unit):
 def load_template(path, *, h_fid, z_ref=None, h_template=None):
     """Load the unique Vega PK binary table from a local file snapshot.
 
+    Parameters
+    ----------
+    path : str or pathlib.Path
+        Local FITS file containing a unique PK binary table with K, PK, and PKSB
+        columns.
+    h_fid : float
+        Positive dimensionless fiducial Hubble parameter defining forecast
+        units.
+    z_ref : float, optional
+        Dimensionless template reference redshift; default None reads table
+        ZREF.
+    h_template : float, optional
+        Positive dimensionless source h; default None reads table H0/100.
+
+    Returns
+    -------
+    template : PowerTemplate
+        Prepared signed template in fiducial h units, with source path, SHA-256,
+        and header provenance.
+
+    Raises
+    ------
+    ImportError
+        If optional Astropy or SciPy preparation dependencies are unavailable.
+    FileNotFoundError
+        If the supplied local path does not exist.
+    ValueError
+        If FITS structure, units, metadata, source samples, or spline
+        preparation is invalid.
+
+    Notes
+    -----
     Hash and parse the same bytes; retain resolved path/SHA-256 and plain header
     values after closing the file. Table ZREF/H0 supply z_ref/h_template=H0/100.
     Explicit inputs fill missing metadata; contradictions fail at

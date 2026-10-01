@@ -111,15 +111,67 @@ class Background:
     sigma8_damping_reference = 0.8
 
     def sigma8_at(self, redshift):
+        """Return the synthetic sigma8.
+
+        Parameters
+        ----------
+        redshift : float or ndarray
+            Dimensionless evaluation redshift; arrays retain their input shape.
+
+        Returns
+        -------
+        values : float or ndarray
+            Synthetic sigma8 in dimensionless units, matching the query or stored-
+            redshift shape.
+        """
         return 0.8
 
     def growth_rate_at(self, redshift):
+        """Return the synthetic logarithmic growth rate.
+
+        Parameters
+        ----------
+        redshift : float or ndarray
+            Dimensionless evaluation redshift; arrays retain their input shape.
+
+        Returns
+        -------
+        values : float or ndarray
+            Synthetic logarithmic growth rate in dimensionless units, matching the
+            query or stored-redshift shape.
+        """
         return 0.8
 
     def hubble_parameter(self, redshift):
+        """Return the synthetic Hubble parameter.
+
+        Parameters
+        ----------
+        redshift : float or ndarray
+            Dimensionless evaluation redshift; arrays retain their input shape.
+
+        Returns
+        -------
+        values : float or ndarray
+            Synthetic Hubble parameter in km/s/Mpc, matching the query or stored-
+            redshift shape.
+        """
         return np.full(np.asarray(redshift).shape, 100.0)
 
     def transverse_comoving_distance(self, redshift):
+        """Return the synthetic transverse comoving distance.
+
+        Parameters
+        ----------
+        redshift : float or ndarray
+            Dimensionless evaluation redshift; arrays retain their input shape.
+
+        Returns
+        -------
+        values : float or ndarray
+            Synthetic transverse comoving distance in Mpc, matching the query or
+            stored-redshift shape.
+        """
         return np.full(np.asarray(redshift).shape, 1000.0)
 
 
@@ -127,17 +179,45 @@ class Density:
     magnitudes = np.array([16.1, 20.0, 26.75])
 
     def sample(self, redshift, magnitudes):
+        """Return unit differential density at each requested magnitude.
+
+        Parameters
+        ----------
+        redshift : float
+            Dimensionless source redshift; the synthetic density is independent of
+            redshift.
+        magnitudes : array_like of shape (n_magnitudes,)
+            Apparent-magnitude samples.
+
+        Returns
+        -------
+        sample : dict
+            Unit density values of shape (n_magnitudes,) in deg^-2 redshift^-1
+            mag^-1 and synthetic provenance.
+        """
         return {"values": np.ones(len(magnitudes)), "provenance": {"synthetic": True}}
 
 
 def inputs(tmp_path):
+    """Write a minimal survey INI and prepare injected synthetic survey inputs.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory supplied by pytest for generated inputs and results.
+
+    Returns
+    -------
+    fixture : tuple
+        INI path, PowerTemplate, and density-reader mapping.
+    """
     source = tmp_path / "survey.ini"
     source.write_text(INI)
-    k = np.linspace(0.001, 1.0, 20)
+    k_grid = np.linspace(0.001, 1.0, 20)
     template = prepare_template(
-        k,
-        np.ones_like(k),
-        np.full_like(k, 0.5),
+        k_grid,
+        np.ones_like(k_grid),
+        np.full_like(k_grid, 0.5),
         z_ref=2.406,
         h_template=0.7,
         h_fid=0.7,
@@ -149,10 +229,37 @@ def inputs(tmp_path):
 def test_forecast_parsing_is_lazy_and_prepare_accepts_injected_factories(
     tmp_path, monkeypatch
 ):
+    """Check forecast parsing is lazy and prepare accepts injected factories.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that restores patched callables, attributes, and environment
+        variables after the test.
+    """
     source, template, readers = inputs(tmp_path)
     calls = []
 
     def factory(config):
+        """Record the configuration and return a synthetic background.
+
+        Parameters
+        ----------
+        config : SurveyConfig
+            Parsed survey configuration used to build synthetic input factories.
+
+        Returns
+        -------
+        background : Background
+            Constant synthetic growth and distance provider.
+
+        Notes
+        -----
+        Appends to the enclosing test call log so provider dispatch can be checked.
+        """
         calls.append(config.schema_name)
         return Background()
 
@@ -174,6 +281,17 @@ def test_forecast_parsing_is_lazy_and_prepare_accepts_injected_factories(
 
 
 def test_bundled_recipe_name_is_resolved_without_cwd_file(tmp_path, monkeypatch):
+    """Check bundled recipe name is resolved without cwd file.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that restores patched callables, attributes, and environment
+        variables after the test.
+    """
     monkeypatch.chdir(tmp_path)
     forecast = Forecast("desi2_accuracy.ini")
     assert forecast.config.path is None
@@ -189,6 +307,17 @@ def test_bundled_recipe_name_is_resolved_without_cwd_file(tmp_path, monkeypatch)
 
 
 def test_forecast_run_retains_fisher_results_and_own_covariance(tmp_path, monkeypatch):
+    """Check forecast run retains fisher results and own covariance.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that restores patched callables, attributes, and environment
+        variables after the test.
+    """
     source, template, readers = inputs(tmp_path)
     forecast = Forecast(
         source, background=Background(), template=template, readers=readers
@@ -197,6 +326,18 @@ def test_forecast_run_retains_fisher_results_and_own_covariance(tmp_path, monkey
     selected_lengths = []
 
     def checked(spec):
+        """Record the selected-spectrum count and prepare the bin.
+
+        Parameters
+        ----------
+        spec : BinSpec
+            Synthetic survey bin passed to the original preparation routine.
+
+        Returns
+        -------
+        prepared : PreparedBin
+            Bin returned by the original preparation routine.
+        """
         selected_lengths.append(len(spec.p3d.selection.selected_pairs))
         return original(spec)
 
@@ -236,11 +377,32 @@ def test_forecast_run_retains_fisher_results_and_own_covariance(tmp_path, monkey
 
 
 def test_pair_spec_remaps_packed_full_noise_to_new_required_pairs():
+    """Check pair spec remaps packed full noise to new required pairs."""
     registry = ParameterRegistry([Parameter("A", 1.0, "target", step=0.01)])
     fields = tuple(ObservedField(name, "galaxy", name) for name in ("a", "b", "c"))
     selection = PairSelection(fields)
 
     def model(theta, redshift, k, mu, pairs):
+        """Evaluate the synthetic spectrum used by the enclosing regression test.
+
+        Parameters
+        ----------
+        theta : ndarray of shape (n_parameters,)
+            Local model parameters in the provider binding order.
+        redshift : float or ndarray
+            Dimensionless evaluation redshift; arrays retain their input shape.
+        k : ndarray of shape (n_nodes,)
+            Comoving wavenumbers in h/Mpc.
+        mu : ndarray of shape (n_nodes,)
+            Dimensionless line-of-sight direction cosines.
+        pairs : ndarray of int, shape (n_pairs, 2)
+            Observed-field indices defining the requested spectra.
+
+        Returns
+        -------
+        power : ndarray of shape (n_nodes, n_pairs)
+            Synthetic intrinsic power in (Mpc/h)^3 before response and noise.
+        """
         return np.full((len(k), len(pairs)), theta[0])
 
     binding = BoundParameters(registry, ("A",), {"A": "A"})
@@ -275,6 +437,7 @@ def test_pair_spec_remaps_packed_full_noise_to_new_required_pairs():
 
 
 def test_convergence_serialization_retains_solver_diagnostics():
+    """Check convergence serialization retains solver diagnostics."""
     from fishhighz.public import _convergence
 
     diagnostics = {
@@ -301,19 +464,55 @@ def test_convergence_serialization_retains_solver_diagnostics():
 
 
 def test_public_cli_uses_forecast_result_save(tmp_path, monkeypatch):
+    """Check public cli uses forecast result save.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that restores patched callables, attributes, and environment
+        variables after the test.
+    """
     from fishhighz import cli
 
     saved = []
 
     class FakeResult:
         def save(self, path):
+            """Record the requested output path without writing forecast data.
+
+            Parameters
+            ----------
+            path : pathlib.Path
+                Path of the temporary test artifact to read or write.
+            """
             saved.append(path)
 
     class FakeForecast:
         def __init__(self, source):
+            """Initialize the synthetic FakeForecast fixture.
+
+            Parameters
+            ----------
+            source : pathlib.Path
+                Path to the synthetic survey configuration.
+
+            Notes
+            -----
+            Sets the instance state used by the enclosing test; no scientific calculation is run.
+            """
             assert source == "input.ini"
 
         def run(self):
+            """Return the synthetic public forecast result and record the call where required.
+
+            Returns
+            -------
+            result : FakeResult
+                Placeholder forecast result used to test delegation and saving.
+            """
             return FakeResult()
 
     monkeypatch.setattr(cli, "Forecast", FakeForecast)
@@ -322,6 +521,14 @@ def test_public_cli_uses_forecast_result_save(tmp_path, monkeypatch):
 
 
 def test_saved_inputs_survive_deleted_ini_and_distinguish_injection(tmp_path):
+    """Check saved inputs survive deleted ini and distinguish injection.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     import hashlib
 
     source, template, readers = inputs(tmp_path)
@@ -346,6 +553,7 @@ def test_saved_inputs_survive_deleted_ini_and_distinguish_injection(tmp_path):
 
 
 def test_configured_readers_capture_all_source_hashes():
+    """Check configured readers capture all source hashes."""
     import hashlib
     from contextlib import ExitStack
 
@@ -386,6 +594,17 @@ def test_configured_readers_capture_all_source_hashes():
 
 
 def test_default_cosmology_and_template_input_hashes(tmp_path, monkeypatch):
+    """Check default cosmology and template input hashes.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that restores patched callables, attributes, and environment
+        variables after the test.
+    """
     import hashlib
     from contextlib import ExitStack
 
@@ -423,9 +642,31 @@ def test_default_cosmology_and_template_input_hashes(tmp_path, monkeypatch):
 
 
 def test_supplied_instances_take_precedence_over_factories(tmp_path):
+    """Check supplied instances take precedence over factories.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     source, template, readers = inputs(tmp_path)
 
     def unused(*args):
+        """Fail if a supposedly frozen or unused operation is invoked.
+
+        Parameters
+        ----------
+        *args : tuple
+            Positional arguments forwarded to the original callable or accepted by
+            the test callback.
+
+        Raises
+        ------
+        AssertionError
+            Deliberately raised to exercise the rejection path in the enclosing
+            test.
+        """
         raise AssertionError("factory must not replace an explicit input")
 
     prepared = Forecast(
@@ -443,6 +684,14 @@ def test_supplied_instances_take_precedence_over_factories(tmp_path):
 
 
 def test_saved_exposure_and_bias_settings(tmp_path):
+    """Check saved exposure and bias settings.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     source, template, readers = inputs(tmp_path)
     text = INI.replace(
         "[field qso]\nkind = galaxy\nphysical_model = qso\ntracer = qso",
@@ -459,6 +708,21 @@ def test_saved_exposure_and_bias_settings(tmp_path):
         magnitudes = Density.magnitudes
 
         def sample(self, **kwargs):
+            """Return unit pixel SNR at each requested magnitude.
+
+            Parameters
+            ----------
+            **kwargs : dict
+                Sampling keywords from SNRReader, including magnitudes of shape
+                (n_magnitudes,), source redshift, wavelength in Angstrom, pixel width in
+                Angstrom, and exposure count.
+
+            Returns
+            -------
+            sample : dict
+                Dimensionless SNR values of shape (n_magnitudes,) and synthetic
+                provenance.
+            """
             return {"values": np.ones(len(kwargs["magnitudes"])), "provenance": {}}
 
     readers["qso"]["snr"] = SNR()
@@ -474,6 +738,14 @@ def test_saved_exposure_and_bias_settings(tmp_path):
 
 
 def test_reader_digest_is_not_recomputed_when_saving(tmp_path):
+    """Check reader digest is not recomputed when saving.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     import hashlib
 
     source, template, readers = inputs(tmp_path)

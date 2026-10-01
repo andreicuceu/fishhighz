@@ -18,7 +18,35 @@ DEFAULT = dict(
 
 
 def study(self, task, *, payload_factory=OrderedDict):
-    """Bounded isolated/combined convergence; unresolved controls never pass."""
+    """Bounded isolated/combined convergence; unresolved controls never pass.
+
+    Parameters
+    ----------
+    task : dict
+        Declared case, bin, selected field pairs, parameter order and validation
+        thresholds.
+    payload_factory : callable
+        Zero-argument factory for the bounded ordered payload cache. Default is
+        ``OrderedDict``.
+
+    Returns
+    -------
+    arrays : dict of str to ndarray
+        Final scientific payload and every successful trial summary.
+    report : dict
+        Actual refinement levels, convergence metrics, trial identities and
+        unresolved failures.
+
+    Raises
+    ------
+    ValueError :
+        If inputs, declared identities or numerical validation conditions are
+        inconsistent.
+
+    Notes
+    -----
+    Runs only the declared finite refinement sequence, records failures and clears the recipe preparation cache before returning.
+    """
     method = getattr(self, "weight_method", "legacy")
     if method not in ("legacy", "inverse_variance", "early_lyaforecast", "mcdonald"):
         raise ValueError("unknown accuracy forest-weight method")
@@ -39,6 +67,25 @@ def study(self, task, *, payload_factory=OrderedDict):
     retained_key = None
 
     def evaluate(c):
+        """Evaluate one declared refinement, retaining its identity and outcome.
+
+        Parameters
+        ----------
+        c : dict
+            Quadrature orders, grid subdivisions, derivative step and applicable
+            forest-weight convergence controls.
+
+        Returns
+        -------
+        arrays : dict of str to ndarray
+            Numerical payload for the requested controls.
+        report : dict
+            Settings and scientific metadata from the same evaluation.
+
+        Notes
+        -----
+        Updates the enclosing bounded cache, trial summaries and attempted-outcome inventory.
+        """
         key = tuple(sorted(c.items()))
         if key in payloads:
             payloads.move_to_end(key)
@@ -47,7 +94,7 @@ def study(self, task, *, payload_factory=OrderedDict):
 
         identity = trial_id(c)
         try:
-            a, r = self.evaluate(task, c)
+            trial_arrays, trial_report = self.evaluate(task, c)
         except (ValueError, FloatingPointError) as error:
             outcomes.setdefault(
                 identity,
@@ -64,10 +111,10 @@ def study(self, task, *, payload_factory=OrderedDict):
             ),
         )
         if adaptive:
-            outcomes[identity]["forest_weighting"] = r.get("settings", {}).get(
-                "forest_weighting", {}
-            )
-        payloads[key] = (a, r)
+            outcomes[identity]["forest_weighting"] = trial_report.get(
+                "settings", {}
+            ).get("forest_weighting", {})
+        payloads[key] = (trial_arrays, trial_report)
         while len(payloads) > 3:
             # Preserve the current selected control candidate, so later
             # lower-level comparisons cannot evict its final payload.
@@ -77,21 +124,49 @@ def study(self, task, *, payload_factory=OrderedDict):
         if key not in trials:
             trials[key] = (
                 dict(
-                    fisher=a["fisher"],
-                    pair_fisher=a["pair_fisher"],
-                    volume=r["settings"]["grid"]["volume"],
+                    fisher=trial_arrays["fisher"],
+                    pair_fisher=trial_arrays["pair_fisher"],
+                    volume=trial_report["settings"]["grid"]["volume"],
                 ),
                 dict(c),
             )
-        return a, r
+        return trial_arrays, trial_report
 
     def summary(c):
+        """Retrieve or calculate the summary for one refinement.
+
+        Parameters
+        ----------
+        c : dict
+            Quadrature orders, grid subdivisions, derivative step and applicable
+            forest-weight convergence controls.
+
+        Returns
+        -------
+        summary : dict
+            Joint Fisher matrix, individual Fisher matrices and volume.
+        """
         key = tuple(sorted(c.items()))
         if key not in trials:
             evaluate(c)
         return trials[key][0]
 
     def metric(a, b):
+        """Compare two recorded refinement summaries.
+
+        Parameters
+        ----------
+        a : dict
+            Comparison Fisher and volume summary.
+        b : dict
+            Reference Fisher and volume summary.
+
+        Returns
+        -------
+        changes : dict of str to float
+            Relative joint information, constrained-error, individual-error and
+            volume changes.
+        """
         return change(
             a["fisher"],
             b["fisher"],
@@ -102,6 +177,18 @@ def study(self, task, *, payload_factory=OrderedDict):
         )
 
     def passes(m):
+        """Apply the declared finite-refinement thresholds.
+
+        Parameters
+        ----------
+        m : dict of str to float
+            Dimensionless convergence metrics.
+
+        Returns
+        -------
+        passed : bool
+            Whether every declared metric is finite and within its threshold.
+        """
         return all(np.isfinite(m[k]) and m[k] <= LIMITS[k] for k in LIMITS)
 
     # Finite iteration policy belongs only to the historical cumulative method.
@@ -114,9 +201,9 @@ def study(self, task, *, payload_factory=OrderedDict):
             for i, f in enumerate(self.selection.fields)
         )
         for count in weight_levels:
-            c = {**controls, "iterations": count}
+            trial_controls = {**controls, "iterations": count}
             try:
-                successful.append((count, summary(c)))
+                successful.append((count, summary(trial_controls)))
             except (ValueError, FloatingPointError) as error:
                 failures.append(dict(control="weights", level=count, error=str(error)))
         if not successful:
@@ -126,8 +213,8 @@ def study(self, task, *, payload_factory=OrderedDict):
             metric(successful[-2][1], successful[-1][1])
         ):
             try:
-                c = {**controls, "iterations": 24}
-                successful.append((24, summary(c)))
+                trial_controls = {**controls, "iterations": 24}
+                successful.append((24, summary(trial_controls)))
                 controls["iterations"] = 24
                 weight_levels.append(24)
             except (ValueError, FloatingPointError) as error:
@@ -158,39 +245,42 @@ def study(self, task, *, payload_factory=OrderedDict):
             c1 = {**controls, key: values[-2]}
             c2 = {**controls, key: values[-1]}
             try:
-                m = metric(summary(c1), summary(c2))
+                refinement_metrics = metric(summary(c1), summary(c2))
             except (ValueError, FloatingPointError) as error:
                 failures.append(dict(control=name, level=values[-1], error=str(error)))
                 break
             controls[key] = values[-1]
             retained_key = tuple(sorted(controls.items()))
-            if passes(m) or extra == 2 or name == "weights":
+            if passes(refinement_metrics) or extra == 2 or name == "weights":
                 break
             values.append(values[-1] * (0.5 if name == "step" else 2))
+
     # Re-evaluate every isolated level at the same final other controls.
-    base_a, base_r = evaluate(controls)
+    base_arrays, base_report = evaluate(controls)
     base = summary(controls)
     names = []
-    mf = []
-    mp = []
-    mv = []
+    metric_fisher = []
+    metric_pair_fisher = []
+    metric_volumes = []
     actual = {}
     for name, values in levels.items():
         key = keys[name]
         rows = []
         for level in values:
-            c = {**controls, key: level}
+            trial_controls = {**controls, key: level}
             try:
-                rows.append((level, summary(c)))
+                rows.append((level, summary(trial_controls)))
             except (ValueError, FloatingPointError) as error:
                 failures.append(dict(control=name, level=level, error=str(error)))
         if len(rows) < 2:
             raise ValueError(f"not enough valid levels for {name}: {failures}")
-        a, b = rows[-2][1], rows[-1][1]
+        lower_summary, upper_summary = rows[-2][1], rows[-1][1]
         names.append(name)
-        mf.append([a["fisher"], b["fisher"]])
-        mp.append([a["pair_fisher"], b["pair_fisher"]])
-        mv.append([a["volume"], b["volume"]])
+        metric_fisher.append([lower_summary["fisher"], upper_summary["fisher"]])
+        metric_pair_fisher.append(
+            [lower_summary["pair_fisher"], upper_summary["pair_fisher"]]
+        )
+        metric_volumes.append([lower_summary["volume"], upper_summary["volume"]])
         actual[name] = [x[0] for x in rows]
     weight_rows = []
     if method == "legacy":
@@ -200,9 +290,9 @@ def study(self, task, *, payload_factory=OrderedDict):
             except (ValueError, FloatingPointError) as error:
                 failures.append(dict(control="weights", level=count, error=str(error)))
         if len(weight_rows) >= 2:
-            a, b = weight_rows[-2][1], weight_rows[-1][1]
+            lower_summary, upper_summary = weight_rows[-2][1], weight_rows[-1][1]
         else:
-            a = b = base
+            lower_summary = upper_summary = base
             failures.append(
                 dict(
                     control="weights",
@@ -210,10 +300,14 @@ def study(self, task, *, payload_factory=OrderedDict):
                 )
             )
         names.append("weights")
-        mf.append([a["fisher"], b["fisher"]])
-        mp.append([a["pair_fisher"], b["pair_fisher"]])
-        mv.append([a["volume"], b["volume"]])
+        metric_fisher.append([lower_summary["fisher"], upper_summary["fisher"]])
+        metric_pair_fisher.append(
+            [lower_summary["pair_fisher"], upper_summary["pair_fisher"]]
+        )
+        metric_volumes.append([lower_summary["volume"], upper_summary["volume"]])
         actual["weights"] = [r[0] for r in weight_rows]
+
+    # Combine the actual lower levels while keeping the final model recipe fixed.
     lower = dict(controls)
     for name, values in actual.items():
         if name != "weights" or adaptive:
@@ -226,11 +320,18 @@ def study(self, task, *, payload_factory=OrderedDict):
         combined = base
         failures.append(dict(control="combined", error=str(error)))
     names.append("combined")
-    mf.append([combined["fisher"], base["fisher"]])
-    mp.append([combined["pair_fisher"], base["pair_fisher"]])
-    mv.append([combined["volume"], base["volume"]])
-    add_metrics(base_a, base_r, names, mf, mp, mv)
-    base_r.update(
+    metric_fisher.append([combined["fisher"], base["fisher"]])
+    metric_pair_fisher.append([combined["pair_fisher"], base["pair_fisher"]])
+    metric_volumes.append([combined["volume"], base["volume"]])
+    add_metrics(
+        base_arrays,
+        base_report,
+        names,
+        metric_fisher,
+        metric_pair_fisher,
+        metric_volumes,
+    )
+    base_report.update(
         final_controls=controls,
         actual_levels=actual,
         unresolved_controls=failures,
@@ -238,15 +339,15 @@ def study(self, task, *, payload_factory=OrderedDict):
         combined_lower_controls=lower,
         interpretation="Numerical accuracy within the fixed existing model; retained input policies are not calibrated physics",
     )
-    base_a["study_fisher"] = np.stack([v[0]["fisher"] for v in trials.values()])
-    base_a["study_pair_fisher"] = np.stack(
+    base_arrays["study_fisher"] = np.stack([v[0]["fisher"] for v in trials.values()])
+    base_arrays["study_pair_fisher"] = np.stack(
         [v[0]["pair_fisher"] for v in trials.values()]
     )
-    base_a["study_volume"] = np.array([v[0]["volume"] for v in trials.values()])
+    base_arrays["study_volume"] = np.array([v[0]["volume"] for v in trials.values()])
     from .trials import bind
 
-    bind(base_a, base_r, list(outcomes.values()), method=method)
+    bind(base_arrays, base_report, list(outcomes.values()), method=method)
     if failures:
-        base_r["passed"] = False
+        base_report["passed"] = False
     self._prepared.clear()
-    return base_a, base_r
+    return base_arrays, base_report

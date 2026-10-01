@@ -4,13 +4,28 @@ import numpy as np
 
 
 def _gaussian_covariance_kernel(total_power, mode_counts, im, jn, in_, jm, out):
-    """Fill one triangle and mirror into out; return None.
+    """Fill the Gaussian covariance triangle and mirror it into the output.
 
-    Inputs are validated float64 power (node, required), counts (node,), and
-    int64 lookup tables (selected, selected). out is preallocated float64
-    (node, selected, selected), does not alias inputs, and is overwritten.
-    Only one additional node-vector is allocated. No physical or shape checks
-    occur here; the public wrapper owns validation and arithmetic diagnostics.
+    Parameters
+    ----------
+    total_power : ndarray of shape (n_node, n_required_pair)
+        Validated float64 observed signal plus noise in (Mpc/h_fid)^3.
+    mode_counts : ndarray of shape (n_node,)
+        Positive dimensionless Fourier mode counts.
+    im, jn, in_, jm : ndarray of int64, shape (n_selected, n_selected)
+        Required-pair lookup tables for the two Gaussian covariance products.
+    out : ndarray of shape (n_node, n_selected, n_selected)
+        Preallocated float64 covariance destination; must not alias the inputs.
+
+    Returns
+    -------
+    None
+        Overwrite out with covariance in (Mpc/h_fid)^6.
+
+    Notes
+    -----
+    The caller owns shape, physical, and arithmetic validation. Only one
+    additional node-vector is allocated; signed cross products are retained.
     """
     work = np.empty(total_power.shape[0], dtype=np.float64)
     for a in range(im.shape[0]):
@@ -25,11 +40,28 @@ def _gaussian_covariance_kernel(total_power, mode_counts, im, jn, in_, jm, out):
 
 
 def _gaussian_variance_kernel(total_power, mode_counts, im, jn, in_, jm, out):
-    """Fill out (node, selected) with the diagonal of the Gaussian covariance.
+    """Fill the selected-spectrum variances with the Gaussian diagonal terms.
 
-    The arithmetic is exactly that of _gaussian_covariance_kernel for a == b, so
-    each column equals the variance of an independently prepared one-spectrum
-    covariance built from the same total power and mode counts.
+    Parameters
+    ----------
+    total_power : ndarray of shape (n_node, n_required_pair)
+        Validated float64 observed signal plus noise in (Mpc/h_fid)^3.
+    mode_counts : ndarray of shape (n_node,)
+        Positive dimensionless Fourier mode counts.
+    im, jn, in_, jm : ndarray of int64, shape (n_selected, n_selected)
+        Required-pair lookup tables for the two Gaussian covariance products.
+    out : ndarray of shape (n_node, n_selected)
+        Preallocated float64 variance destination; must not alias the inputs.
+
+    Returns
+    -------
+    None
+        Overwrite out with variances in (Mpc/h_fid)^6.
+
+    Notes
+    -----
+    The arithmetic matches the covariance kernel on each diagonal, preserving
+    the variance of an independently prepared one-spectrum calculation.
     """
     work = np.empty(total_power.shape[0], dtype=np.float64)
     for a in range(im.shape[0]):

@@ -33,6 +33,19 @@ class Parameter:
     step: float | None = None
 
     def __post_init__(self):
+        """Validate the parameter fiducial, role, bounds, and difference step.
+
+        Returns
+        -------
+        None
+            Normalize numeric metadata to Python floats in the frozen dataclass.
+
+        Raises
+        ------
+        ValueError
+            If the parameter label, role, bounds, fiducial, or positive absolute
+            difference step is invalid. Bounds and steps use the parameter's units.
+        """
         label(self.id, "parameter ID")
         value = scalar(self.fiducial, "fiducial")
         object.__setattr__(self, "fiducial", value)
@@ -41,12 +54,20 @@ class Parameter:
         if self.bounds is not None:
             if len(self.bounds) != 2:
                 raise ValueError("bounds must have two endpoints")
-            lo, hi = (None if x is None else scalar(x, "bound") for x in self.bounds)
-            if lo is not None and hi is not None and lo >= hi:
+            lower_bound, upper_bound = (
+                None if x is None else scalar(x, "bound") for x in self.bounds
+            )
+            if (
+                lower_bound is not None
+                and upper_bound is not None
+                and lower_bound >= upper_bound
+            ):
                 raise ValueError("lower bound must be below upper bound")
-            if (lo is not None and value < lo) or (hi is not None and value > hi):
+            if (lower_bound is not None and value < lower_bound) or (
+                upper_bound is not None and value > upper_bound
+            ):
                 raise ValueError("fiducial outside bounds")
-            object.__setattr__(self, "bounds", (lo, hi))
+            object.__setattr__(self, "bounds", (lower_bound, upper_bound))
         if self.step is not None:
             step = scalar(self.step, "step")
             if step <= 0:
@@ -63,6 +84,24 @@ class ParameterRegistry:
     fiducials: np.ndarray
 
     def __init__(self, parameters):
+        """Store an ordered set of uniquely identified free parameters.
+
+        Parameters
+        ----------
+        parameters : iterable of Parameter
+            Nonempty parameter sequence defining global vector order. Values retain
+            each parameter's physical units; no unit conversion is performed.
+
+        Returns
+        -------
+        None
+            Store immutable metadata tuples and a read-only float64 fiducial vector.
+
+        Raises
+        ------
+        ValueError
+            If the sequence is empty, contains non-Parameter entries, or repeats IDs.
+        """
         parameters = tuple(parameters)
         if not parameters or any(not isinstance(p, Parameter) for p in parameters):
             raise ValueError("registry requires at least one Parameter")
@@ -88,6 +127,28 @@ class ParameterBinding:
     local_to_global: np.ndarray
 
     def __init__(self, registry, local_names, bindings):
+        """Bind each declared local parameter name to an explicit global ID.
+
+        Parameters
+        ----------
+        registry : ParameterRegistry
+            Global free-parameter definitions.
+        local_names : iterable of str
+            Unique provider parameter names in local vector order; may be empty.
+        bindings : mapping of str to str
+            Mapping from every local name to a registry ID. Repeated destination IDs
+            express equality constraints; parameter units must already agree.
+
+        Returns
+        -------
+        None
+            Store local names and a read-only int64 local-to-global index array.
+
+        Raises
+        ------
+        ValueError
+            If local names or bindings are incomplete, repeated, or unknown.
+        """
         names = tuple(local_names)
         for name in names:
             label(name, "local name")
@@ -107,7 +168,25 @@ class ParameterBinding:
 
 
 def gather_local(theta_global, local_to_global):
-    """Gather a finite 1D global vector into declared local order (float64)."""
+    """Gather a global parameter vector into the declared local order.
+
+    Parameters
+    ----------
+    theta_global : array_like of shape (n_global,)
+        Finite real global parameter values, in their respective physical units.
+    local_to_global : array_like of int, shape (n_local,)
+        Global index of each local parameter, including any repeated bindings.
+
+    Returns
+    -------
+    theta_local : ndarray of shape (n_local,)
+        Float64 local values with units inherited from their global parameters.
+
+    Raises
+    ------
+    ValueError
+        If the vector or indices are invalid.
+    """
     theta = real_array(theta_global, "theta_global")
     if theta.ndim != 1:
         raise ValueError("global vector must be one-dimensional")
@@ -116,17 +195,34 @@ def gather_local(theta_global, local_to_global):
 
 
 def map_jacobian(local_jacobian, local_to_global, n_global):
-    """Sum (node, pair, local) derivatives into (node, pair, global).
+    """Sum local mean derivatives into their explicitly bound global columns.
 
-    Repeated equality bindings accumulate by the chain rule. Unused columns
-    are zero. Inputs are validated before the array-only accumulation.
+    Parameters
+    ----------
+    local_jacobian : array_like of shape (n_node, n_pair, n_local)
+        Finite derivatives in power units per local parameter unit.
+    local_to_global : array_like of int, shape (n_local,)
+        Global destination indices, allowing repeated equality bindings.
+    n_global : int
+        Positive number of global free parameters.
+
+    Returns
+    -------
+    jacobian : ndarray of shape (n_node, n_pair, n_global)
+        Float64 derivatives in power units per global parameter unit. Unused
+        columns remain zero; repeated bindings accumulate by the chain rule.
+
+    Raises
+    ------
+    ValueError
+        If the Jacobian shape, index mapping, or global size is invalid.
     """
     n_global = integer(n_global, "n_global", 1)
     index = indices(local_to_global, n_global)
-    jac = real_array(local_jacobian, "local_jacobian")
-    if jac.ndim != 3 or jac.shape[2] != len(index):
+    local_derivatives = real_array(local_jacobian, "local_jacobian")
+    if local_derivatives.ndim != 3 or local_derivatives.shape[2] != len(index):
         raise ValueError("Jacobian must have shape (n_node, n_pair, n_local)")
-    result = np.zeros((*jac.shape[:2], n_global), dtype=np.float64)
+    result = np.zeros((*local_derivatives.shape[:2], n_global), dtype=np.float64)
     for local, global_ in enumerate(index):
-        result[:, :, global_] += jac[:, :, local]
+        result[:, :, global_] += local_derivatives[:, :, local]
     return result

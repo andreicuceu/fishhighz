@@ -21,11 +21,22 @@ from fishhighz.weights import prepare_forest_weights
 @pytest.mark.parametrize("v", [0, 7])
 @pytest.mark.parametrize("h", [0.5, 0.7, 1.0])
 def test_single_noise_and_h_units(v, h):
-    g = geometry(h=h)
+    """Check single noise and h units.
+
+    Parameters
+    ----------
+    v : int
+        Parametrized numeric input, including invalid values where specified,
+        supplied by pytest parametrization.
+    h : float
+        Hubble parameter or finite-difference scale specified by the case,
+        supplied by pytest parametrization.
+    """
+    bin_geometry = geometry(h=h)
     response = InstrumentResponse(100, 0)
-    p = prepare_forest_weights(
+    forest_weights = prepare_forest_weights(
         FIELD,
-        g,
+        bin_geometry,
         response,
         z_source=3,
         magnitudes=[20],
@@ -36,38 +47,63 @@ def test_single_noise_and_h_units(v, h):
         method="supplied",
         weights=[0.07],
     )
-    q = np.array([0, 2 * np.pi / 100, 3 * np.pi / 100, 0.002])
-    n = forest_noise(p, FIELD, g, response, q * g.a_v, np.ones(4), [2] * 4)
-    w2 = np.array([1, 0, (1 / (1.5 * np.pi)) ** 2, (np.sin(0.1) / 0.1) ** 2])
-    expected = (2 * w2 + 100 * v) * g.d_deg**2 / g.a_v / 30
-    np.testing.assert_allclose(n.total, expected, rtol=5e-14, atol=1e-28)
-    np.testing.assert_allclose(n.pixel, 100 * v * g.d_deg**2 / g.a_v / 30, rtol=5e-15)
-    g0 = geometry(h=0.7)
+    velocity_k = np.array([0, 2 * np.pi / 100, 3 * np.pi / 100, 0.002])
+    noise = forest_noise(
+        forest_weights,
+        FIELD,
+        bin_geometry,
+        response,
+        velocity_k * bin_geometry.a_v,
+        np.ones(4),
+        [2] * 4,
+    )
+    pixel_response_squared = np.array(
+        [1, 0, (1 / (1.5 * np.pi)) ** 2, (np.sin(0.1) / 0.1) ** 2]
+    )
+    expected = (
+        (2 * pixel_response_squared + 100 * v)
+        * bin_geometry.d_deg**2
+        / bin_geometry.a_v
+        / 30
+    )
+    np.testing.assert_allclose(noise.total, expected, rtol=5e-14, atol=1e-28)
     np.testing.assert_allclose(
-        n.total,
-        (2 * w2 + 100 * v) * g0.d_deg**2 / g0.a_v / 30 * (h / 0.7) ** 3,
+        noise.pixel, 100 * v * bin_geometry.d_deg**2 / bin_geometry.a_v / 30, rtol=5e-15
+    )
+    reference_geometry = geometry(h=0.7)
+    np.testing.assert_allclose(
+        noise.total,
+        (2 * pixel_response_squared + 100 * v)
+        * reference_geometry.d_deg**2
+        / reference_geometry.a_v
+        / 30
+        * (h / 0.7) ** 3,
         rtol=5e-14,
         atol=1e-28,
     )
-    for value in (n.total, n.aliasing, n.pixel):
+    for value in (noise.total, noise.aliasing, noise.pixel):
         with pytest.raises(ValueError):
             value.flags.writeable = True
 
 
 def test_galaxy_local_density():
-    g = geometry()
-    n = local_galaxy_density([3, 7, 10], [0.2, 0.5, 1.3], g)
+    """Check galaxy local density."""
+    bin_geometry = geometry()
+    galaxy_density = local_galaxy_density([3, 7, 10], [0.2, 0.5, 1.3], bin_geometry)
     expected = (
         (0.2 * 3 + 0.5 * 7 + 1.3 * 10)
-        * (1 + g.z_eval)
+        * (1 + bin_geometry.z_eval)
         / 299792.458
-        * g.a_v
-        / g.d_deg**2
+        * bin_geometry.a_v
+        / bin_geometry.d_deg**2
     )
-    assert n == pytest.approx(expected, rel=5e-15)
-    assert galaxy_noise(n) == pytest.approx(1 / expected, rel=5e-15)
-    assert galaxy_noise(2 * n) == galaxy_noise(n) / 2
-    assert local_galaxy_density([3, 7, 10], [0.2, 0.5, 1.3], geometry(area=200)) == n
+    assert galaxy_density == pytest.approx(expected, rel=5e-15)
+    assert galaxy_noise(galaxy_density) == pytest.approx(1 / expected, rel=5e-15)
+    assert galaxy_noise(2 * galaxy_density) == galaxy_noise(galaxy_density) / 2
+    assert (
+        local_galaxy_density([3, 7, 10], [0.2, 0.5, 1.3], geometry(area=200))
+        == galaxy_density
+    )
 
 
 FIELDS = [
@@ -79,6 +115,14 @@ FIELDS = [
 
 @pytest.mark.parametrize("permutation", [(0, 1, 2), (2, 0, 1), (1, 2, 0)])
 def test_packing_psd_permutations_slices(permutation):
+    """Check packing psd permutations slices.
+
+    Parameters
+    ----------
+    permutation : tuple
+        Index permutation applied to the fixture, supplied by pytest
+        parametrization.
+    """
     fields = [FIELDS[i] for i in permutation]
     selection = PairSelection(fields, [("f2", "g"), ("forest", "forest")])
     matrix = np.array([[4, -2, 1], [-2, 5, 0.5], [1, 0.5, 3]])
@@ -107,6 +151,7 @@ def test_packing_psd_permutations_slices(permutation):
 
 
 def test_subset_and_replacement():
+    """Check subset and replacement."""
     selection = PairSelection(FIELDS, [("forest", "forest")])
     supplied = np.array([[2.0], [3.0]])
     np.testing.assert_array_equal(prepare_noise(selection, 2, full=supplied), supplied)
@@ -132,20 +177,30 @@ def test_subset_and_replacement():
 
 @pytest.mark.parametrize("p1d", [[-1], [np.inf], [1, 2]])
 def test_bad_p1d(p1d):
+    """Check bad p1d.
+
+    Parameters
+    ----------
+    p1d : list
+        Intrinsic one-dimensional forest power, supplied by pytest
+        parametrization.
+    """
     with pytest.raises(ValueError):
         forest_noise(prepare(), FIELD, geometry(), RESPONSE, [0.1], [0.5], p1d)
 
 
 def test_zero_p1d_and_supplied_zero_weights():
-    p = prepare(
+    """Check zero p1d and supplied zero weights."""
+    forest_weights = prepare(
         method="supplied", weights=[0, 1, 0], iterations=None, signal=None, alias=None
     )
-    n = forest_noise(p, FIELD, geometry(), RESPONSE, [0.1], [0], [0])
-    assert n.aliasing[0] == 0
-    assert n.total[0] == n.pixel[0]
+    noise = forest_noise(forest_weights, FIELD, geometry(), RESPONSE, [0.1], [0], [0])
+    assert noise.aliasing[0] == 0
+    assert noise.total[0] == noise.pixel[0]
 
 
 def test_example_fisher_freezing_and_area():
+    """Check example fisher freezing and area."""
     run = runpy.run_path(str(Path(__file__).parents[1] / "examples/weighted_noise.py"))[
         "run"
     ]

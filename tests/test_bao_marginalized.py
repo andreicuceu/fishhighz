@@ -15,11 +15,12 @@ from fishhighz.results import FisherResult
 
 
 def test_dilation_basis_and_covariance_jacobian():
+    """Check dilation basis and covariance jacobian."""
     alpha, phi = 1.07, 0.92
-    ap, at, q = _scales((alpha, phi), 3)
+    ap, at, volume_normalization = _scales((alpha, phi), 3)
     assert ap == pytest.approx(alpha * phi ** (-2 / 3))
     assert at == pytest.approx(alpha * phi ** (1 / 3))
-    assert q == pytest.approx(1 / alpha**3)
+    assert volume_normalization == pytest.approx(1 / alpha**3)
     jacobian = np.array(
         [
             [phi ** (-2 / 3), -2 * alpha * phi ** (-5 / 3) / 3],
@@ -45,6 +46,14 @@ def test_dilation_basis_and_covariance_jacobian():
 
 
 def test_standard_registry_has_five_nuisances_and_fixed_growth(tmp_path):
+    """Check standard registry has five nuisances and fixed growth.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     source = tmp_path / "bao.ini"
     source.write_text(
         Path("fishhighz/data/desi2_accuracy.ini").read_text()
@@ -68,6 +77,14 @@ def test_standard_registry_has_five_nuisances_and_fixed_growth(tmp_path):
 
 
 def test_empty_bin_and_subgroup_nuisances(tmp_path):
+    """Check empty bin and subgroup nuisances.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     source = tmp_path / "subgroups.ini"
     content = Path("fishhighz/data/desi2_accuracy.ini").read_text()
     content = (
@@ -93,6 +110,7 @@ def test_empty_bin_and_subgroup_nuisances(tmp_path):
 
 
 def test_dense_marginalization_and_singular_status():
+    """Check dense marginalization and singular status."""
     registry = ParameterRegistry(
         [
             Parameter(name, 1, "target" if index < 2 else "nuisance")
@@ -118,6 +136,14 @@ def test_dense_marginalization_and_singular_status():
 
 
 def test_joint_only_save_and_fixed_kaiser_growth(tmp_path):
+    """Check joint only save and fixed kaiser growth.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     source, template, readers = inputs(tmp_path)
     source.write_text(
         source.read_text()

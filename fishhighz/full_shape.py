@@ -12,7 +12,18 @@ ISO_TARGETS = ("alpha_iso_w", "phi_w", "alpha_iso_s", "phi_s", "f")
 
 
 def basis_targets(config):
-    """Ordered full-shape parameters for the configured dilation basis."""
+    """Ordered full-shape parameters for the configured dilation basis.
+
+    Parameters
+    ----------
+    config : SurveyConfig
+        Parsed native survey configuration.
+
+    Returns
+    -------
+    names : tuple of str
+        Ordered dimensionless dilation and growth target names.
+    """
     return (
         ISO_TARGETS
         if config.model.get("parameterization", "alpha_phi") == "alpha_iso_phi"
@@ -21,7 +32,18 @@ def basis_targets(config):
 
 
 def target_names(config):
-    """Physical targets retained by this full-shape calculation."""
+    """Physical targets retained by this full-shape calculation.
+
+    Parameters
+    ----------
+    config : SurveyConfig
+        Parsed native survey configuration.
+
+    Returns
+    -------
+    names : tuple of str
+        Ordered dimensionless dilation and growth target names.
+    """
     return (
         basis_targets(config)[:4]
         if config.model.get("target_set", "full") == "dilation_only"
@@ -30,7 +52,22 @@ def target_names(config):
 
 
 def active_names(config, index, pairs=None):
-    """Retain all targets and only nuisances of selected physical tracers."""
+    """Retain all targets and only nuisances of selected physical tracers.
+
+    Parameters
+    ----------
+    config : SurveyConfig
+        Parsed native survey configuration.
+    index : int
+        Zero-based redshift-bin index.
+    pairs : sequence of tuple of str or None, optional
+        Selected field-ID pairs; None uses the configured selection.
+
+    Returns
+    -------
+    names : tuple of str
+        Ordered dilation/growth targets and active tracer nuisance names.
+    """
     pairs = config.bins[index].selected_pairs if pairs is None else pairs
     ids = {name for pair in pairs for name in pair}
     tracers = {item.tracer for item in config.fields if item.observed.id in ids}
@@ -42,15 +79,38 @@ def active_names(config, index, pairs=None):
 
 
 def make_registry(config, background):
+    """Construct independent fiducial target and nuisance parameters by bin.
+
+    Parameters
+    ----------
+    config : SurveyConfig
+        Parsed native survey configuration.
+    background : CAMBBackground or object
+        Prepared background with exact growth and geometry.
+
+    Returns
+    -------
+    registry : ParameterRegistry
+        Parameters for nonempty bins with configured numerical steps.
+
+    Raises
+    ------
+    ValueError
+        If fields sharing one forest bias have inconsistent fiducials.
+
+    Notes
+    -----
+    Shared forest biases must agree within the existing relative tolerance.
+    """
     from .survey_config import _background_values
 
     parameters = []
     for index, bin_config in enumerate(config.bins):
         if not bin_config.selected_pairs:
             continue
-        _, f = _background_values(background, bin_config.z_eval)
+        _, growth_rate = _background_values(background, bin_config.z_eval)
         values = dict.fromkeys(basis_targets(config), 1.0)
-        values.update(f=f, beta_lya=float(config.model["forest_beta"]))
+        values.update(f=growth_rate, beta_lya=float(config.model["forest_beta"]))
         for item in config.fields:
             bias = (
                 analytic_density_bias(bin_config.z_eval, item.tracer)
@@ -84,6 +144,42 @@ def make_registry(config, background):
 def make_model(
     config, bin_config, registry, template, fields, biases, betas, widths, f, growth
 ):
+    """Bind bin-local tracer nuisances and dilation parameters.
+
+    Parameters
+    ----------
+    config : SurveyConfig
+        Parsed native survey configuration.
+    bin_config : BinConfig
+        Redshift bin and its selected spectra.
+    registry : ParameterRegistry
+        Global bin-local parameter registry.
+    template : object
+        Prepared smooth and wiggle matter-power template.
+    fields : sequence of ObservedField
+        Ordered observed fields.
+    biases : mapping
+        Dimensionless fiducial density biases by field ID.
+    betas : mapping
+        Dimensionless forest redshift-space distortion parameters.
+    widths : mapping
+        Parallel/transverse damping widths by field ID, in Mpc/h_fid.
+    f : float
+        Dimensionless fiducial logarithmic growth rate.
+    growth : float
+        Dimensionless power-growth factor relative to the template redshift.
+
+    Returns
+    -------
+    model : KaiserModel
+        Intrinsic power-spectrum model with fixed damping widths.
+    binding : BoundParameters
+        Binding from model-local names to bin-local registry IDs.
+
+    Notes
+    -----
+    The growth rate is free only when included in the configured target set.
+    """
     index = bin_config.index - 1
     active = active_names(config, index)
     bindings = {name: f"{name}_{index}" for name in target_names(config)}
@@ -118,10 +214,34 @@ def make_model(
 
 
 def reported_constraint(result, target_ids, sigma8):
-    """Marginalize active nuisances, then apply the fixed-sigma8 Jacobian."""
+    """Marginalize active nuisances, then apply the fixed-sigma8 Jacobian.
+
+    Parameters
+    ----------
+    result : FisherResult
+        Fisher matrix restricted to active parameters.
+    target_ids : sequence of str
+        Ordered target parameter IDs.
+    sigma8 : float
+        Fixed dimensionless sigma8 used to report f*sigma8.
+
+    Returns
+    -------
+    status : str
+        available for full rank, otherwise unavailable.
+    covariance : ndarray or None
+        Marginalized dimensionless target covariance, shape (n_target,
+        n_target).
+    errors : ndarray or None
+        Target standard deviations, shape (n_target,).
+    correlations : ndarray or None
+        Dimensionless target correlations, shape (n_target, n_target).
+    """
     if result.diagnostics.rank != len(result.registry.ids):
         return "unavailable", None, None, None
     covariance = result.marginalized_covariance(target_ids)
+
+    # sigma8 is fixed: only the final growth coordinate changes to f*sigma8.
     jacobian = np.array([1.0, 1.0, 1.0, 1.0, sigma8][: len(target_ids)])
     covariance = covariance * jacobian[:, None] * jacobian[None, :]
     errors = np.sqrt(np.diag(covariance))
@@ -136,6 +256,27 @@ def reported_constraint(result, target_ids, sigma8):
 def validate_template_coverage(spec, *, step_scale=None, numerical=False):
     """Validate the complete observed domain using the actual derivative schedule.
 
+    Parameters
+    ----------
+    spec : BinSpec
+        Bin spectrum model and fixed observed Fourier cuts.
+    step_scale : float or None, optional
+        Derivative-step multiplier; None validates the fiducial only.
+    numerical : bool, optional
+        Force numerical derivatives; default False.
+
+    Returns
+    -------
+    None
+        No value is returned.
+
+    Raises
+    ------
+    ValueError
+        If any fiducial or stencil scaling maps outside template support.
+
+    Notes
+    -----
     Angular extrema are at mu=0 and mu=1, so each independently rescaled
     component requires [k_min/max(ap,at), k_max/min(ap,at)] template support.
     A None step_scale validates the fiducial only during survey preparation.
@@ -201,7 +342,22 @@ def validate_template_coverage(spec, *, step_scale=None, numerical=False):
 
 
 def _category_cut(config, fields, pair):
-    """Observed cutoff of one selected pair in h_fid/Mpc."""
+    """Observed cutoff of one selected pair in h_fid/Mpc.
+
+    Parameters
+    ----------
+    config : SurveyConfig
+        Parsed native survey configuration.
+    fields : sequence of ObservedField
+        Ordered observed fields.
+    pair : tuple of int
+        Field indices of the selected spectrum.
+
+    Returns
+    -------
+    k_max : float
+        Category-specific upper wavenumber cutoff in h_fid/Mpc.
+    """
     kinds = (fields[pair[0]].kind, fields[pair[1]].kind)
     suffix = (
         "forest_forest"
@@ -214,7 +370,29 @@ def _category_cut(config, fields, pair):
 
 
 def _selected_nodes(prepared, pairs, lower, upper):
-    """Restrict measured spectra and nodes, retaining their covariance closure."""
+    """Restrict measured spectra and nodes, retaining their covariance closure.
+
+    Parameters
+    ----------
+    prepared : PreparedBin
+        Fixed joint-bin numerical state.
+    pairs : sequence of tuple of int
+        Selected observed spectra by field index.
+    lower : float
+        Inclusive observed wavenumber bound in h_fid/Mpc.
+    upper : float
+        Exclusive observed wavenumber bound in h_fid/Mpc.
+
+    Returns
+    -------
+    subset : PreparedBin
+        State restricted to selected nodes and the required covariance spectra.
+
+    Raises
+    ------
+    ValueError
+        If the requested interval contains no quadrature nodes.
+    """
     from dataclasses import replace
 
     from .covariance import gaussian_covariance
@@ -222,12 +400,13 @@ def _selected_nodes(prepared, pairs, lower, upper):
     from .fisher import factor_covariance
     from .models.external import P3DProvider, PreparedP3D
 
+    # Keep every spectrum needed for the covariance of the measured selection.
     original = prepared.p3d.selection
     selected = PairSelection(original.fields, pairs)
-    node = np.flatnonzero((prepared.k >= lower) & (prepared.k < upper))
-    if not len(node):
+    node_indices = np.flatnonzero((prepared.k >= lower) & (prepared.k < upper))
+    if not len(node_indices):
         raise ValueError("category interval contains no integration nodes")
-    if len(node) == len(prepared.k) and np.array_equal(
+    if len(node_indices) == len(prepared.k) and np.array_equal(
         selected.selected_pairs, original.selected_pairs
     ):
         return prepared
@@ -251,21 +430,23 @@ def _selected_nodes(prepared, pairs, lower, upper):
                     analytic_ids=provider.analytic_ids,
                 )
             )
+
+    # Re-factor the restricted covariance using the same fiducial total power.
     p3d = PreparedP3D(prepared.p3d.registry, selected, routes)
-    total = prepared.total[np.ix_(node, columns)]
+    total = prepared.total[np.ix_(node_indices, columns)]
     factors = factor_covariance(
-        gaussian_covariance(total, prepared.modes[node], selected)
+        gaussian_covariance(total, prepared.modes[node_indices], selected)
     )
     return replace(
         prepared,
         p3d=p3d,
-        k=prepared.k[node],
-        mu=prepared.mu[node],
-        modes=prepared.modes[node],
-        response=prepared.response[node],
-        products=prepared.products[np.ix_(node, columns)],
-        noise=prepared.noise[np.ix_(node, columns)],
-        power=prepared.power[np.ix_(node, columns)],
+        k=prepared.k[node_indices],
+        mu=prepared.mu[node_indices],
+        modes=prepared.modes[node_indices],
+        response=prepared.response[node_indices],
+        products=prepared.products[np.ix_(node_indices, columns)],
+        noise=prepared.noise[np.ix_(node_indices, columns)],
+        power=prepared.power[np.ix_(node_indices, columns)],
         total=total,
         factors=factors,
     )
@@ -274,7 +455,28 @@ def _selected_nodes(prepared, pairs, lower, upper):
 def _interval_result(
     prepared, config, *, pairs=None, batch_size, step_scale, numerical
 ):
-    """Sum disjoint measured intervals before any nuisance marginalization."""
+    """Sum disjoint measured intervals before any nuisance marginalization.
+
+    Parameters
+    ----------
+    prepared : PreparedBin
+        Fixed bin state on the complete quadrature grid.
+    config : SurveyConfig
+        Parsed native survey configuration.
+    pairs : sequence of tuple of int or None, optional
+        Spectrum selection; None uses all prepared selected pairs.
+    batch_size : int
+        Maximum Fourier nodes per derivative batch.
+    step_scale : float
+        Positive finite-difference step multiplier.
+    numerical : bool
+        Force numerical derivatives when True.
+
+    Returns
+    -------
+    result : FisherResult
+        Summed Fisher information from disjoint observed intervals.
+    """
     from .forecast import run_bin
     from .results import combine_results
 
@@ -285,6 +487,8 @@ def _interval_result(
     cuts = {_category_cut(config, fields, pair) for pair in pairs}
     bounds = (float(config.numerical["k_min"]), *sorted(cuts))
     contributions = []
+
+    # Adjacent observed intervals contribute independent Fourier modes.
     for lower, upper in zip(bounds[:-1], bounds[1:]):
         active = [
             pair for pair in pairs if _category_cut(config, fields, pair) >= upper
@@ -303,6 +507,31 @@ def _interval_result(
 
 
 def run_full_shape(forecast, *, batch_size, step_scale, numerical, individuals=True):
+    """Calculate selected joint and individual constraints at fixed covariance.
+
+    Parameters
+    ----------
+    forecast : Forecast
+        Native forecast facade; prepared state is reused when available.
+    batch_size : int
+        Maximum number of Fourier nodes per derivative batch.
+    step_scale : float
+        Positive multiplier of registered finite-difference steps.
+    numerical : bool
+        Force numerical derivatives when True.
+    individuals : bool, optional
+        Also calculate individual spectra; default is True.
+
+    Returns
+    -------
+    result : SurveyResult
+        Bin-local constraints, combined Fisher matrix and resolved numerical
+        provenance.
+
+    Notes
+    -----
+    Disjoint wavenumber intervals are summed before marginalization. Rank-deficient target constraints remain unavailable.
+    """
     from .fields import PairSelection
     from .public import SpectrumConstraint, SurveyResult, _convergence
     from .results import combine_results
@@ -330,7 +559,7 @@ def run_full_shape(forecast, *, batch_size, step_scale, numerical, individuals=T
             selected = set()
         selected_by_bin[index] = sorted(selected)
         bin_config = config.bins[index]
-        sigma8, f = _background_values(prepared.background, bin_config.z_eval)
+        sigma8, growth_rate = _background_values(prepared.background, bin_config.z_eval)
         target_basis = target_names(config)
         targets = tuple(f"{name}_{index}" for name in target_basis)
         reported_ids = (
@@ -338,6 +567,23 @@ def run_full_shape(forecast, *, batch_size, step_scale, numerical, individuals=T
         )
 
         def record(result, pair, status=None):
+            """Record active parameters and target constraints for one bin selection.
+
+            Parameters
+            ----------
+            result : FisherResult or None
+                Fisher calculation, or None for an excluded selection.
+            pair : tuple of str or None
+                Selected field IDs, or None for the joint result.
+            status : str or None, optional
+                Status for an absent result; default None. Computed results set their
+                own rank status.
+
+            Returns
+            -------
+            constraint : SpectrumConstraint
+                Result and availability status, retaining the enclosing bin metadata.
+            """
             ids = tuple(
                 f"{name}_{index}"
                 for name in (
@@ -369,7 +615,9 @@ def run_full_shape(forecast, *, batch_size, step_scale, numerical, individuals=T
                 covariance,
                 errors,
                 correlations,
-                tuple([1.0] * 4 + ([f * sigma8] if "f" in target_basis else [])),
+                tuple(
+                    [1.0] * 4 + ([growth_rate * sigma8] if "f" in target_basis else [])
+                ),
                 sigma8,
             )
 
@@ -473,6 +721,26 @@ def run_full_shape(forecast, *, batch_size, step_scale, numerical, individuals=T
 
 
 def save_full_shape(result, output, *, schema_name="fishhighz-full-shape-result"):
+    """Write named Fisher and marginalized target matrices.
+
+    Parameters
+    ----------
+    result : SurveyResult
+        Completed full-shape or marginalized BAO forecast.
+    output : pathlib.Path
+        Existing destination directory.
+    schema_name : str, optional
+        Result schema identifier; default fishhighz-full-shape-result.
+
+    Returns
+    -------
+    output : pathlib.Path
+        Destination containing settings.json and results.npz.
+
+    Notes
+    -----
+    Writes schema version 1 metadata and compressed arrays, replacing existing files with the same names.
+    """
     import json
 
     from .public import _plain
@@ -499,20 +767,22 @@ def save_full_shape(result, output, *, schema_name="fishhighz-full-shape-result"
         }
         record["arrays"] = {}
         if item.fisher is not None:
-            diag = item.fisher.diagnostics
+            diagnostics = item.fisher.diagnostics
             record["parameters"] = [vars(p) for p in item.fisher.registry.parameters]
             record["rank"] = {
-                "rank": diag.rank,
-                "dimension": len(diag.ids),
-                "condition": diag.condition if np.isfinite(diag.condition) else None,
-                "tolerance": diag.tolerance,
-                "basis": diag.basis,
+                "rank": diagnostics.rank,
+                "dimension": len(diagnostics.ids),
+                "condition": diagnostics.condition
+                if np.isfinite(diagnostics.condition)
+                else None,
+                "tolerance": diagnostics.tolerance,
+                "basis": diagnostics.basis,
             }
             for name, value in (
                 ("fisher", item.fisher.data_fisher),
-                ("scales", diag.scales),
-                ("eigenvalues", diag.eigenvalues),
-                ("null_directions", diag.null_directions),
+                ("scales", diagnostics.scales),
+                ("eigenvalues", diagnostics.eigenvalues),
+                ("null_directions", diagnostics.null_directions),
                 ("target_covariance", item.target_covariance),
                 ("target_errors", item.target_errors),
                 ("target_correlations", item.target_correlations),

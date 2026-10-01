@@ -13,6 +13,27 @@ from .._arrays import real_array, scalar
 
 
 def _shape(z):
+    """Compute the PD2013 redshift evolution, slope, and stationary cutoff.
+
+    Parameters
+    ----------
+    z : float
+        Finite dimensionless redshift satisfying z > -1.
+
+    Returns
+    -------
+    evolution : float
+        ln((1+z)/4), dimensionless.
+    slope : float
+        Redshift-dependent logarithmic slope coefficient.
+    floor : float
+        Positive stationary low-wavenumber cutoff in s/km.
+
+    Raises
+    ------
+    ValueError
+        If redshift or the represented cutoff is invalid.
+    """
     z = scalar(z, "redshift")
     if z <= -1:
         raise ValueError("require 1+z > 0")
@@ -26,30 +47,75 @@ def _shape(z):
 
 
 def p1d_floor(z):
-    """Return the stationary low-k floor (s/km) at scalar finite z>-1."""
+    """Return the stationary low-wavenumber cutoff of the PD2013 prescription.
+
+    Parameters
+    ----------
+    z : float
+        Finite dimensionless redshift satisfying z > -1.
+
+    Returns
+    -------
+    cutoff : float
+        Velocity wavenumber in s/km below which the spectrum is constant.
+
+    Raises
+    ------
+    ValueError
+        If redshift or the represented cutoff is invalid.
+    """
     return float(_shape(z)[2])
 
 
 def default_p1d(theta_local, z, k_parallel_velocity):
-    """Return intrinsic km/s power (node,) for a zero-local-parameter callable.
+    """Evaluate intrinsic one-dimensional forest power with the adopted cutoff.
 
-    theta_local must have shape (0,). Velocity k must be finite real nonnegative
-    nonempty 1D, including zero; slices and read-only arrays retain their order.
-    The plateau joins with continuous zero first k derivative; the second
-    derivative need not be continuous. No external P3D is called or inferred.
+    Parameters
+    ----------
+    theta_local : array_like of shape (0,)
+        Empty parameter vector; this prescription has no free local parameters.
+    z : float
+        Finite dimensionless forest redshift satisfying z > -1.
+    k_parallel_velocity : array_like of shape (n_node,)
+        Finite nonnegative velocity wavenumbers in s/km, including zero.
+
+    Returns
+    -------
+    power : ndarray of shape (n_node,)
+        Positive intrinsic power in km/s, preserving query order.
+
+    Raises
+    ------
+    ValueError
+        If inputs violate the callable contract or output power is not positive
+        and representable.
+
+    Notes
+    -----
+    The low-k plateau joins with a continuous zero first derivative; the
+    second derivative need not be continuous. Instrumental response, noise,
+    and comoving conversion belong to the consumer. No P3D model is inferred.
     """
     local = real_array(theta_local, "theta_local")
     if local.shape != (0,):
         raise ValueError("default_p1d requires zero local parameters, shape (0,)")
-    k = real_array(k_parallel_velocity, "k_parallel_velocity")
-    if k.ndim != 1 or not k.size or np.any(k < 0):
+    velocity_wavenumber = real_array(k_parallel_velocity, "k_parallel_velocity")
+    if (
+        velocity_wavenumber.ndim != 1
+        or not velocity_wavenumber.size
+        or np.any(velocity_wavenumber < 0)
+    ):
         raise ValueError("require nonempty 1D nonnegative velocity wavenumbers")
     evolution, slope, floor = _shape(z)
     # log(q)-log(k0) avoids overflowing q/k0 at large finite k.
-    u = np.log(np.maximum(k, floor)) - np.log(0.009)
+    log_wavenumber_ratio = np.log(np.maximum(velocity_wavenumber, floor)) - np.log(
+        0.009
+    )
     with np.errstate(over="ignore", under="ignore", invalid="ignore"):
         power = (np.pi * 0.064 / 0.009) * np.exp(
-            (2 + slope) * u - 0.1 * u**2 + 3.55 * evolution
+            (2 + slope) * log_wavenumber_ratio
+            - 0.1 * log_wavenumber_ratio**2
+            + 3.55 * evolution
         )
     if not np.all(np.isfinite(power)) or np.any(power <= 0):
         raise ValueError("P1D output is not positive representable float64")

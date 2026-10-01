@@ -46,6 +46,26 @@ class RealRecipe:
     def __init__(
         self, reference_root, template_path, case, *, negative_policy, bin_indices
     ):
+        """Load one explicit DESI-2 recipe and its read-only reference inputs.
+
+        Parameters
+        ----------
+        reference_root : str or pathlib.Path
+            Root of the verified lyaforecast reference checkout.
+        template_path : str or pathlib.Path
+            Path to the Vega-format K/PK/PKSB FITS template.
+        case : str
+            Identifier of one of the seven original DESI-2 validation
+            configurations.
+        negative_policy : str
+            Explicit treatment of negative interpolated source densities.
+        bin_indices : sequence of int or None
+            Zero-based bins to include; None uses the suite-defined bin selection.
+
+        Notes
+        -----
+        Evaluates the reference cosmology, loads source readers and the supplied template, and records source provenance.
+        """
         import camb
         import lyaforecast
         from lyaforecast.cosmoCAMB import CosmoCamb
@@ -65,11 +85,11 @@ class RealRecipe:
             for i in self.bin_indices
         }
         # Two or more explicit background nodes for reference linear f interpolation.
-        zs = sorted(set([1.8, 4.5, *self.z.values()]))
+        evaluation_redshifts = sorted(set([1.8, 4.5, *self.z.values()]))
         self.cosmo = CosmoCamb(
             str(self.root / "lyaforecast/resources/camb_configs/Planck18.ini"),
             z_ref=2.3,
-            z_centres=zs,
+            z_centres=evaluation_redshifts,
         )
         self.h = self.cosmo._pars.H0 / 100
         self.template = load_template(template_path, h_fid=self.h)
@@ -82,24 +102,24 @@ class RealRecipe:
         for field, key in zip(
             self.selection.fields, [s for s in self.settings if s.startswith("tracer ")]
         ):
-            t = self.config[key]
-            tracer = Tracer(t)
+            tracer_settings = self.config[key]
+            tracer = Tracer(tracer_settings)
             self.tracers[field.id] = tracer
             if tracer.bias_func is not None:
                 self.external.bias.set_density_bias_func(
                     tracer.simple_name, tracer.bias_func
                 )
-            path = self.root / "lyaforecast/resources/data" / t["dn dz"]
+            path = self.root / "lyaforecast/resources/data" / tracer_settings["dn dz"]
             self.resources.append(path)
             forest = field.kind == "forest"
             reader = DensityReader(
                 path,
                 semantics="cell_count_per_deg2",
-                target_density=t.getfloat("target density"),
+                target_density=tracer_settings.getfloat("target density"),
                 z_norm_min=2.15 if forest or field.id == "qso" else None,
                 magnitude_bounds=(
-                    t.getfloat("min_band_mag"),
-                    t.getfloat("max_band_mag"),
+                    tracer_settings.getfloat("min_band_mag"),
+                    tracer_settings.getfloat("max_band_mag"),
                 )
                 if forest
                 else None,
@@ -109,9 +129,11 @@ class RealRecipe:
             self.densities[field.id] = LegacyDensity(reader, negative_policy)
             if forest:
                 paths = sorted(
-                    (self.root / "lyaforecast/resources/data" / t["snr-file-dir"]).glob(
-                        "*.dat"
-                    )
+                    (
+                        self.root
+                        / "lyaforecast/resources/data"
+                        / tracer_settings["snr-file-dir"]
+                    ).glob("*.dat")
                 )
                 self.resources.extend(paths)
                 self.snrs[field.id] = LegacySNR(
@@ -154,29 +176,61 @@ class RealRecipe:
         self._samples = {}
 
     def prepare(self, index, *, k_intervals=128, mu_order=32, z_order=32):
-        """Reprepare changed grids, retaining raw readers and physical input policies."""
+        """Reprepare changed grids, retaining raw readers and physical input policies.
+
+        Parameters
+        ----------
+        index : int
+            Zero-based redshift-bin index.
+        k_intervals : int
+            Number of equal comoving k intervals between 0.01 and 0.5 h/Mpc, each
+            with four Gaussian nodes. Default is ``128``.
+        mu_order : int
+            Gauss-Legendre order on the dimensionless interval 0 <= mu <= 1. Default
+            is ``32``.
+        z_order : int
+            Gauss-Legendre order for integrating the comoving bin volume. Default is
+            ``32``.
+
+        Returns
+        -------
+        prepared : PreparedBin
+            Fiducial powers, responses, fixed source weights, noise and covariance.
+        settings : dict
+            Redshift, quadrature controls, physical parameters and sampled-input
+            metadata.
+
+        Notes
+        -----
+        Caches source samples by bin while preparing the requested Fourier and volume quadrature.
+        """
         lo, hi = bins(self.case)[index]
-        z = self.z[index]
-        c = self.cosmo
-        g = prepare_geometry(
+        forest_redshift = self.z[index]
+        cosmology = self.cosmo
+        geometry = prepare_geometry(
             lo,
             hi,
-            z_eval=z,
+            z_eval=forest_redshift,
             area_deg2=self.config["survey"].getfloat("survey_area"),
             h_fid=self.h,
             z_order=z_order,
-            hubble=c.results.hubble_parameter,
-            transverse_distance=c.results.comoving_radial_distance,
+            hubble=cosmology.results.hubble_parameter,
+            transverse_distance=cosmology.results.comoving_radial_distance,
         )
+
         grid = gauss_legendre_grid(
             np.linspace(0.01, 0.5, k_intervals + 1),
             k_order=4,
             mu_order=mu_order,
             h_fid=self.h,
         )
+
         fields = self.selection.fields
-        f = float(self.external.bias._growth_rate_func(z))
-        ratio = float(np.interp(z, c.z_bins, c.sigma8_zbins) / c.sigma8)
+        growth_rate = float(self.external.bias._growth_rate_func(forest_redshift))
+        ratio = float(
+            np.interp(forest_redshift, cosmology.z_bins, cosmology.sigma8_zbins)
+            / cosmology.sigma8
+        )
         biases, betas, widths = {}, {}, {}
         for field in fields:
             name = (
@@ -184,27 +238,34 @@ class RealRecipe:
                 if hasattr(field, "physical_tracer")
                 else self.tracers[field.id].simple_name
             )
-            biases[field.id] = float(self.external.bias._get_density_bias(z, name))
+            biases[field.id] = float(
+                self.external.bias._get_density_bias(forest_redshift, name)
+            )
             if field.kind == "forest":
-                betas[field.id] = float(self.external.bias._get_beta_rsd(z, name))
+                betas[field.id] = float(
+                    self.external.bias._get_beta_rsd(forest_redshift, name)
+                )
             reconstruction = (
                 1
                 if field.kind == "forest"
                 else self.config["survey"].getfloat("reconstruction factor")
             )
             transverse = 3.26 * ratio / np.sqrt(reconstruction)
-            widths[field.id] = ((1 + f) * transverse, transverse)
-        growth = ((1 + self.template.z_ref) / (1 + z)) ** 2
+            widths[field.id] = ((1 + growth_rate) * transverse, transverse)
+
+        growth = ((1 + self.template.z_ref) / (1 + forest_redshift)) ** 2
         model = KaiserModel(
             self.template,
             fields,
             biases=biases,
             betas=betas,
             widths=widths,
-            f=f if any(t.kind == "galaxy" for t in fields) else None,
+            f=growth_rate
+            if any(tracer.kind == "galaxy" for tracer in fields)
+            else None,
             local_names=("ap", "at"),
             wiggle=Scaling("ap_at", ap="ap", at="at"),
-            z=z,
+            z=forest_redshift,
             growth=growth,
         )
         bound = BoundParameters(
@@ -217,20 +278,22 @@ class RealRecipe:
             self.selection,
             [P3DProvider("wiggle BAO", model, bound, self.selection.required_pairs)],
         )
-        wave = LYA_REST_ANGSTROM * (1 + z)
+
+        observed_wavelength = LYA_REST_ANGSTROM * (1 + forest_redshift)
         responses = {}
         for field in fields:
-            t = self.tracers[field.id]
+            tracer = self.tracers[field.id]
             responses[field.id] = (
                 InstrumentResponse(
                     pixel_width_angstrom_to_velocity(
-                        t.pix_ang, lambda_obs_angstrom=wave
+                        tracer.pix_ang, lambda_obs_angstrom=observed_wavelength
                     ),
                     SPEED_LIGHT_KMS / self.config["survey"].getfloat("resolution"),
                 )
                 if field.kind == "forest"
                 else InstrumentResponse(0, 0)
             )
+
         if index not in self._samples:
             magnitudes = np.linspace(
                 self.config["survey"].getfloat("min_band_mag"),
@@ -242,18 +305,20 @@ class RealRecipe:
             for field in fields:
                 if fields.index(field) not in np.unique(self.selection.selected_pairs):
                     continue
-                t = self.tracers[field.id]
+                tracer = self.tracers[field.id]
                 if field.kind == "forest":
-                    source_z = wave / np.sqrt(t.lrmin * t.lrmax) - 1
+                    source_z = (
+                        observed_wavelength / np.sqrt(tracer.lrmin * tracer.lrmax) - 1
+                    )
                     sampled = sample_legacy_forest(
                         self.densities[field.id],
                         self.snrs[field.id],
-                        g,
+                        geometry,
                         responses[field.id],
                         z_source=source_z,
                         magnitudes=magnitudes,
-                        pixel_width_angstrom=t.pix_ang,
-                        exposure_count=t.num_exp,
+                        pixel_width_angstrom=tracer.pix_ang,
+                        exposure_count=tracer.num_exp,
                     )
                     forests[field.id] = ForestInput(
                         dict(
@@ -262,7 +327,8 @@ class RealRecipe:
                             quadrature=quadrature,
                             rho=sampled["rho"],
                             variance=sampled["variance"],
-                            length_velocity=SPEED_LIGHT_KMS * np.log(t.lrmax / t.lrmin),
+                            length_velocity=SPEED_LIGHT_KMS
+                            * np.log(tracer.lrmax / tracer.lrmin),
                             method="legacy",
                             iterations=3,
                         ),
@@ -274,9 +340,11 @@ class RealRecipe:
                     )
                     sampled_meta[field.id] = sampled["provenance"]
                 else:
-                    sampled = self.densities[field.id].sample(z, magnitudes)
+                    sampled = self.densities[field.id].sample(
+                        forest_redshift, magnitudes
+                    )
                     galaxies[field.id] = local_galaxy_density(
-                        sampled["values"], quadrature, g
+                        sampled["values"], quadrature, geometry
                     )
                     sampled_meta[field.id] = plain(sampled["provenance"])
             self._samples[index] = (
@@ -287,10 +355,11 @@ class RealRecipe:
                 quadrature,
             )
         forests, galaxies, metadata, magnitudes, quadrature = self._samples[index]
+
         prepared = prepare_bin(
             BinSpec(
                 f"{self.case}-{index}",
-                g,
+                geometry,
                 grid,
                 p3d,
                 responses,
@@ -299,10 +368,11 @@ class RealRecipe:
                 independent_sampling=True,
             )
         )
+
         settings = dict(
             bin=index,
             bounds=[lo, hi],
-            z_eval=z,
+            z_eval=forest_redshift,
             arithmetic_label=(lo + hi) / 2,
             k_intervals=k_intervals,
             k_order=4,
@@ -311,7 +381,7 @@ class RealRecipe:
             z_order=z_order,
             biases=biases,
             betas=betas,
-            f=f,
+            f=growth_rate,
             growth_G=growth,
             sigma8_ratio=ratio,
             widths=widths,
@@ -330,13 +400,33 @@ class RealRecipe:
             galaxies_nbar=galaxies,
             primary="wiggle ap/at only; full remapping/Q/RSD/damping, fixed identity smooth; no priors",
             parameter_ids=list(self.registry.ids),
-            volume=g.volume,
+            volume=geometry.volume,
             modes_normalization="V*k^2*w_k*w_mu/(2*pi^2)",
         )
         return prepared, plain(settings)
 
     def study(self, task):
-        """One-bin independent k/mu/z/step refinements with explicit pass metrics."""
+        """One-bin independent k/mu/z/step refinements with explicit pass metrics.
+
+        Parameters
+        ----------
+        task : dict
+            Declared case, bin, selected field pairs, parameter order and validation
+            thresholds.
+
+        Returns
+        -------
+        arrays : dict of str to ndarray
+            Fiducial and refined Fisher/error arrays plus direct covariance and
+            derivative evidence.
+        report : dict
+            Independent reconstruction checks, finite-refinement metrics and input
+            provenance.
+
+        Notes
+        -----
+        Runs only the fixed one-bin k, mu, volume and derivative-step variants listed in this method.
+        """
         index = task["bin"]
         variants = [
             ("base", 128, 32, 32, 1.0),
@@ -369,6 +459,7 @@ class RealRecipe:
                 grid=[k, 4, mu, zorder],
                 step=step * 1e-3,
             )
+
         metrics = {}
         for axis, first, last in [
             ("k", "k64", "base"),
@@ -376,42 +467,51 @@ class RealRecipe:
             ("z", "z16", "base"),
             ("step", "step_half", "step_quarter"),
         ]:
-            a, b = arrays[first + "_fisher"], arrays[last + "_fisher"]
-            ferr = float(np.linalg.norm(a - b) / np.linalg.norm(b))
-            eerr = float(
+            lower_fisher, upper_fisher = (
+                arrays[first + "_fisher"],
+                arrays[last + "_fisher"],
+            )
+            fisher_relative_change = float(
+                np.linalg.norm(lower_fisher - upper_fisher)
+                / np.linalg.norm(upper_fisher)
+            )
+            error_relative_change = float(
                 np.max(abs(arrays[first + "_errors"] / arrays[last + "_errors"] - 1))
             )
             volume = abs(reports[first]["volume"] / reports[last]["volume"] - 1)
             metrics[axis] = dict(
-                fisher_relative=ferr,
-                error_relative=eerr,
+                fisher_relative=fisher_relative_change,
+                error_relative=error_relative_change,
                 volume_relative=volume,
-                passed=ferr <= 1e-3 and eerr <= 5e-3 and volume <= 1e-6,
+                passed=fisher_relative_change <= 1e-3
+                and error_relative_change <= 5e-3
+                and volume <= 1e-6,
             )
+
         derivative = evaluate_derivatives(
             base.p3d, base.theta, base.geometry.z_eval, base.k, base.mu, step_scale=0.25
         )
         # Independent Gaussian covariance construction from the full field matrix.
-        n = len(self.selection.fields)
-        matrix_total = np.zeros((len(base.k), n, n))
+        n_fields = len(self.selection.fields)
+        matrix_total = np.zeros((len(base.k), n_fields, n_fields))
         for pair, column in zip(self.selection.required_pairs, base.total.T):
             i, j = pair
             matrix_total[:, i, j] = matrix_total[:, j, i] = column
         selected = self.selection.selected_pairs
-        independent_cov = np.empty((len(base.k), len(selected), len(selected)))
+        independent_covariance = np.empty((len(base.k), len(selected), len(selected)))
         for a, (i, j) in enumerate(selected):
             for b, (m, n) in enumerate(selected):
-                independent_cov[:, a, b] = (
+                independent_covariance[:, a, b] = (
                     matrix_total[:, i, m] * matrix_total[:, j, n]
                     + matrix_total[:, i, n] * matrix_total[:, j, m]
                 ) / base.modes
-        observed_jac = (base.products[:, :, None] * derivative.jacobian)[
+        observed_jacobian = (base.products[:, :, None] * derivative.jacobian)[
             :, self.selection.selected_to_required
         ][:, :, active]
-        solved = np.linalg.solve(independent_cov, observed_jac)
-        independent_fisher = np.einsum("nsi,nsj->ij", observed_jac, solved)
+        solved = np.linalg.solve(independent_covariance, observed_jacobian)
+        independent_fisher = np.einsum("nsi,nsj->ij", observed_jacobian, solved)
         np.testing.assert_allclose(
-            independent_cov,
+            independent_covariance,
             base.factors @ base.factors.swapaxes(-1, -2),
             rtol=5e-12,
             atol=0,
@@ -422,16 +522,17 @@ class RealRecipe:
         independent_metrics = dict(
             covariance_relative=float(
                 np.linalg.norm(
-                    independent_cov - base.factors @ base.factors.swapaxes(-1, -2)
+                    independent_covariance
+                    - base.factors @ base.factors.swapaxes(-1, -2)
                 )
-                / np.linalg.norm(independent_cov)
+                / np.linalg.norm(independent_covariance)
             ),
             fisher_relative=float(
                 np.linalg.norm(independent_fisher - arrays["step_quarter_fisher"])
                 / np.linalg.norm(independent_fisher)
             ),
         )
-        arrays["independent_covariance"] = independent_cov
+        arrays["independent_covariance"] = independent_covariance
         arrays["independent_fisher"] = independent_fisher
         arrays.update(
             fisher=arrays["step_quarter_fisher"],
@@ -461,7 +562,23 @@ class RealRecipe:
         return arrays, report
 
     def amplitude(self, index):
-        """Actual intrinsic object plus A wrapper, independent full-field trace oracle."""
+        """Actual intrinsic object plus A wrapper, independent full-field trace oracle.
+
+        Parameters
+        ----------
+        index : int
+            Zero-based redshift-bin index.
+
+        Returns
+        -------
+        comparison : dict
+            Scalar amplitude information from both contractions, their relative
+            discrepancy and direct external-spectrum checks.
+
+        Notes
+        -----
+        Uses a tiny grid with the same fixed response and noise. Asserts agreement with the full-field Gaussian trace expression.
+        """
         registry = ParameterRegistry([Parameter("A", 1, "target", step=0.001)])
         base, _ = self.prepare(index, k_intervals=2, mu_order=3, z_order=8)
         routes = {
@@ -479,6 +596,29 @@ class RealRecipe:
         )
 
         def model(theta, z, k, mu, pairs):
+            """Apply a single amplitude parameter to the external intrinsic spectra.
+
+            Parameters
+            ----------
+            theta : array_like, shape (n_parameter,)
+                Model parameter values in the declared local parameter order.
+            z : float
+                Dimensionless evaluation redshift.
+            k : array_like
+                Comoving Fourier wavenumbers in h/Mpc; array shape follows the model or
+                paired grid.
+            mu : array_like
+                Dimensionless line-of-sight direction cosines aligned with the Fourier
+                grid.
+            pairs : array_like, shape (n_pair, 2)
+                Ordered pairs of integer field indices.
+
+            Returns
+            -------
+            power : ndarray, shape (n_cell, n_pair)
+                External intrinsic spectra in (Mpc/h)^3 multiplied by the dimensionless
+                amplitude.
+            """
             return theta[0] * bridge([], z, k, mu, pairs)
 
         bound = BoundParameters(registry, ("A",), {"A": "A"})
@@ -517,25 +657,29 @@ class RealRecipe:
         covariance = gaussian_covariance(
             signal + base.noise, base.modes, self.selection
         )
-        deriv = evaluate_derivatives(
+        derivatives = evaluate_derivatives(
             p3d, registry.fiducials, base.geometry.z_eval, base.k, base.mu
         )
         fisher = fisher_from_factors(
-            (base.products[:, :, None] * deriv.jacobian)[
+            (base.products[:, :, None] * derivatives.jacobian)[
                 :, self.selection.selected_to_required
             ],
             factor_covariance(covariance),
         )[0, 0]
         oracle = 0.0
-        n = len(self.selection.fields)
+        n_fields = len(self.selection.fields)
         for row, noise, modes in zip(signal, base.noise, base.modes):
-            s = np.zeros((n, n))
-            t = np.zeros((n, n))
-            for (i, j), power, nn in zip(self.selection.required_pairs, row, noise):
-                s[i, j] = s[j, i] = power
-                t[i, j] = t[j, i] = power + nn
-            x = np.linalg.solve(t, s)
-            oracle += modes * np.trace(x @ x) / 2
+            signal_matrix = np.zeros((n_fields, n_fields))
+            total_matrix = np.zeros((n_fields, n_fields))
+            for (i, j), power, noise_power in zip(
+                self.selection.required_pairs, row, noise
+            ):
+                signal_matrix[i, j] = signal_matrix[j, i] = power
+                total_matrix[i, j] = total_matrix[j, i] = power + noise_power
+            inverse_weighted_signal = np.linalg.solve(total_matrix, signal_matrix)
+            oracle += (
+                modes * np.trace(inverse_weighted_signal @ inverse_weighted_signal) / 2
+            )
         np.testing.assert_allclose(fisher, oracle, rtol=5e-12, atol=0)
         return dict(
             fisher=float(fisher),

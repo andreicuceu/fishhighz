@@ -8,6 +8,13 @@ EXAMPLE_PATH = Path(__file__).resolve().parents[1] / "examples/desi2_accuracy.py
 
 
 def _example():
+    """Import the accuracy example without invoking its main function.
+
+    Returns
+    -------
+    module : module
+        Loaded example module for the mocked public-API test.
+    """
     spec = importlib.util.spec_from_file_location(
         "desi2_accuracy_example", EXAMPLE_PATH
     )
@@ -18,21 +25,65 @@ def _example():
 
 
 def test_accuracy_example_delegates_public_forecast_and_saves(tmp_path, monkeypatch):
-    """The example delegates entirely to Forecast and returns its result."""
+    """The example delegates entirely to Forecast and returns its result.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that restores patched callables, attributes, and environment
+        variables after the test.
+    """
     example = _example()
     calls = []
 
     class FakeResult:
         def save(self, path):
+            """Record the requested output path without writing forecast data.
+
+            Parameters
+            ----------
+            path : pathlib.Path
+                Path of the temporary test artifact to read or write.
+
+            Notes
+            -----
+            Appends to the enclosing test call log so provider dispatch can be checked.
+            """
             calls.append(("save", path))
 
     result = FakeResult()
 
     class FakeForecast:
         def __init__(self, source):
+            """Initialize the synthetic FakeForecast fixture.
+
+            Parameters
+            ----------
+            source : pathlib.Path
+                Path to the synthetic survey configuration.
+
+            Notes
+            -----
+            Sets the instance state used by the enclosing test; no scientific calculation is run.
+            Appends to the enclosing test call log so provider dispatch can be checked.
+            """
             calls.append(("construct", source))
 
         def run(self):
+            """Return the synthetic public forecast result and record the call where required.
+
+            Returns
+            -------
+            result : FakeResult
+                Placeholder forecast result used to test delegation and saving.
+
+            Notes
+            -----
+            Appends to the enclosing test call log so provider dispatch can be checked.
+            """
             calls.append(("run",))
             return result
 

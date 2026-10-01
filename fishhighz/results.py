@@ -33,6 +33,26 @@ class FisherDiagnostics:
 
 
 def _subset(registry, ids):
+    """Resolve parameter indices in the explicitly requested order.
+
+    Parameters
+    ----------
+    registry : ParameterRegistry
+        Ordered global parameter definitions and fiducials.
+    ids : sequence of str or None
+        Unique requested IDs; None selects the entire registry.
+
+    Returns
+    -------
+    indices : ndarray of int64, shape (n_requested,)
+        Global indices in the requested order.
+
+    Raises
+    ------
+    ValueError
+        If the explicit subset is empty, repeated, unknown, or not a sequence of
+        strings.
+    """
     if ids is None:
         return np.arange(len(registry.ids), dtype=np.int64)
     if isinstance(ids, str):
@@ -52,16 +72,26 @@ def diagonal_prior(registry, sigmas):
     Parameters
     ----------
     registry : ParameterRegistry
-        The exact global parameter basis.
-    sigmas : mapping
-        Explicit parameter ID to positive finite absolute width. Unlisted IDs
-        receive zero information. Bounds and derivative steps are not priors.
+        Ordered global parameter definitions and fiducials.
+    sigmas : mapping of str to float
+        Positive finite prior standard deviations in each named parameter's
+        units. Unlisted IDs receive zero information.
 
     Returns
     -------
-    prior : ndarray
-        Owned C-contiguous float64 diagonal precision, not a covariance.
-        Unrepresentable zero/infinite precision is rejected, not regularized.
+    prior : ndarray of shape (n_global, n_global)
+        Owned diagonal float64 precision in inverse products of parameter units.
+
+    Raises
+    ------
+    ValueError
+        If the registry, IDs, prior widths, or represented precisions are
+        invalid.
+
+    Notes
+    -----
+    Bounds and finite-difference steps are not priors. Unrepresentable
+    zero or infinite precision is rejected without regularization.
     """
     if not isinstance(registry, ParameterRegistry):
         raise ValueError("registry must be a ParameterRegistry")
@@ -115,17 +145,48 @@ class FisherResult:
     diagnostics: FisherDiagnostics
 
     def __init__(self, registry, data_fisher, *, prior_fisher=None):
+        """Store separate data and prior Fisher information with rank diagnostics.
+
+        Parameters
+        ----------
+        registry : ParameterRegistry
+            Ordered global parameter definitions and fiducials.
+        data_fisher : array_like of shape (n_global, n_global)
+            Finite symmetric positive-semidefinite data information in inverse
+            products of parameter units; may be singular.
+        prior_fisher : array_like of shape (n_global, n_global), optional
+            Separate prior precision in the same units and fiducial basis. Default
+            None uses zero information.
+
+        Returns
+        -------
+        None
+            Store owned read-only data, prior, and total matrices and normalized
+            rank/null-direction diagnostics.
+
+        Raises
+        ------
+        ValueError
+            If registry, matrix shapes, numerical range, or normalized information
+            checks fail.
+
+        Notes
+        -----
+        No covariance inverse is computed. The existing normalized symmetry and
+        positivity checks preserve singular information without clipping
+        eigenvalues; only tolerated asymmetry is averaged in owned copies.
+        """
         if not isinstance(registry, ParameterRegistry):
             raise ValueError("registry must be a ParameterRegistry")
-        n = len(registry.ids)
+        n_parameter = len(registry.ids)
         context = f"parameters {registry.ids!r}"
         data = inspect_information(data_fisher, f"data Fisher, {context}")[0]
-        if data.shape != (n, n):
+        if data.shape != (n_parameter, n_parameter):
             raise ValueError("data Fisher shape must match registry")
         if prior_fisher is None:
-            prior_fisher = np.zeros((n, n), dtype=np.float64)
+            prior_fisher = np.zeros((n_parameter, n_parameter), dtype=np.float64)
         prior = inspect_information(prior_fisher, f"prior Fisher, {context}")[0]
-        if prior.shape != (n, n):
+        if prior.shape != (n_parameter, n_parameter):
             raise ValueError("prior Fisher shape must match registry")
         with np.errstate(over="ignore", invalid="ignore"):
             total = data + prior
@@ -133,7 +194,9 @@ class FisherResult:
             total, f"total Fisher, {context}"
         )
         rank = int(np.count_nonzero(values > tolerance))
-        condition = float(values[-1] / values[0]) if rank == n else float("inf")
+        condition = (
+            float(values[-1] / values[0]) if rank == n_parameter else float("inf")
+        )
         diagnostics = FisherDiagnostics(
             ids=registry.ids,
             rank=rank,
@@ -153,77 +216,124 @@ class FisherResult:
         object.__setattr__(self, "diagnostics", diagnostics)
 
     def conditional_errors(self, ids=None):
-        """Return ordered 1/sqrt(F_ii), fixing every other parameter.
+        """Compute parameter errors with every other parameter fixed.
 
         Parameters
         ----------
         ids : sequence of str, optional
-            Requested IDs; all in registry order by default. Exactly zero
-            information returns infinity, even for singular joint information.
+            Requested unique parameter IDs in result order. Default None selects all
+            registry IDs.
+
+        Returns
+        -------
+        errors : ndarray of shape (n_requested,)
+            Standard deviations 1/sqrt(F_ii) in each parameter's units. Exactly zero
+            information gives infinity even for singular joint information.
+
+        Raises
+        ------
+        ValueError
+            If the requested parameter subset is invalid.
         """
         index = _subset(self.registry, ids)
         diagonal = self.total_fisher.diagonal()[index]
         result = np.full(len(index), np.inf, dtype=np.float64)
-        positive = diagonal > 0
-        result[positive] = 1 / np.sqrt(diagonal[positive])
+        positive_mask = diagonal > 0
+        result[positive_mask] = 1 / np.sqrt(diagonal[positive_mask])
         return result
 
     def marginalized_covariance(self, ids=None):
-        """Solve the full retained information, then select ordered covariance.
+        """Solve the full retained information and select the requested covariance.
 
         Parameters
         ----------
         ids : sequence of str, optional
-            Requested IDs; all by default. Other parameters remain free and
-            marginalized over, not fixed. Singular full information raises with
-            rank/null context, even if the requested sub-block is identifiable.
+            Requested unique parameter IDs in result order. Default None selects all
+            registry IDs.
 
         Returns
         -------
-        covariance : ndarray
-            Owned C-contiguous float64 covariance of the requested parameters.
+        covariance : ndarray of shape (n_requested, n_requested)
+            Owned float64 covariance in products of the requested parameter units.
+
+        Raises
+        ------
+        ValueError
+            If requested IDs are invalid, the retained information is rank
+            deficient, or the covariance solve is nonfinite.
+
+        Notes
+        -----
+        Unrequested parameters remain free and are marginalized. Singular full
+        information fails even if the requested sub-block is identifiable.
         """
         index = _subset(self.registry, ids)
-        diag = self.diagnostics
-        n = len(self.registry.ids)
-        if diag.rank != n:
+        diagnostics = self.diagnostics
+        n_parameter = len(self.registry.ids)
+        if diagnostics.rank != n_parameter:
             raise ValueError(
-                f"cannot marginalize singular Fisher: rank {diag.rank}/{n}, "
-                f"IDs {diag.ids!r}, normalized threshold {diag.tolerance:.17g}; "
-                f"null/near-null directions {diag.null_directions.tolist()} "
+                f"cannot marginalize singular Fisher: rank {diagnostics.rank}/{n_parameter}, "
+                f"IDs {diagnostics.ids!r}, normalized threshold {diagnostics.tolerance:.17g}; "
+                f"null/near-null directions {diagnostics.null_directions.tolist()} "
                 "in x=scales*delta_theta (see diagnostics.scales); "
                 "explicitly fix parameters or add a finite prior"
             )
         lower = factor_covariance(self.total_fisher[None])[0]
-        solved = np.empty((n, n), dtype=np.float64)
+        solved = np.empty((n_parameter, n_parameter), dtype=np.float64)
         with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
-            _forward_substitute(lower, np.eye(n), solved)
+            _forward_substitute(lower, np.eye(n_parameter), solved)
             covariance = solved.T @ solved
         if not np.all(np.isfinite(solved)) or not np.all(np.isfinite(covariance)):
             raise ValueError(
-                f"nonfinite marginalized covariance for parameters {diag.ids!r}"
+                f"nonfinite marginalized covariance for parameters {diagnostics.ids!r}"
             )
         return np.array(
             covariance[np.ix_(index, index)], dtype=np.float64, order="C", copy=True
         )
 
     def marginalized_errors(self, ids=None):
-        """Return sqrt of marginalized covariance diagonals, in requested order.
+        """Return marginalized standard deviations in the requested order.
 
         Parameters
         ----------
         ids : sequence of str, optional
-            Requested IDs; omitted parameters remain free, not fixed.
+            Requested unique parameter IDs in result order. Default None selects all
+            registry IDs.
+
+        Returns
+        -------
+        errors : ndarray of shape (n_requested,)
+            Standard deviations in each parameter's units; unrequested parameters
+            remain free.
+
+        Raises
+        ------
+        ValueError
+            If requested IDs are invalid, the retained information is rank
+            deficient, or the covariance solve is nonfinite.
         """
         return np.sqrt(self.marginalized_covariance(ids).diagonal()).copy()
 
     def correlations(self, ids=None):
-        """Return correlations derived from full marginalized covariance.
+        """Compute dimensionless correlations from the marginalized covariance.
 
         Parameters
         ----------
         ids : sequence of str, optional
-            Requested ordered IDs; defaults to all, without fixing others.
+            Requested unique parameter IDs in result order. Default None selects all
+            registry IDs.
+
+        Returns
+        -------
+        correlation : ndarray of shape (n_requested, n_requested)
+            Correlations in requested parameter order; unrequested parameters remain
+            free.
+
+        Raises
+        ------
+        ValueError
+            If requested IDs are invalid, the retained information is rank
+            deficient, or the covariance solve is nonfinite.
         """
         covariance = self.marginalized_covariance(ids)
         sigma = np.sqrt(covariance.diagonal())
@@ -234,18 +344,27 @@ class FisherResult:
         return correlation
 
     def fix_except(self, ids):
-        """Keep ordered IDs free and explicitly fix their complement.
+        """Retain the specified free parameters and fix their complement.
 
         Parameters
         ----------
         ids : nonempty sequence of str
-            Retained free parameters. Principal submatrices preserve separate
-            data/prior information and metadata. This is not marginalization.
+            Unique retained global parameter IDs in the desired order.
 
         Returns
         -------
         result : FisherResult
-            New result on the explicitly retained registry.
+            New registry and principal data/prior information submatrices, in
+            unchanged parameter units.
+
+        Raises
+        ------
+        ValueError
+            If the subset is absent, empty, repeated, or unknown.
+
+        Notes
+        -----
+        This operation fixes omitted parameters; it does not marginalize them.
         """
         if ids is None:
             raise ValueError("fix_except requires an explicit nonempty ID subset")
@@ -259,22 +378,33 @@ class FisherResult:
 
 
 def combine_results(results, *, prior_fisher=None):
-    """Sum independent unmarginalized data in an identical ordered registry.
+    """Sum independent unmarginalized data and add one shared prior.
 
     Parameters
     ----------
     results : nonempty iterable of FisherResult
-        Data-only contributions. Nonzero existing priors are rejected. Every
-        ordered parameter record (including fiducial, role, bounds, step) must
-        match; singular individual contributions are legal.
-    prior_fisher : array_like, optional
-        One final precision matrix to apply once after summing all data.
+        Data-only contributions with identical ordered parameter metadata and
+        fiducials. Singular contributions are allowed; nonzero existing priors
+        are rejected.
+    prior_fisher : array_like of shape (n_global, n_global), optional
+        Shared precision in inverse products of parameter units, applied once
+        after summation. Default None supplies zero prior.
 
     Returns
     -------
     result : FisherResult
-        Combined data plus the one explicitly supplied prior. Combine before
-        marginalizing shared nuisance parameters; no basis union is inferred.
+        Combined data and the explicitly supplied prior in the common registry.
+
+    Raises
+    ------
+    ValueError
+        If contributions, metadata, priors, or accumulated information are
+        invalid.
+
+    Notes
+    -----
+    Combine information before marginalizing shared nuisance parameters.
+    The function does not infer a union of different parameter bases.
     """
     results = tuple(results)
     if not results or any(not isinstance(r, FisherResult) for r in results):

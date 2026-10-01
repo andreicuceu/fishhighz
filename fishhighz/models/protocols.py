@@ -32,7 +32,35 @@ class P3D(Protocol):
         k: np.ndarray,
         mu: np.ndarray,
         pairs: np.ndarray,
-    ) -> ArrayLike: ...
+    ) -> ArrayLike:
+        """Evaluate intrinsic three-dimensional clustering power.
+
+        Parameters
+        ----------
+        theta_local : ndarray of shape (n_local,)
+            Local parameter values in binding order, in their declared physical
+            units.
+        z : float
+            Scalar dimensionless evaluation redshift.
+        k : ndarray of shape (n_node,)
+            Positive observed wavenumbers in h_fid/Mpc.
+        mu : ndarray of shape (n_node,)
+            Paired dimensionless direction cosines.
+        pairs : ndarray of int, shape (n_pair, 2)
+            Original field indices, in requested spectrum order.
+
+        Returns
+        -------
+        power : array_like of shape (n_node, n_pair)
+            Real intrinsic clustering power in (Mpc/h_fid)^3; signed cross powers
+            are allowed.
+
+        Notes
+        -----
+        Providers own cosmological and dilation physics. Instrumental response
+        and known sampling noise are handled explicitly by the consumer.
+        """
+        ...
 
 
 class P1D(Protocol):
@@ -40,7 +68,30 @@ class P1D(Protocol):
 
     def __call__(
         self, theta_local: np.ndarray, z: float, k_parallel_velocity: np.ndarray
-    ) -> ArrayLike: ...
+    ) -> ArrayLike:
+        """Evaluate intrinsic one-dimensional forest power independently of P3D.
+
+        Parameters
+        ----------
+        theta_local : ndarray of shape (n_local,)
+            Local parameter values in binding order, in their declared physical
+            units.
+        z : float
+            Scalar dimensionless evaluation redshift.
+        k_parallel_velocity : ndarray of shape (n_node,)
+            Line-of-sight wavenumbers in s/km.
+
+        Returns
+        -------
+        power : array_like of shape (n_node,)
+            Intrinsic one-dimensional forest power in km/s.
+
+        Notes
+        -----
+        No relation to an external three-dimensional model or comoving conversion
+        is inferred from this callable contract.
+        """
+        ...
 
 
 class P3DJacobian(Protocol):
@@ -53,10 +104,57 @@ class P3DJacobian(Protocol):
         k: np.ndarray,
         mu: np.ndarray,
         pairs: np.ndarray,
-    ) -> ArrayLike: ...
+    ) -> ArrayLike:
+        """Evaluate derivatives of intrinsic power with respect to local parameters.
+
+        Parameters
+        ----------
+        theta_local : ndarray of shape (n_local,)
+            Local parameter values in binding order, in their declared physical
+            units.
+        z : float
+            Scalar dimensionless evaluation redshift.
+        k : ndarray of shape (n_node,)
+            Positive observed wavenumbers in h_fid/Mpc.
+        mu : ndarray of shape (n_node,)
+            Paired dimensionless direction cosines.
+        pairs : ndarray of int, shape (n_pair, 2)
+            Original field indices, in requested spectrum order.
+
+        Returns
+        -------
+        jacobian : array_like of shape (n_node, n_pair, n_local)
+            Signed local derivatives in (Mpc/h_fid)^3 per parameter unit.
+
+        Notes
+        -----
+        Local columns follow binding order. Equality-bound local derivatives are
+        summed into global columns by the consumer.
+        """
+        ...
 
 
 def _output(value, shape):
+    """Copy a provider result and enforce its exact shape.
+
+    Parameters
+    ----------
+    value : array_like
+        Real finite provider values in the relevant model units.
+    shape : tuple of int
+        Required result shape; broadcasting is not permitted.
+
+    Returns
+    -------
+    output : ndarray
+        Owned C-contiguous float64 copy with the requested shape and unchanged
+        units.
+
+    Raises
+    ------
+    ValueError
+        If dtype, finiteness, or exact shape validation fails.
+    """
     output = real_array(value, "provider output")
     if output.shape != shape:
         raise ValueError(f"expected output shape {shape}, got {output.shape}")
@@ -64,17 +162,79 @@ def _output(value, shape):
 
 
 def validate_p3d(value, n_node, n_pair):
-    """Copy real finite power into exact (node,pair), C-order float64."""
+    """Validate and copy intrinsic three-dimensional power without changing units.
+
+    Parameters
+    ----------
+    value : array_like of shape (n_node, n_pair)
+        Finite real intrinsic three-dimensional power in (Mpc/h_fid)^3.
+    n_node : int
+        Positive number of Fourier nodes.
+    n_pair : int
+        Positive number of requested spectra.
+
+    Returns
+    -------
+    output : ndarray of shape (n_node, n_pair)
+        Owned C-contiguous float64 values in (Mpc/h_fid)^3.
+
+    Raises
+    ------
+    ValueError
+        If dimensions, dtype, values, or exact output shape are invalid.
+    """
     return _output(value, (integer(n_node, "n_node", 1), integer(n_pair, "n_pair", 1)))
 
 
 def validate_p1d(value, n_node):
-    """Copy real finite P1D into exact (node,), C-order float64."""
+    """Validate and copy intrinsic one-dimensional power without changing units.
+
+    Parameters
+    ----------
+    value : array_like of shape (n_node,)
+        Finite real intrinsic one-dimensional power in km/s.
+    n_node : int
+        Positive number of Fourier nodes.
+
+    Returns
+    -------
+    output : ndarray of shape (n_node,)
+        Owned C-contiguous float64 values in km/s.
+
+    Raises
+    ------
+    ValueError
+        If dimensions, dtype, values, or exact output shape are invalid.
+    """
     return _output(value, (integer(n_node, "n_node", 1),))
 
 
 def validate_p3d_jacobian(value, n_node, n_pair, n_local):
-    """Copy signed finite derivatives into exact (node,pair,local) float64."""
+    """Validate and copy local power derivatives without changing units.
+
+    Parameters
+    ----------
+    value : array_like of shape (n_node, n_pair, n_local)
+        Finite real local power derivatives in (Mpc/h_fid)^3 per local parameter
+        unit.
+    n_node : int
+        Positive number of Fourier nodes.
+    n_pair : int
+        Positive number of requested spectra.
+    n_local : int
+        Nonnegative number of local free parameters.
+
+    Returns
+    -------
+    output : ndarray of shape (n_node, n_pair, n_local)
+        Owned C-contiguous float64 values in (Mpc/h_fid)^3 per local parameter
+        unit.
+
+    Raises
+    ------
+    ValueError
+        If dimensions, dtype, values, or exact output shape are invalid.
+    """
     return _output(
         value,
         (

@@ -10,17 +10,46 @@ from fishhighz.kernels.covariance import _gaussian_covariance_kernel
 
 
 def selection(n=2, chosen=None):
+    """Construct a selected-spectrum inventory for synthetic galaxy fields.
+
+    Parameters
+    ----------
+    n : int, optional
+        Number of synthetic observed fields. Default is 2.
+    chosen : sequence of pair or None, optional
+        Selected field pairs; None selects every unique pair. Default is None.
+
+    Returns
+    -------
+    selection : PairSelection
+        Observable pairs and the covariance-required pair closure.
+    """
     return PairSelection(
         [ObservedField(f"field_({i})", "galaxy", "shared") for i in range(n)], chosen
     )
 
 
 def pack(dense, selected):
+    """Pack dense field-power matrices in covariance-required pair order.
+
+    Parameters
+    ----------
+    dense : ndarray of shape (n_nodes, n_fields, n_fields)
+        Dense symmetric field-power matrices in (Mpc/h)^3.
+    selected : PairSelection
+        Pair closure determining which dense-matrix entries are packed.
+
+    Returns
+    -------
+    power : ndarray of shape (n_nodes, n_required_pairs)
+        Required field powers in the same units as dense.
+    """
     i, j = selected.required_pairs.T
     return dense[:, i, j]
 
 
 def test_one_field_noise_scaling_and_grid():
+    """Check one field noise scaling and grid."""
     chosen = selection(1)
     signal, noise = np.array([[2.0], [0.0], [3.0]]), np.array([[1.0], [4.0], [0.5]])
     counts = np.array([0.25, 2.0, 7.5])
@@ -42,8 +71,9 @@ def test_one_field_noise_scaling_and_grid():
 
 
 def test_two_field_analytic_signed_and_uncorrelated():
+    """Check two field analytic signed and uncorrelated."""
     total = np.array([[4.0, -3.0, 9.0], [4.0, 0.0, 9.0]])
-    n = np.array([0.5, 3.0])
+    mode_counts = np.array([0.5, 3.0])
     expected = (
         np.array(
             [
@@ -51,14 +81,17 @@ def test_two_field_analytic_signed_and_uncorrelated():
                 [[32, 0, 0], [0, 36, 0], [0, 0, 162]],
             ]
         )
-        / n[:, None, None]
+        / mode_counts[:, None, None]
     )
-    np.testing.assert_allclose(gaussian_covariance(total, n, selection()), expected)
-    cross = gaussian_covariance(total, n, selection(chosen=[(0, 1)]))
+    np.testing.assert_allclose(
+        gaussian_covariance(total, mode_counts, selection()), expected
+    )
+    cross = gaussian_covariance(total, mode_counts, selection(chosen=[(0, 1)]))
     np.testing.assert_allclose(cross[:, 0, 0], [45 / 0.5, 36 / 3])
 
 
 def test_selection_order_five_fields_and_unused_field():
+    """Check selection order five fields and unused field."""
     rng = np.random.default_rng(14)
     lower = rng.normal(size=(3, 5, 5))
     dense = lower @ lower.transpose(0, 2, 1)
@@ -82,6 +115,7 @@ def test_selection_order_five_fields_and_unused_field():
 def test_supplied_observed_noise_only_added_once():
     # Supplied signal already contains any desired response; no amplitude
     # adjustment is appropriate. Negative noise cross powers are explicit.
+    """Check supplied observed noise only added once."""
     signal = np.array([[4.0, -1.0, 9.0], [2.0, 0.5, 3.0]])
     noise = np.array([[1.0, -0.2, 2.0], [0.5, 0.0, 0.8]])
     expected_total = np.array([[5.0, -1.2, 11.0], [2.5, 0.5, 3.8]])
@@ -99,6 +133,13 @@ def test_supplied_observed_noise_only_added_once():
     "total", [[[4.0, -6.0, 9.0]], [[0.0, 0.0, 9.0]], [[0.0, 0.0, 0.0]]]
 )
 def test_valid_singular_matrices(total):
+    """Check valid singular matrices.
+
+    Parameters
+    ----------
+    total : list
+        Total signal-plus-noise test array, supplied by pytest parametrization.
+    """
     result = gaussian_covariance(total, [2.0], selection())
     assert np.all(np.isfinite(result))
     assert np.linalg.matrix_rank(result[0]) < 3
@@ -119,6 +160,15 @@ def test_valid_singular_matrices(total):
     ],
 )
 def test_invalid_two_fields_node_and_id(packed, message):
+    """Check invalid two fields node and id.
+
+    Parameters
+    ----------
+    packed : list
+        Packed spectrum array, supplied by pytest parametrization.
+    message : str
+        Expected diagnostic text, supplied by pytest parametrization.
+    """
     with pytest.raises(ValueError, match=f"node 1.*field.*{message}") as error:
         gaussian_covariance([[1.0, 0.0, 1.0], packed], [1.0, 1.0], selection())
     assert "field_(" in str(error.value)
@@ -126,6 +176,13 @@ def test_invalid_two_fields_node_and_id(packed, message):
 
 @pytest.mark.parametrize("scales", [[1.0, 1.0, 1.0], [1e-60, 1.0, 1e60]])
 def test_full_psd_check_with_disparate_amplitudes(scales):
+    """Check full psd check with disparate amplitudes.
+
+    Parameters
+    ----------
+    scales : list
+        Component scale factors, supplied by pytest parametrization.
+    """
     scales = np.array(scales)
     valid = np.array([[1.0, 0.2, -0.3], [0.2, 1.0, 0.1], [-0.3, 0.1, 1.0]])
     invalid = np.array([[1.0, 0.9, 0.9], [0.9, 1.0, -0.9], [0.9, -0.9, 1.0]])
@@ -144,6 +201,7 @@ def test_full_psd_check_with_disparate_amplitudes(scales):
 
 
 def test_roundoff_tolerance_does_not_regularize():
+    """Check roundoff tolerance does not regularize."""
     total = [[1.0, 1.0 + 1e-15, 1.0]]
     result = gaussian_covariance(total, [1.0], selection())
     assert result[0, 0, 1] == 2 * total[0][1]  # input cross power preserved
@@ -152,6 +210,7 @@ def test_roundoff_tolerance_does_not_regularize():
 
 
 def test_independent_dense_wick_expression():
+    """Check independent dense wick expression."""
     rng = np.random.default_rng(771)
     for rank in (2, 4):
         factors = rng.normal(size=(4, 4, rank))
@@ -177,6 +236,7 @@ def test_independent_dense_wick_expression():
 
 
 def test_ownership_noncontiguous_kernel_and_batches():
+    """Check ownership noncontiguous kernel and batches."""
     chosen = selection()
     original = np.tile([4.0, -3.0, 9.0, 0.0, 0.0, 0.0], (8, 1))
     powers = original[::2, :3]
@@ -230,6 +290,14 @@ def test_ownership_noncontiguous_kernel_and_batches():
     ],
 )
 def test_invalid_power_arrays(bad):
+    """Check invalid power arrays.
+
+    Parameters
+    ----------
+    bad : float or ndarray or list
+        Invalid input exercising the specified rejection path, supplied by
+        pytest parametrization.
+    """
     with pytest.raises(ValueError):
         gaussian_covariance(bad, [1.0], selection(1))
     with pytest.raises(ValueError):
@@ -256,11 +324,20 @@ def test_invalid_power_arrays(bad):
     ],
 )
 def test_invalid_counts(bad):
+    """Check invalid counts.
+
+    Parameters
+    ----------
+    bad : float or ndarray or list
+        Invalid input exercising the specified rejection path, supplied by
+        pytest parametrization.
+    """
     with pytest.raises(ValueError):
         gaussian_covariance([[1.0]], bad, selection(1))
 
 
 def test_shapes_completeness_overflow_and_no_broadcasting():
+    """Check shapes completeness overflow and no broadcasting."""
     with pytest.raises(ValueError, match="matching shapes"):
         combine_observed_power(np.ones((2, 3)), np.ones((2, 1)))
     with pytest.raises(ValueError, match="selection"):
@@ -281,6 +358,7 @@ def test_shapes_completeness_overflow_and_no_broadcasting():
 def test_extreme_auto_scales_cross_only():
     # Normalizing via a product of autos would lose range in related cases;
     # sqrt/axis divisions retain a meaningful dimensionless correlation.
+    """Check extreme auto scales cross only."""
     chosen = selection(chosen=[(0, 1)])
     actual = gaussian_covariance([[1e-300, 0.5, 1e300]], [1.0], chosen)
     np.testing.assert_allclose(actual, [[[1.25]]])

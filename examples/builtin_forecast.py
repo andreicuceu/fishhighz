@@ -17,7 +17,26 @@ from fishhighz.results import FisherResult, diagonal_prior
 
 
 def run():
-    """Return step convergence and identifiable target errors in two toy modes."""
+    """Compare finite-difference refinements for BAO and common-AP forecasts.
+
+    Returns
+    -------
+    reports : dict
+        Reports keyed by bao and ap_f, containing dimensionless target errors,
+        derivative/Fisher changes, convergence, and information rank.
+
+    Raises
+    ------
+    AssertionError
+        If refinement tolerances or fixed-array ownership checks fail.
+    ValueError
+        If the template and Fourier grid use different fiducial h values.
+
+    Notes
+    -----
+    Builds a synthetic template, freezes the covariance in each mode, and
+    applies explicit nuisance priors before checking derivative convergence.
+    """
     knots = np.geomspace(0.01, 0.7, 600)
     smooth = 100 / (1 + 2 * knots)
     wiggle = 8 * np.sin(110 * knots) * np.exp(-((knots / 0.4) ** 2))

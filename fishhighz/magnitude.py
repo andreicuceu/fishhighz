@@ -9,20 +9,68 @@ import numpy as np
 
 
 def composite(partition, order):
-    """Return ordered Gauss--Legendre nodes and weights on ``partition``."""
+    """Construct magnitude quadrature on an explicit interval partition.
 
-    x, w = np.polynomial.legendre.leggauss(int(order))
-    lo, hi = np.asarray(partition[:-1]), np.asarray(partition[1:])
-    return ((lo[:, None] + hi[:, None]) / 2 + (hi - lo)[:, None] * x / 2).ravel(), (
-        (hi - lo)[:, None] * w / 2
+    Parameters
+    ----------
+    partition : sequence of float, shape (n_interval + 1,)
+        Ordered magnitude boundaries.
+    order : int
+        Gauss–Legendre order within each interval.
+
+    Returns
+    -------
+    magnitudes : ndarray of shape (n_interval*order,)
+        Interior magnitude nodes in interval order.
+    weights : ndarray of shape (n_interval*order,)
+        Corresponding integration weights, in magnitudes.
+
+    Notes
+    -----
+    The caller supplies the partition. Nodes and weights retain the original
+    interval-by-interval quadrature arithmetic.
+    """
+
+    legendre_nodes, legendre_weights = np.polynomial.legendre.leggauss(int(order))
+    lower_magnitudes, upper_magnitudes = (
+        np.asarray(partition[:-1]),
+        np.asarray(partition[1:]),
+    )
+    return (
+        (lower_magnitudes[:, None] + upper_magnitudes[:, None]) / 2
+        + (upper_magnitudes - lower_magnitudes)[:, None] * legendre_nodes / 2
+    ).ravel(), (
+        (upper_magnitudes - lower_magnitudes)[:, None] * legendre_weights / 2
     ).ravel()
 
 
 def breakpoints(densities, snrs, z_queries, lo, hi):
-    """Build the adopted density/support/SNR magnitude partition.
+    """Partition magnitude integration at density, support, and SNR boundaries.
 
-    Quadratic roots are located only to partition the existing density spline;
-    interpolation and negative-value policy remain owned by the reader adapter.
+    Parameters
+    ----------
+    densities : mapping
+        Named density readers or adapters, optionally exposing a quadratic
+        spline.
+    snrs : mapping
+        SNR readers or adapters exposing tabulated magnitude nodes.
+    z_queries : mapping of str to float
+        Dimensionless redshift query for each named density reader.
+    lo, hi : float
+        Lower and upper magnitude integration limits.
+
+    Returns
+    -------
+    partition : ndarray of shape (n_boundary,)
+        Sorted magnitude boundaries after merging numerically indistinguishable
+        nodes.
+
+    Notes
+    -----
+    Spline roots partition the existing interpolation; they do not change
+    the reader's density interpolation or negative-value policy. Interior roots
+    exclude a relative 1e-12 endpoint neighbourhood. Adjacent boundaries are
+    merged with the existing 64*eps magnitude criterion.
     """
 
     points = [lo, hi]
@@ -39,11 +87,27 @@ def breakpoints(densities, snrs, z_queries, lo, hi):
         for a, b in zip(knots[:-1], knots[1:]):
             if a < magnitude_axis[0] or b > magnitude_axis[-1] or spline is None:
                 continue
-            y = spline.ev(np.full(3, z_queries[name]), [a, (a + b) / 2, b])
-            c = y[0]
-            aa = 2 * (y[2] - 2 * y[1] + y[0])
-            bb = y[2] - y[0] - aa
-            roots = np.roots([aa, bb, c]) if aa != 0 else ([-c / bb] if bb != 0 else [])
+            density_samples = spline.ev(
+                np.full(3, z_queries[name]), [a, (a + b) / 2, b]
+            )
+            constant_coefficient = density_samples[0]
+            quadratic_coefficient = 2 * (
+                density_samples[2] - 2 * density_samples[1] + density_samples[0]
+            )
+            linear_coefficient = (
+                density_samples[2] - density_samples[0] - quadratic_coefficient
+            )
+            roots = (
+                np.roots(
+                    [quadratic_coefficient, linear_coefficient, constant_coefficient]
+                )
+                if quadratic_coefficient != 0
+                else (
+                    [-constant_coefficient / linear_coefficient]
+                    if linear_coefficient != 0
+                    else []
+                )
+            )
             for root in roots:
                 if np.isreal(root) and 1e-12 < float(np.real(root)) < 1 - 1e-12:
                     points.append(a + (b - a) * float(np.real(root)))
@@ -51,10 +115,16 @@ def breakpoints(densities, snrs, z_queries, lo, hi):
         reader = getattr(snr, "reader", snr)
         if hasattr(reader, "magnitudes"):
             points.extend(reader.magnitudes)
-    p = np.unique(np.asarray(points))
-    p = p[(p >= lo) & (p <= hi)]
-    return p[
-        np.r_[True, np.diff(p) > 64 * np.finfo(float).eps * np.maximum(1, abs(p[1:]))]
+    magnitude_partition = np.unique(np.asarray(points))
+    magnitude_partition = magnitude_partition[
+        (magnitude_partition >= lo) & (magnitude_partition <= hi)
+    ]
+    return magnitude_partition[
+        np.r_[
+            True,
+            np.diff(magnitude_partition)
+            > 64 * np.finfo(float).eps * np.maximum(1, abs(magnitude_partition[1:])),
+        ]
     ]
 
 

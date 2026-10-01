@@ -30,7 +30,38 @@ PROFILES = ("full-compatibility", "fixed-compatibility")
 
 
 def _configuration(reference, work_directory):
-    """Validate the one supported INI and make an output-local effective copy."""
+    """Validate the supported reference INI and write an effective copy.
+
+    Parameters
+    ----------
+    reference : path-like
+        Installed lyaforecast checkout with the supported DESI Run-2 example and
+        resources.
+    work_directory : path-like
+        New directory for the effective configuration and reference outputs.
+
+    Returns
+    -------
+    root : pathlib.Path
+        Resolved reference checkout.
+    source : pathlib.Path
+        Original supported INI.
+    config : configparser.ConfigParser
+        Validated configuration with output redirected.
+    effective : pathlib.Path
+        Written effective INI in the new work directory.
+
+    Raises
+    ------
+    ValueError
+        If the reference INI is absent or differs from the supported recipe.
+    FileExistsError
+        If the work directory already exists.
+
+    Notes
+    -----
+    Creates the work directory and writes effective.ini; the original reference configuration is unchanged.
+    """
     root = Path(reference).resolve()
     source = root / "examples" / "desi2" / f"{CASE}.ini"
     config = configparser.ConfigParser()
@@ -53,7 +84,39 @@ def _configuration(reference, work_directory):
 
 
 def _capture(reference, work_directory):
-    """Prepare only selected spectra from one initialized NewForecast model."""
+    """Capture selected spectra from a live initialized NewForecast model.
+
+    Parameters
+    ----------
+    reference : path-like
+        Installed lyaforecast checkout with the supported DESI Run-2 example and
+        resources.
+    work_directory : path-like
+        New directory for the effective configuration and reference outputs.
+
+    Returns
+    -------
+    captured : list of dict
+        Six bin records with paired Fourier nodes, mode counts, spectra, BAO
+        derivatives and per-pair weight inputs.
+    field_ids : list of str
+        Observed-field order.
+    original : PairSelection
+        Complete reference-case spectrum selection.
+    identity : dict
+        Reference code and resolved-resource provenance.
+    source : pathlib.Path
+        Original reference INI.
+
+    Raises
+    ------
+    ValueError
+        If reference identity, configuration or six-bin capture is inconsistent.
+
+    Notes
+    -----
+    Initializes the external reference, prepares all six supported bins and writes reference outputs beneath work_directory. Captured power uses source (Mpc/h)^3 units; wavenumbers use h/Mpc.
+    """
     import lyaforecast.forecast_new as module
 
     root, source, config, effective = _configuration(reference, work_directory)
@@ -78,10 +141,10 @@ def _capture(reference, work_directory):
             signals = {}
             totals = {}
             pair_inputs = {}
-            lo, hi = forecast.survey.z_bin_edges[:, index]
+            z_min, z_max = forecast.survey.z_bin_edges[:, index]
             for label in required_labels:
                 covariance = forecast._covariance[label]
-                covariance(lo, hi)
+                covariance(z_min, z_max)
                 covariance.compute_eff_density_and_noise(label)
                 signals[label] = np.array(
                     [
@@ -130,8 +193,8 @@ def _capture(reference, work_directory):
                         auxiliary_p1d=float(weights._p1d_w),
                     )
                 pair_inputs[label] = context
-            k = np.tile(power.k, len(power.mu))
-            mu_flat = np.repeat(power.mu, len(power.k))
+            k_grid = np.tile(power.k, len(power.mu))
+            mu_grid = np.repeat(power.mu, len(power.k))
             widths = []
             for label in selected_labels:
                 reconstruction = (
@@ -148,7 +211,7 @@ def _capture(reference, work_directory):
                         transverse,
                     ]
                 )
-            observed_j = np.concatenate(
+            observed_jacobian = np.concatenate(
                 [
                     legacy_jacobian(
                         np.stack([signals[name][i] for name in selected_labels]),
@@ -164,13 +227,13 @@ def _capture(reference, work_directory):
                     bin=index,
                     mean_z=float(z_mean),
                     covariance_z=float(pair_inputs[required_labels[0]]["_z_mean"]),
-                    k=k,
-                    mu=mu_flat,
+                    k=k_grid,
+                    mu=mu_grid,
                     modes=np.tile(covariance.num_modes, len(power.mu)),
                     total=np.column_stack(
                         [totals[label].reshape(-1) for label in required_labels]
                     ),
-                    observed_j=observed_j,
+                    observed_j=observed_jacobian,
                     required_pairs=required_pairs,
                     selected_pairs=selected_pairs,
                     pair_inputs=pair_inputs,
@@ -182,7 +245,34 @@ def _capture(reference, work_directory):
 
 
 def _fixed_total(row, required_pairs, fields):
-    """Replace only forest-auto noise using converged early-lyaforecast weights."""
+    """Replace forest-auto noise using converged early-lyaforecast weights.
+
+    Parameters
+    ----------
+    row : dict
+        Captured bin with required-pair order and total power.
+    required_pairs : sequence of tuple of int
+        Required covariance spectra in captured order.
+    fields : sequence of ObservedField
+        Ordered observed-field definitions.
+
+    Returns
+    -------
+    total : ndarray
+        Total power in (Mpc/h)^3, shape (n_node, n_required), with updated
+        forest-auto noise.
+    states : dict
+        Convergence states keyed by forest field ID.
+
+    Raises
+    ------
+    ValueError
+        If pair order or magnitude grid differs, or weights fail to converge.
+
+    Notes
+    -----
+    The original 107-node magnitude grid and fixed stopping controls are retained.
+    """
     if [tuple(pair) for pair in row["required_pairs"]] != list(required_pairs):
         raise ValueError("captured required-pair order differs from selected forecast")
     total = row["total"].copy()
@@ -215,17 +305,35 @@ def _fixed_total(row, required_pairs, fields):
 
 
 def run_desi2_compatibility(*, reference, profile, work_directory):
-    """Return six selected-bin compatibility forecasts and provenance.
+    """Calculate six selected-bin compatibility forecasts and provenance.
 
     Parameters
     ----------
-    reference
-        Installed lyaforecast checkout containing ``examples/desi2`` and its
-        package resources.  The imported package must resolve to this checkout.
-    profile
-        ``"full-compatibility"`` or ``"fixed-compatibility"``.
-    work_directory
-        New directory used for the effective INI and lyaforecast log.
+    reference : path-like
+        Installed lyaforecast checkout with the supported DESI Run-2 example and
+        resources.
+    profile : str
+        full-compatibility or fixed-compatibility weighting prescription.
+    work_directory : path-like
+        New directory for the effective configuration and reference outputs.
+
+    Returns
+    -------
+    settings : dict
+        Input identities, spectrum selections and weighting provenance.
+    records : list of dict
+        Individual and joint BAO Fisher matrices, errors and availability
+        statuses for six redshift bins.
+
+    Raises
+    ------
+    ValueError
+        If the profile, reference, selected spectra or weighting convergence are
+        invalid.
+
+    Notes
+    -----
+    Runs the live reference preparation and writes its effective INI and outputs. The fixed profile updates forest-auto noise only. Joint constraints retain the selected cross-spectrum covariance.
     """
     if profile not in PROFILES:
         raise ValueError(f"profile must be one of {PROFILES}")
@@ -260,13 +368,13 @@ def run_desi2_compatibility(*, reference, profile, work_directory):
         )
         fisher, individual = contract(covariance, row["observed_j"])
         result = summaries(fisher, individual)
-        lo, hi = bins(CASE)[index]
+        z_min, z_max = bins(CASE)[index]
         for pair_index, pair in enumerate(selected_pairs):
             available = bool(np.all(result["pair_constrained"][pair_index]))
             records.append(
                 dict(
                     bin_index=index,
-                    bounds=(lo, hi),
+                    bounds=(z_min, z_max),
                     redshift=row["mean_z"],
                     kind="individual",
                     pair=tuple(field_ids[i] for i in pair),
@@ -294,7 +402,7 @@ def run_desi2_compatibility(*, reference, profile, work_directory):
         records.append(
             dict(
                 bin_index=index,
-                bounds=(lo, hi),
+                bounds=(z_min, z_max),
                 redshift=row["mean_z"],
                 kind="joint",
                 pair=None,

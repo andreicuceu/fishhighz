@@ -21,6 +21,32 @@ from fishhighz.results import FisherResult, diagonal_prior
 
 # These plain callables can live in any package; no FishHighz types are used.
 def power(theta, z, k, mu, pairs):
+    """Evaluate a signed two-field synthetic power spectrum.
+
+    Parameters
+    ----------
+    theta : ndarray of shape (n_parameters,)
+        Local model parameters in the provider's declared order.
+    z : float
+        Dimensionless evaluation redshift; unused by this synthetic model.
+    k : ndarray of shape (n_nodes,)
+        Comoving wavenumbers in h/Mpc.
+    mu : ndarray of shape (n_nodes,)
+        Dimensionless line-of-sight direction cosines; unused where the model is
+        isotropic.
+    pairs : ndarray of int, shape (n_pairs, 2)
+        Indices of the two observed fields in each requested spectrum.
+
+    Returns
+    -------
+    power : ndarray of shape (n_nodes, n_pairs)
+        Intrinsic synthetic three-dimensional power in (Mpc/h)^3.
+
+    Notes
+    -----
+    The parameter-dependent shape multiplies a fixed field covariance matrix.
+    No instrumental response or noise is included.
+    """
     amplitude, nuisance = theta
     matrix = np.array([[3.0, -0.6], [-0.6, 2.0]])
     shape = np.exp(amplitude * k) * (1 + nuisance * mu**2)
@@ -28,6 +54,28 @@ def power(theta, z, k, mu, pairs):
 
 
 def jacobian(theta, z, k, mu, pairs):
+    """Differentiate the synthetic power with respect to both local parameters.
+
+    Parameters
+    ----------
+    theta : ndarray of shape (n_parameters,)
+        Local model parameters in the provider's declared order.
+    z : float
+        Dimensionless evaluation redshift; unused by this synthetic model.
+    k : ndarray of shape (n_nodes,)
+        Comoving wavenumbers in h/Mpc.
+    mu : ndarray of shape (n_nodes,)
+        Dimensionless line-of-sight direction cosines; unused where the model is
+        isotropic.
+    pairs : ndarray of int, shape (n_pairs, 2)
+        Indices of the two observed fields in each requested spectrum.
+
+    Returns
+    -------
+    jacobian : ndarray of shape (n_nodes, n_pairs, 2)
+        Derivatives of intrinsic power with respect to amplitude and nuisance,
+        in that order; units are power divided by the parameter unit.
+    """
     value = power(theta, z, k, mu, pairs)
     return np.stack(
         [value * k[:, None], value * (mu**2 / (1 + theta[1] * mu**2))[:, None]], axis=-1
@@ -35,7 +83,24 @@ def jacobian(theta, z, k, mu, pairs):
 
 
 def run():
-    """Return small reviewable analytic/FD and independent P1D evidence."""
+    """Compare analytic and finite-difference forecasts with fixed covariance.
+
+    Returns
+    -------
+    report : dict
+        Dimensionless marginalized parameter errors, derivative-refinement
+        comparisons, convergence status, and independent P1D values in km/s.
+
+    Raises
+    ------
+    AssertionError
+        If derivative refinement fails the stated numerical tolerances.
+
+    Notes
+    -----
+    Constructs synthetic arrays in memory and asserts numerical agreement.
+    The supplied prior is applied only to the nuisance parameter.
+    """
     registry = ParameterRegistry(
         [
             Parameter("shared", 0.7, "target", step=0.02),
@@ -77,6 +142,18 @@ def run():
     selected = selection.selected_to_required
 
     def information(result):
+        """Contract an observed Jacobian with the fixed covariance factors.
+
+        Parameters
+        ----------
+        result : DerivativeResult
+            Intrinsic power and parameter derivatives at the fixed Fourier nodes.
+
+        Returns
+        -------
+        fisher : ndarray of shape (2, 2)
+            Data Fisher matrix in the registry parameter order.
+        """
         observed_jacobian = products[:, :, None] * result.jacobian
         return fisher_from_factors(observed_jacobian[:, selected, :], factors)
 

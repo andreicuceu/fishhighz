@@ -15,7 +15,24 @@ METRICS = ("amplitude", "shape", "A", "P_pixel", "vector")
 
 
 def residuals(new, old, new_c, old_c):
-    """Relative changes from old to new; vector change is not a forward residual."""
+    """Relative changes from old to new; vector change is not a forward residual.
+
+    Parameters
+    ----------
+    new : array_like, shape (n_magnitude,)
+        Updated dimensionless source weights.
+    old : array_like, shape (n_magnitude,)
+        Reference dimensionless source weights.
+    new_c : array_like, shape (5,)
+        Updated I1, I2, I3, aliasing coefficient A and pixel-noise power.
+    old_c : array_like, shape (5,)
+        Reference I1, I2, I3, aliasing coefficient A and pixel-noise power.
+
+    Returns
+    -------
+    residuals : ndarray, shape (5,)
+        Relative amplitude, shape, A, pixel-power and full-vector changes.
+    """
     return np.r_[changes(new, old, new_c, old_c), relative_change(new, old)]
 
 
@@ -31,6 +48,40 @@ def adaptive_weights(
 ):
     """Return an explicit status, last finite state, count and relative metrics.
 
+    Parameters
+    ----------
+    inputs : WeightInputs
+        Magnitude-dependent source density, integration measure, pixel variance
+        and auxiliary signal in angular/velocity units.
+    variant : str
+        Named compatibility recurrence, selecting prefix or full-sample moments
+        and the auxiliary signal prescription.
+    context : str
+        Forest-auto pair identifier used to determine adaptive-stopping
+        eligibility.
+    rtol : float
+        Dimensionless relative numerical tolerance. Default is ``0.0001``.
+    min_updates : int
+        Minimum update count eligible to nominate a candidate. Default is ``3``.
+    stable_steps : int
+        Required consecutive stable transitions. Default is ``3``.
+    max_updates : int
+        Maximum number of weight transitions. Default is ``96``.
+
+    Returns
+    -------
+    result : dict
+        Eligibility/convergence status, last finite weights and coefficients,
+        completed update count and five relative convergence metrics.
+
+    Raises
+    ------
+    ValueError :
+        If inputs, declared identities or numerical validation conditions are
+        inconsistent.
+
+    Notes
+    -----
     Only the named forest autos with positive intrinsic signal and the three
     full-sum variants are eligible. Eligibility does not imply convergence.
     Three stable transitions nominate a candidate by default. Every subsequent
@@ -80,30 +131,36 @@ def adaptive_weights(
     if not np.isfinite(inputs.signal) or inputs.signal <= 0:
         result["reason"] = "adaptive stopping requires finite positive intrinsic signal"
         return result
+
     candidates = []
     stable = 0
     try:
-        w = seed(inputs)
-        c = coefficients(inputs, w)
-        result.update(weights=w, coefficients=c, state_updates=0)
+        weights = seed(inputs)
+        noise_coefficients = coefficients(inputs, weights)
+        result.update(weights=weights, coefficients=noise_coefficients, state_updates=0)
         for t in range(1, max_updates + 1):
-            new = update(inputs, w, variant)
+            new = update(inputs, weights, variant)
             result["updates"] = t
             new_c = coefficients(inputs, new)
-            step = residuals(new, w, new_c, c)
+            step = residuals(new, weights, new_c, noise_coefficients)
             result.update(
                 weights=new,
                 coefficients=new_c,
                 state_updates=t,
                 last_step=dict(zip(METRICS, step.tolist(), strict=True)),
             )
+
             stable = stable + 1 if np.all(step <= rtol) else 0
             candidates = [
-                (n, cw, cc)
-                for n, cw, cc in candidates
-                if stable and np.all(residuals(new, cw, new_c, cc) <= rtol)
+                (n, candidate_weights, candidate_coefficients)
+                for n, candidate_weights, candidate_coefficients in candidates
+                if stable
+                and np.all(
+                    residuals(new, candidate_weights, new_c, candidate_coefficients)
+                    <= rtol
+                )
             ]
-            for n, cw, cc in candidates:
+            for n, candidate_weights, candidate_coefficients in candidates:
                 if t == 2 * n:
                     result.update(
                         status="converged",
@@ -111,7 +168,12 @@ def adaptive_weights(
                         confirmation=dict(
                             zip(
                                 METRICS,
-                                residuals(new, cw, new_c, cc).tolist(),
+                                residuals(
+                                    new,
+                                    candidate_weights,
+                                    new_c,
+                                    candidate_coefficients,
+                                ).tolist(),
                                 strict=True,
                             )
                         ),
@@ -119,7 +181,7 @@ def adaptive_weights(
                     return result
             if t >= min_updates and stable >= stable_steps and 2 * t <= max_updates:
                 candidates.append((t, new.copy(), new_c.copy()))
-            w, c = new, new_c
+            weights, noise_coefficients = new, new_c
     except FloatingPointError as error:
         result.update(status="arithmetic_failure", reason=str(error))
         return result

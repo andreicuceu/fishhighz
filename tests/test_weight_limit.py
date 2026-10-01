@@ -25,18 +25,49 @@ from fishhighz.validation.weight_limit import (
 
 
 def decimal_recurrence(weights, masses, variance, length, pixel, signal, count, prec):
+    """Evaluate the cumulative weight recurrence with Decimal arithmetic.
+
+    Parameters
+    ----------
+    weights : array_like of shape (n_magnitudes,)
+        Dimensionless source weights in magnitude order.
+    masses : array_like of shape (n_magnitudes,)
+        Source density times magnitude quadrature, in deg^-2 (km/s)^-1.
+    variance : array_like of shape (n_magnitudes,)
+        Dimensionless pixel-noise variance for each magnitude sample.
+    length : float
+        Forest length in km/s.
+    pixel : float
+        Pixel width in km/s.
+    signal : float
+        Auxiliary three-dimensional signal power in deg^2 km/s.
+    count : int
+        Number of cumulative weight updates.
+    prec : int
+        Decimal arithmetic precision in significant digits.
+
+    Returns
+    -------
+    result : tuple
+        Decimal source weights, alias coefficient, and pixel-noise coefficient
+        after the requested updates.
+    """
     with localcontext() as context:
         context.prec = prec
-        w = [Decimal.from_float(float(value)) for value in weights]
-        r = [Decimal.from_float(float(value)) for value in masses]
-        v = [Decimal.from_float(float(value)) for value in variance]
+        decimal_weights = [Decimal.from_float(float(value)) for value in weights]
+        decimal_masses = [Decimal.from_float(float(value)) for value in masses]
+        decimal_variance = [Decimal.from_float(float(value)) for value in variance]
         length_d = Decimal.from_float(float(length))
         pixel_d = Decimal.from_float(float(pixel))
         signal_d = Decimal.from_float(float(signal))
+
+        # Update all magnitudes from the previous cumulative-weight iterate.
         for _ in range(count):
             cumulative = Decimal(0)
             updated = []
-            for mass, weight, noise in zip(r, w, v):
+            for mass, weight, noise in zip(
+                decimal_masses, decimal_weights, decimal_variance
+            ):
                 cumulative += mass * weight
                 if mass == 0:
                     updated.append(Decimal(0))
@@ -45,18 +76,45 @@ def decimal_recurrence(weights, masses, variance, length, pixel, signal, count, 
                 else:
                     density = cumulative * length_d / pixel_d
                     updated.append(density / (density + noise / signal_d))
-            w = updated
-        i1 = sum(mass * weight for mass, weight in zip(r, w))
-        i2 = sum(mass * weight * weight for mass, weight in zip(r, w))
-        i3 = sum(mass * weight * weight * noise for mass, weight, noise in zip(r, w, v))
-        a = i2 / (length_d * i1 * i1)
-        p = pixel_d * i3 / (length_d * i1 * i1)
-        return w, a, p
+            decimal_weights = updated
+
+        # Normalize the alias and pixel terms by the same weighted source count.
+        first_integral = sum(
+            mass * weight for mass, weight in zip(decimal_masses, decimal_weights)
+        )
+        second_integral = sum(
+            mass * weight * weight
+            for mass, weight in zip(decimal_masses, decimal_weights)
+        )
+        noise_integral = sum(
+            mass * weight * weight * noise
+            for mass, weight, noise in zip(
+                decimal_masses, decimal_weights, decimal_variance
+            )
+        )
+        alias_coefficient = second_integral / (
+            length_d * first_integral * first_integral
+        )
+        pixel_coefficient = (
+            pixel_d * noise_integral / (length_d * first_integral * first_integral)
+        )
+        return decimal_weights, alias_coefficient, pixel_coefficient
 
 
 @pytest.mark.parametrize("count", [0, 1, 3, 6, 12, 24])
 @pytest.mark.parametrize("scale", [1.0, 1e-80])
 def test_finite_recurrence_matches_direct_and_decimal(count, scale):
+    """Check finite recurrence matches direct and decimal.
+
+    Parameters
+    ----------
+    count : int
+        Number of iterations, samples, or records selected by this case,
+        supplied by pytest parametrization.
+    scale : float
+        Multiplicative scale used to test invariance or numerical range,
+        supplied by pytest parametrization.
+    """
     masses = np.array([0.2, 0.7, 0.4])
     variance = np.array([0.3, 2.0, 0.8])
     length, pixel, signal, alias = 5.0, 0.7, 1.3, 2.1
@@ -88,6 +146,17 @@ def test_finite_recurrence_matches_direct_and_decimal(count, scale):
 @pytest.mark.parametrize("d", [0.3, 1.0, 1.7])
 @pytest.mark.parametrize("count", [0, 1, 3, 12, 24])
 def test_scalar_closed_form_and_finite_coefficients(d, count):
+    """Check scalar closed form and finite coefficients.
+
+    Parameters
+    ----------
+    d : float
+        Parametrized derivative or density input, supplied by pytest
+        parametrization.
+    count : int
+        Number of iterations, samples, or records selected by this case,
+        supplied by pytest parametrization.
+    """
     initial = 0.4
     expected = scalar_weight(count, initial, d)
     weight = initial
@@ -104,6 +173,7 @@ def test_scalar_closed_form_and_finite_coefficients(d, count):
 
 
 def test_coefficient_scale_invariance_but_update_is_not_invariant():
+    """Check coefficient scale invariance but update is not invariant."""
     masses = np.array([0.4, 0.6])
     variance = np.array([0.5, 2.0])
     logs = np.log([0.2, 0.7])
@@ -117,6 +187,7 @@ def test_coefficient_scale_invariance_but_update_is_not_invariant():
 
 
 def test_false_normalized_only_recurrence_is_detected():
+    """Check false normalized only recurrence is detected."""
     masses = np.array([0.3, 0.7])
     variance = np.array([0.2, 3.0])
     logs = initial_log_weights(masses, variance, 0.8, 1.5)
@@ -129,6 +200,7 @@ def test_false_normalized_only_recurrence_is_detected():
 
 
 def test_log_coefficients_continue_past_both_historical_underflows():
+    """Check log coefficients continue past both historical underflows."""
     masses = np.array([1.0, 1.0])
     variance = np.array([1e-150, 1e300])
     logs = np.log([1.0, 1e-200])
@@ -147,6 +219,7 @@ def test_log_coefficients_continue_past_both_historical_underflows():
 
 
 def test_unrepresentable_coefficients_keep_finite_logs():
+    """Check unrepresentable coefficients keep finite logs."""
     coefficients = coefficients_from_log_weights([1e-320], [1.0], [np.log(0.5)], 1, 1)
     assert np.isfinite(coefficients.log_A)
     assert not coefficients.A_available and coefficients.A is None
@@ -155,6 +228,7 @@ def test_unrepresentable_coefficients_keep_finite_logs():
 
 
 def test_coefficients_cancel_a_very_small_common_amplitude_before_summing():
+    """Check coefficients cancel a very small common amplitude before summing."""
     masses = np.geomspace(1e-30, 1, 1000)
     variance = np.linspace(0.2, 3, 1000)
     shape = np.linspace(-800, 0, 1000)
@@ -167,6 +241,7 @@ def test_coefficients_cancel_a_very_small_common_amplitude_before_summing():
 
 
 def test_zero_support_and_zero_variance_branches():
+    """Check zero support and zero variance branches."""
     result = trajectory(
         [0, 0.5, 0.5],
         [9, 0, 2],
@@ -198,11 +273,21 @@ def test_zero_support_and_zero_variance_branches():
     ],
 )
 def test_invalid_domain_rejected(masses, variance):
+    """Check invalid domain rejected.
+
+    Parameters
+    ----------
+    masses : list
+        Density times quadrature weights, supplied by pytest parametrization.
+    variance : list
+        Pixel-noise variance test input, supplied by pytest parametrization.
+    """
     with pytest.raises(ValueError):
         trajectory(masses, variance, 2, 1, 1, 1, checkpoints=(0, 1))
 
 
 def test_ordered_coordinate_and_checkpoint_validation():
+    """Check ordered coordinate and checkpoint validation."""
     with pytest.raises(ValueError, match="checkpoints"):
         trajectory([1], [1], 2, 1, 1, 1, checkpoints=(0, 3, 3))
     with pytest.raises(ValueError, match="coordinates"):
@@ -213,10 +298,18 @@ def test_ordered_coordinate_and_checkpoint_validation():
 
 @pytest.mark.parametrize("count", [0, 1, 3, 6, 12, 24])
 def test_constant_linearized_continuum_control(count):
+    """Check constant linearized continuum control.
+
+    Parameters
+    ----------
+    count : int
+        Number of iterations, samples, or records selected by this case,
+        supplied by pytest parametrization.
+    """
     nodes, weights = np.polynomial.legendre.leggauss(max(32, count + 2))
-    x = (nodes + 1) / 2
+    normalized_magnitude = (nodes + 1) / 2
     quadrature = weights / 2
-    shape = x**count
+    shape = normalized_magnitude**count
     total_mass, length, pixel, variance = 2.3, 4.1, 0.7, 1.8
     i1 = total_mass * np.sum(quadrature * shape)
     i2 = total_mass * np.sum(quadrature * shape**2)
@@ -233,6 +326,7 @@ def test_constant_linearized_continuum_control(count):
 
 
 def test_continuum_control_diverges_despite_bounded_shape():
+    """Check continuum control diverges despite bounded shape."""
     values = [
         continuum_linearized_coefficients(
             count, length=4, total_mass=2, pixel=1, variance=1
@@ -244,6 +338,7 @@ def test_continuum_control_diverges_despite_bounded_shape():
 
 
 def test_finite_grid_repeated_and_near_degenerate_spectra():
+    """Check finite grid repeated and near degenerate spectra."""
     exact = linearized_spectrum([1, 1], [2, 2], 1, 1, 1)
     assert exact[2] == 2 and exact[3] == 0
     near = linearized_spectrum([1, 1], [2, 2 * (1 + 1e-10)], 1, 1, 1)
@@ -253,6 +348,7 @@ def test_finite_grid_repeated_and_near_degenerate_spectra():
 
 
 def test_unique_fixed_grid_limit_matches_linearized_power_iteration():
+    """Check unique fixed grid limit matches linearized power iteration."""
     masses = np.array([0.2, 0.3, 0.5])
     variance = np.array([1.0, 0.8, 3.0])
     result = linearized_fixed_grid_limit(
@@ -273,6 +369,7 @@ def test_unique_fixed_grid_limit_matches_linearized_power_iteration():
 
 
 def test_small_nonlinear_shape_approaches_fixed_grid_limit_with_decimal_control():
+    """Check small nonlinear shape approaches fixed grid limit with decimal control."""
     masses = np.array([0.2, 0.3, 0.5])
     variance = np.array([1.0, 0.8, 3.0])
     initial = np.exp(initial_log_weights(masses, variance, 1, 1))
@@ -305,12 +402,15 @@ def test_small_nonlinear_shape_approaches_fixed_grid_limit_with_decimal_control(
 
 
 def test_smooth_measure_subdivision_and_iteration_limits_are_separate():
+    """Check smooth measure subdivision and iteration limits are separate."""
     rows = []
     for cells in (32, 64, 128):
-        x = (np.arange(cells) + 0.5) / cells
+        normalized_magnitude = (np.arange(cells) + 0.5) / cells
         mass = np.full(cells, 1 / cells)
-        log_weights = np.log(x**8)
-        state = snapshot(log_weights, mass, np.ones(cells), 1, 1, x, 8)
+        log_weights = np.log(normalized_magnitude**8)
+        state = snapshot(
+            log_weights, mass, np.ones(cells), 1, 1, normalized_magnitude, 8
+        )
         rows.append(state.coefficients.A)
     assert abs(rows[-1] / rows[-2] - 1) < 2e-3
     later = continuum_linearized_coefficients(
@@ -320,6 +420,7 @@ def test_smooth_measure_subdivision_and_iteration_limits_are_separate():
 
 
 def test_fixed_mesh_screen_requires_three_doublings_and_rejects_drift():
+    """Check fixed mesh screen requires three doublings and rejects drift."""
     result = trajectory(
         np.full(24, 1 / 24),
         np.linspace(1, 1.001, 24),
@@ -339,6 +440,7 @@ def test_fixed_mesh_screen_requires_three_doublings_and_rejects_drift():
 
 
 def test_relative_log_change_handles_zero_and_extreme_values():
+    """Check relative log change handles zero and extreme values."""
     assert relative_log_change(-np.inf, -np.inf) == 0
     assert np.isinf(relative_log_change(-np.inf, 0))
     assert relative_log_change(-1000, -1000 + np.log1p(1e-5)) == pytest.approx(
@@ -347,6 +449,7 @@ def test_relative_log_change_handles_zero_and_extreme_values():
 
 
 def test_signed_log_ratio_retains_refinement_direction():
+    """Check signed log ratio retains refinement direction."""
     assert signed_log_ratio(np.log(2), np.log(3)) == pytest.approx(0.5)
     assert signed_log_ratio(np.log(3), np.log(2)) == pytest.approx(-1 / 3)
     assert signed_log_ratio(-np.inf, -np.inf) == 0
@@ -362,6 +465,19 @@ def test_signed_log_ratio_retains_refinement_direction():
 def test_one_cell_extreme_scalar_ratios_remain_representable(
     mass, variance, length, pixel
 ):
+    """Check one cell extreme scalar ratios remain representable.
+
+    Parameters
+    ----------
+    mass : float
+        Integrated density for one sample, supplied by pytest parametrization.
+    variance : float
+        Pixel-noise variance test input, supplied by pytest parametrization.
+    length : float
+        Forest length, supplied by pytest parametrization.
+    pixel : float
+        Pixel width test input, supplied by pytest parametrization.
+    """
     result = trajectory(
         [mass],
         [variance],
@@ -381,6 +497,7 @@ def test_one_cell_extreme_scalar_ratios_remain_representable(
 
 
 def test_extreme_tail_bound_remains_in_log_range():
+    """Check extreme tail bound remains in log range."""
     result = trajectory(
         [1e300],
         [1e-300],
@@ -413,6 +530,7 @@ def test_extreme_tail_bound_remains_in_log_range():
 
 
 def test_diagnostic_matches_decimal_after_float64_weight_underflow():
+    """Check diagnostic matches decimal after float64 weight underflow."""
     masses = np.array([1e-120, 2e-120, 4e-120])
     variance = np.array([1.0, 1.3, 2.0])
     length, pixel, signal, alias = 3.0, 1.0, 0.7, 1e-180
@@ -449,6 +567,7 @@ def test_diagnostic_matches_decimal_after_float64_weight_underflow():
 
 
 def test_refinement_screens_do_not_prove_limit_outcomes():
+    """Check refinement screens do not prove limit outcomes."""
     rising_but_bounded = [n / (1 + n / 10000) for n in (16, 32, 64)]
     assert all(
         signed_log_ratio(np.log(lower), np.log(upper)) > 0.9
@@ -466,6 +585,7 @@ def test_refinement_screens_do_not_prove_limit_outcomes():
 
 
 def test_constant_volterra_pixel_relation_requires_constant_variance():
+    """Check constant volterra pixel relation requires constant variance."""
     state = snapshot(
         np.log([0.25, 1.0]),
         [0.5, 0.5],
@@ -479,6 +599,7 @@ def test_constant_volterra_pixel_relation_requires_constant_variance():
 
 
 def test_decimal_precision_refinement_is_stable_after_float_underflow():
+    """Check decimal precision refinement is stable after float underflow."""
     masses = [1e-120, 2e-120, 4e-120]
     variance = [1.0, 1.3, 2.0]
     initial = [1e-180, 2e-180, 3e-180]
@@ -491,6 +612,13 @@ def test_decimal_precision_refinement_is_stable_after_float_underflow():
 
 
 def tiny_batch():
+    """Construct a self-contained small recurrence-evidence batch.
+
+    Returns
+    -------
+    payload : tuple
+        Numerical arrays and validation report for the synthetic trajectory.
+    """
     result = trajectory(
         [0.2, 0.3, 0.5],
         [0.5, 1.0, 2.0],
@@ -518,6 +646,21 @@ def tiny_batch():
 
 
 def tiny_expectation(arrays, report):
+    """Extract independent expected input identities from a recurrence payload.
+
+    Parameters
+    ----------
+    arrays : dict of ndarray
+        Named numerical arrays in the synthetic evidence payload.
+    report : dict
+        Synthetic validation report with settings, provenance, and convergence
+        diagnostics.
+
+    Returns
+    -------
+    expected : dict
+        Copied inputs, provenance, attempts, and final iteration cap.
+    """
     return dict(
         bin=2,
         field="lya(qso)",
@@ -543,6 +686,7 @@ def tiny_expectation(arrays, report):
 
 
 def test_batch_payload_recomputes_every_checkpoint():
+    """Check batch payload recomputes every checkpoint."""
     arrays, report = tiny_batch()
     assert validate_batch_payload(
         arrays, report, expected=tiny_expectation(arrays, report)
@@ -550,6 +694,7 @@ def test_batch_payload_recomputes_every_checkpoint():
 
 
 def test_batch_payload_rejects_self_consistent_replacement_source():
+    """Check batch payload rejects self consistent replacement source."""
     arrays, report = tiny_batch()
     expected = tiny_expectation(arrays, report)
     replacement = trajectory(
@@ -582,6 +727,14 @@ def test_batch_payload_rejects_self_consistent_replacement_source():
 
 @pytest.mark.parametrize("outcome", ["failed", "capped"])
 def test_batch_payload_retains_truthful_incomplete_attempt(outcome):
+    """Check batch payload retains truthful incomplete attempt.
+
+    Parameters
+    ----------
+    outcome : str
+        Expected validation or convergence status, supplied by pytest
+        parametrization.
+    """
     arrays, report = tiny_batch()
     report["attempts"].append(
         dict(iterations=2048, outcome=outcome, error="bounded fixture outcome")
@@ -592,6 +745,7 @@ def test_batch_payload_retains_truthful_incomplete_attempt(outcome):
 
 
 def test_identical_source_arrays_remain_valid_for_distinct_declared_population():
+    """Check identical source arrays remain valid for distinct declared population."""
     arrays, report = tiny_batch()
     report["field"] = "lya(lbg)"
     expected = tiny_expectation(arrays, report)
@@ -608,6 +762,17 @@ def test_identical_source_arrays_remain_valid_for_distinct_declared_population()
     ],
 )
 def test_batch_payload_rejects_mutated_derived_or_provenance_content(quantity, reason):
+    """Check batch payload rejects mutated derived or provenance content.
+
+    Parameters
+    ----------
+    quantity : str
+        Scientific quantity under examination, supplied by pytest
+        parametrization.
+    reason : str
+        Expected unavailability or rejection reason, supplied by pytest
+        parametrization.
+    """
     arrays, report = tiny_batch()
     expected = tiny_expectation(arrays, report)
     if quantity == "source":
@@ -633,6 +798,17 @@ def test_batch_payload_rejects_mutated_derived_or_provenance_content(quantity, r
     ],
 )
 def test_batch_payload_rejects_detached_or_mislabeled_evidence(mutation, reason):
+    """Check batch payload rejects detached or mislabeled evidence.
+
+    Parameters
+    ----------
+    mutation : str
+        Modification applied to the otherwise valid fixture, supplied by pytest
+        parametrization.
+    reason : str
+        Expected unavailability or rejection reason, supplied by pytest
+        parametrization.
+    """
     arrays, report = tiny_batch()
     if mutation == "field":
         report["field"] = "lya(lbg)"

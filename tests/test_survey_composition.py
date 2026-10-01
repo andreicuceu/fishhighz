@@ -29,6 +29,7 @@ from fishhighz.response import (
 
 
 def test_example():
+    """Check example."""
     report = runpy.run_path(
         str(Path(__file__).parents[1] / "examples/survey_primitives.py")
     )["run"]()
@@ -36,11 +37,12 @@ def test_example():
 
 
 def test_area_scaling_one_field():
+    """Check area scaling one field."""
     grid = gauss_legendre_grid([0.05, 0.2], k_order=3, mu_order=3, h_fid=0.7)
     selection = PairSelection([ObservedField("g", "galaxy", "g")])
     results = []
     for area in (100, 200):
-        g = prepare_geometry(
+        bin_geometry = prepare_geometry(
             2,
             3,
             z_eval=2.5,
@@ -50,7 +52,7 @@ def test_area_scaling_one_field():
             hubble=lambda z: z * 100,
             transverse_distance=lambda z: z * 1000,
         )
-        modes = mode_counts(g, grid)
+        modes = mode_counts(bin_geometry, grid)
         total = np.full((len(modes), 1), 5.0)
         covariance = gaussian_covariance(total, modes, selection)
         assert_allclose(covariance[:, 0, 0], 2 * 25 / modes, rtol=2e-15)
@@ -68,25 +70,46 @@ def test_area_scaling_one_field():
 
 
 def test_permutation_closure_slices_and_fixed_preparation():
+    """Check permutation closure slices and fixed preparation."""
     fields = [
         ObservedField("a", "forest", "lya", background="q"),
         ObservedField("b", "forest", "lya", background="l"),
         ObservedField("g", "galaxy", "g"),
     ]
-    k = np.array([0.1, 0.3, 0.2, 0.5])
-    mu = np.array([0, 1, 0.3, 0.8])
+    k_grid = np.array([0.1, 0.3, 0.2, 0.5])
+    mu_grid = np.array([0, 1, 0.3, 0.8])
     settings = dict(
         a=InstrumentResponse(100, 30),
         b=InstrumentResponse(200, 50),
         g=InstrumentResponse(0, 0),
     )
-    w = prepare_response(fields, k, mu, a_v=100, settings=settings)
+    response = prepare_response(fields, k_grid, mu_grid, a_v=100, settings=settings)
     registry = ParameterRegistry([Parameter("amplitude", 1.0, "target", step=0.001)])
-    b = np.array([-0.3, -0.5, 2.0])
-    signal = np.outer(b, b)
+    biases = np.array([-0.3, -0.5, 2.0])
+    signal = np.outer(biases, biases)
     noise = np.diag([1.0, 2.0, 3.0])
 
     def model(t, z, k, mu, pairs):
+        """Evaluate the synthetic spectrum used by the enclosing regression test.
+
+        Parameters
+        ----------
+        t : ndarray of shape (n_parameters,)
+            Local model parameters in the provider binding order.
+        z : float or ndarray
+            Dimensionless redshift.
+        k : ndarray of shape (n_nodes,)
+            Comoving wavenumbers in h/Mpc.
+        mu : ndarray of shape (n_nodes,)
+            Dimensionless line-of-sight direction cosines.
+        pairs : ndarray of int, shape (n_pairs, 2)
+            Observed-field indices defining the requested spectra.
+
+        Returns
+        -------
+        power : ndarray of shape (n_nodes, n_pairs)
+            Synthetic intrinsic power in (Mpc/h)^3 before response and noise.
+        """
         return np.broadcast_to(
             t[0] * signal[pairs[:, 0], pairs[:, 1]], (len(k), len(pairs))
         )
@@ -100,7 +123,7 @@ def test_permutation_closure_slices_and_fixed_preparation():
     ]
     outputs = []
     for selection in selections:
-        product = pair_response(w, selection)
+        product = pair_response(response, selection)
         i, j = selection.required_pairs.T
         prepared = PreparedP3D(
             registry,
@@ -114,7 +137,7 @@ def test_permutation_closure_slices_and_fixed_preparation():
                 )
             ],
         )
-        result = evaluate_derivatives(prepared, [1], 2.4, k, mu)
+        result = evaluate_derivatives(prepared, [1], 2.4, k_grid, mu_grid)
         modes = np.array([10, 20, 30, 40.0])
         cov = gaussian_covariance(
             combine_observed_power(
@@ -124,7 +147,7 @@ def test_permutation_closure_slices_and_fixed_preparation():
             selection,
         )
         factors = factor_covariance(cov)
-        snapshots = [x.copy() for x in (w, modes, factors, k, mu)]
+        snapshots = [x.copy() for x in (response, modes, factors, k_grid, mu_grid)]
         analytic = product * signal[i, j]
         assert_allclose(
             product[:, :, None] * result.jacobian,
@@ -133,32 +156,43 @@ def test_permutation_closure_slices_and_fixed_preparation():
             atol=1e-15,
         )
         observed = analytic[:, selection.selected_to_required]
-        for node in range(len(k)):
-            matrix = np.outer(w[node], w[node]) * signal + noise
+        for node in range(len(k_grid)):
+            matrix = np.outer(response[node], response[node]) * signal + noise
             oracle = [
                 [
-                    (matrix[a, c] * matrix[b, d] + matrix[a, d] * matrix[b, c])
+                    (
+                        matrix[a, c] * matrix[biases, d]
+                        + matrix[a, d] * matrix[biases, c]
+                    )
                     / modes[node]
                     for c, d in selection.selected_pairs
                 ]
-                for a, b in selection.selected_pairs
+                for a, biases in selection.selected_pairs
             ]
             assert_allclose(cov[node], oracle, rtol=3e-15, atol=1e-18)
         fisher = fisher_from_factors(observed[:, :, None], factors)
         for theta in ([0.8], [1.2], [1.0]):
-            evaluate_derivatives(prepared, theta, 2.4, k, mu)
-        for x, y in zip((w, modes, factors, k, mu), snapshots):
+            evaluate_derivatives(prepared, theta, 2.4, k_grid, mu_grid)
+        for x, y in zip((response, modes, factors, k_grid, mu_grid), snapshots):
             assert_array_equal(x, y)
-        slice_result = evaluate_derivatives(prepared, [1], 2.4, k[::2], mu[::2])
+        slice_result = evaluate_derivatives(
+            prepared, [1], 2.4, k_grid[::2], mu_grid[::2]
+        )
         assert_allclose(slice_result.jacobian, result.jacobian[::2], rtol=0, atol=0)
         outputs.append((cov, observed, fisher))
     assert_allclose(outputs[1][0], outputs[0][0][:, ::-1, ::-1], rtol=0, atol=0)
     assert_allclose(outputs[1][1], outputs[0][1][:, ::-1], rtol=0, atol=0)
     assert_allclose(outputs[1][2], outputs[0][2], rtol=3e-15)
-    q = k * mu / 100
-    p = evaluate_p1d(default_p1d, BoundParameters(registry, (), {}), [1], 2.4, q)
-    velocity_w = velocity_response(
-        q, pixel_width_velocity=100, gaussian_sigma_velocity=30
+    velocity_k = k_grid * mu_grid / 100
+    power_1d = evaluate_p1d(
+        default_p1d, BoundParameters(registry, (), {}), [1], 2.4, velocity_k
     )
-    comoving_w = np.sinc(k * mu / (2 * np.pi)) * np.exp(-0.5 * (k * mu * 0.3) ** 2)
-    assert_allclose(p * velocity_w**2 / 100, (p / 100) * comoving_w**2, rtol=5e-14)
+    velocity_w = velocity_response(
+        velocity_k, pixel_width_velocity=100, gaussian_sigma_velocity=30
+    )
+    comoving_w = np.sinc(k_grid * mu_grid / (2 * np.pi)) * np.exp(
+        -0.5 * (k_grid * mu_grid * 0.3) ** 2
+    )
+    assert_allclose(
+        power_1d * velocity_w**2 / 100, (power_1d / 100) * comoving_w**2, rtol=5e-14
+    )

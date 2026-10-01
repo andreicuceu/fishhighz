@@ -5,6 +5,7 @@ import sys
 
 
 def test_blocked_optional_core_and_adapter():
+    """Check blocked optional core and adapter."""
     script = r"""
 import sys
 import importlib.abc

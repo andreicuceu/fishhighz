@@ -42,6 +42,26 @@ class Scaling:
     values: tuple
 
     def __init__(self, basis, **coordinates):
+        """Define an explicit two-coordinate dilation basis.
+
+        Parameters
+        ----------
+        basis : {'ap_at', 'alpha_phi', 'alpha_iso_epsilon', 'alpha_iso_phi'}
+            Dilation parameterization defining the two required coordinate keys.
+        **coordinates : float or str
+            Exactly the two dimensionless coordinates for the basis. Numbers are
+            fixed; strings identify local parameter slots.
+
+        Returns
+        -------
+        None
+            Store the basis and coordinate values in the established basis order.
+
+        Raises
+        ------
+        ValueError
+            If the basis, keys, coordinate domain, or parameter labels are invalid.
+        """
         if basis not in _BASES or set(coordinates) != set(_BASES[basis]):
             raise ValueError(
                 "scaling requires one supported basis and exactly its coordinate keys"
@@ -125,6 +145,56 @@ class KaiserModel:
         z=None,
         growth=None,
     ):
+        """Prepare one fixed-redshift intrinsic Kaiser power-spectrum model.
+
+        Parameters
+        ----------
+        template : PowerTemplate
+            Prepared signed smooth/wiggle template in fixed fiducial h units.
+        fields : sequence of ObservedField
+            Ordered field definitions, retaining original field indices.
+        biases : mapping
+            Every field ID mapped to a fixed dimensionless density bias or a named
+            local slot.
+        betas : mapping
+            Exactly the forest field IDs mapped to fixed dimensionless beta values
+            or local slots.
+        widths : mapping
+            Every field ID mapped to fixed nonnegative (parallel, transverse) BAO
+            broadening lengths in Mpc/h_fid.
+        f : float or str, optional
+            Shared dimensionless galaxy growth rate or local slot. Default None;
+            required with galaxies and forbidden for forest-only models.
+        local_names : sequence of str, default=()
+            Ordered free slots, each used exactly once in the settings; ties use
+            explicit global bindings.
+        smooth, wiggle : Scaling, optional
+            Independent component dilation settings. Each defaults to identity ap_at
+            scaling when None.
+        z : float, optional
+            Fixed dimensionless bin redshift; default None uses template.z_ref.
+        growth : float, optional
+            Positive power factor [D(z)/D(z_ref)]^2. Default None implies unity only
+            at template.z_ref.
+
+        Returns
+        -------
+        None
+            Store immutable settings, slot maps, tracer masks, and fixed broadening
+            widths.
+
+        Raises
+        ------
+        ValueError
+            If field metadata, parameter slots, widths, dilation settings, or fixed
+            redshift/growth are inconsistent.
+
+        Notes
+        -----
+        Galaxy factors use b+f*mu**2; forest factors use b*(1+beta*mu**2).
+        Broadening acts only on wiggles and remains fixed when f varies.
+        Intrinsic output excludes instrumental response and known noise.
+        """
         if not isinstance(template, PowerTemplate):
             raise ValueError("expected prepared PowerTemplate")
         fields = tuple(fields)
@@ -133,14 +203,16 @@ class KaiserModel:
         ids = [field.id for field in fields]
         if len(set(ids)) != len(ids):
             raise ValueError("duplicate field ID")
-        forest = np.array([field.kind == "forest" for field in fields])
+        forest_mask = np.array([field.kind == "forest" for field in fields])
         if set(biases) != set(ids) or set(betas) != {
             field.id for field in fields if field.kind == "forest"
         }:
             raise ValueError(
                 "biases must match all fields; betas must match only forest fields"
             )
-        if (np.any(~forest) and f is None) or (np.all(forest) and f is not None):
+        if (np.any(~forest_mask) and f is None) or (
+            np.all(forest_mask) and f is not None
+        ):
             raise ValueError(
                 "one shared f is required for galaxies and forbidden for forest-only models"
             )
@@ -201,7 +273,7 @@ class KaiserModel:
             ("fixed", readonly(fixed, np.float64)),
             ("destinations", readonly(destinations, np.int64)),
             ("sources", readonly(sources, np.int64)),
-            ("forest", readonly(forest, np.bool_)),
+            ("forest", readonly(forest_mask, np.bool_)),
             ("widths", readonly(width_array, np.float64)),
             ("widths_squared", readonly(width_squared, np.float64)),
             ("bases", (smooth.basis, wiggle.basis)),
@@ -213,6 +285,33 @@ class KaiserModel:
     def __call__(self, theta_local, z, k, mu, pairs):
         """Return owned float64 intrinsic (node,pair) power in requested order.
 
+        Parameters
+        ----------
+        theta_local : array_like of shape (n_local,)
+            Local parameter values in the declared slot order; biases, beta, f, and
+            dilation coordinates are dimensionless.
+        z : float
+            Dimensionless redshift, required to equal the prepared model redshift.
+        k : array_like of shape (n_node,)
+            Positive observed wavenumbers in h_fid/Mpc.
+        mu : array_like of shape (n_node,)
+            Paired direction cosines on [0, 1].
+        pairs : array_like of int, shape (n_pair, 2)
+            Original field indices in the requested spectrum order.
+
+        Returns
+        -------
+        power : ndarray of shape (n_node, n_pair)
+            Owned float64 intrinsic power in (Mpc/h_fid)^3.
+
+        Raises
+        ------
+        ValueError
+            If parameter state, redshift, nodes, field indices, mapped template
+            coverage, or represented output is invalid.
+
+        Notes
+        -----
         Real paired nodes, finite local state and original integer field indices
         are validated. Domain failures identify the component/scales. There is
         no mutable parameter cache and no cuts, noise or volume configuration.
@@ -243,12 +342,18 @@ class KaiserModel:
         if np.any(pairs >= len(self.fields)):
             raise ValueError("unknown field index")
         values = _resolve(self.fixed, self.destinations, self.sources, theta)
-        n = len(self.fields)
-        bias, beta, f = values[:n], values[n : 2 * n], values[2 * n]
+        n_field = len(self.fields)
+        density_biases, forest_betas, growth_rate = (
+            values[:n_field],
+            values[n_field : 2 * n_field],
+            values[2 * n_field],
+        )
         components, factors, prefactors = [], [], []
         for component, basis in enumerate(self.bases):
             name = ("smooth", "wiggle")[component]
-            coordinates = values[2 * n + 1 + 2 * component : 2 * n + 3 + 2 * component]
+            coordinates = values[
+                2 * n_field + 1 + 2 * component : 2 * n_field + 3 + 2 * component
+            ]
             if coordinates[0] <= 0 or coordinates[1] <= (
                 -1 if basis == "alpha_iso_epsilon" else 0
             ):
@@ -258,30 +363,44 @@ class KaiserModel:
             with np.errstate(
                 over="ignore", invalid="ignore", divide="ignore", under="ignore"
             ):
-                ap, at, q = _scales(coordinates, tuple(_BASES).index(basis))
-                if not np.all(np.isfinite([ap, at, q])) or min(ap, at, q) <= 0:
+                parallel_scale, transverse_scale, volume_factor = _scales(
+                    coordinates, tuple(_BASES).index(basis)
+                )
+                if (
+                    not np.all(
+                        np.isfinite([parallel_scale, transverse_scale, volume_factor])
+                    )
+                    or min(parallel_scale, transverse_scale, volume_factor) <= 0
+                ):
                     raise ValueError(
                         f"{name}: unrepresentable scaling factors/Q for {coordinates.tolist()}"
                     )
-                mapped, angle, parallel, transverse = _coordinates(k, mu, ap, at)
-            context = f"{name}, {basis}={coordinates.tolist()}, ap={ap}, at={at}"
-            if not np.all(np.isfinite([mapped, angle, parallel, transverse])) or np.any(
-                mapped <= 0
-            ):
+                mapped_wavenumber, mapped_mu, parallel, transverse = _coordinates(
+                    k, mu, parallel_scale, transverse_scale
+                )
+            context = f"{name}, {basis}={coordinates.tolist()}, ap={parallel_scale}, at={transverse_scale}"
+            if not np.all(
+                np.isfinite([mapped_wavenumber, mapped_mu, parallel, transverse])
+            ) or np.any(mapped_wavenumber <= 0):
                 raise ValueError(
                     f"{context}: nonfinite/unrepresentable mapped coordinates"
                 )
-            if mapped.min() < self.template.k[0] or mapped.max() > self.template.k[-1]:
+            if (
+                mapped_wavenumber.min() < self.template.k[0]
+                or mapped_wavenumber.max() > self.template.k[-1]
+            ):
                 raise ValueError(
-                    f"{context}: mapped range {(float(mapped.min()), float(mapped.max()))} outside template domain {self.template.domain}; pad template for all derivative stencils"
+                    f"{context}: mapped range {(float(mapped_wavenumber.min()), float(mapped_wavenumber.max()))} outside template domain {self.template.domain}; pad template for all derivative stencils"
                 )
-            components.append(self.template.evaluate(mapped)[:, component])
+            components.append(self.template.evaluate(mapped_wavenumber)[:, component])
             with np.errstate(over="ignore", invalid="ignore"):
-                field_values = _field_factors(angle, bias, beta, f, self.forest)
+                field_values = _field_factors(
+                    mapped_mu, density_biases, forest_betas, growth_rate, self.forest
+                )
             if not np.all(np.isfinite(field_values)):
                 raise ValueError(f"{context}: nonfinite Kaiser factors")
             factors.append(field_values)
-            prefactors.append(q)
+            prefactors.append(volume_factor)
         # parallel/transverse here are the WIGGLE component's coordinates.
         with np.errstate(over="ignore", invalid="ignore", under="ignore"):
             damping, exponent = _damping(

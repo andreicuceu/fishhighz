@@ -16,6 +16,13 @@ from fishhighz.validation.study import study
 
 
 def inputs():
+    """Construct a heterogeneous two-sample forest-weight fixture.
+
+    Returns
+    -------
+    inputs : WeightInputs
+        Source densities, quadrature, noise, and fixed auxiliary signal/P1D.
+    """
     return WeightInputs(
         np.array([20.0, 21.0]),
         np.array([0.2, 0.7]),
@@ -30,58 +37,100 @@ def inputs():
 
 @pytest.mark.parametrize("variant", ["sum_historical", "sum_aliasing"])
 def test_two_cell_scalar_update_and_amplitude(variant):
-    x = inputs()
-    w = seed(x)
+    """Check two cell scalar update and amplitude.
+
+    Parameters
+    ----------
+    variant : str
+        Forest-weight recurrence variant, supplied by pytest parametrization.
+    """
+    weight_inputs = inputs()
+    source_weights = seed(weight_inputs)
     for _ in range(2):
-        i1 = sum(float(d * q * a) for d, q, a in zip(x.density, x.quadrature, w))
-        i2 = sum(float(d * q * a * a) for d, q, a in zip(x.density, x.quadrature, w))
-        s = x.signal + (
-            x.p1d / (x.length * i1)
-            if variant == "sum_historical"
-            else x.p1d * i2 / (x.length * i1 * i1)
+        i1 = sum(
+            float(d * q * a)
+            for d, q, a in zip(
+                weight_inputs.density, weight_inputs.quadrature, source_weights
+            )
         )
-        expected = [s / (s + x.pixel * float(v) / (x.length * i1)) for v in x.variance]
-        w = update(x, w, variant)
-        np.testing.assert_allclose(w, expected, rtol=5e-15)
+        i2 = sum(
+            float(d * q * a * a)
+            for d, q, a in zip(
+                weight_inputs.density, weight_inputs.quadrature, source_weights
+            )
+        )
+        effective_signal = weight_inputs.signal + (
+            weight_inputs.p1d / (weight_inputs.length * i1)
+            if variant == "sum_historical"
+            else weight_inputs.p1d * i2 / (weight_inputs.length * i1 * i1)
+        )
+        expected = [
+            effective_signal
+            / (
+                effective_signal
+                + weight_inputs.pixel * float(v) / (weight_inputs.length * i1)
+            )
+            for v in weight_inputs.variance
+        ]
+        source_weights = update(weight_inputs, source_weights, variant)
+        np.testing.assert_allclose(source_weights, expected, rtol=5e-15)
     np.testing.assert_allclose(
-        coefficients(x, w)[-2:], coefficients(x, 2 * w)[-2:], rtol=5e-15
+        coefficients(weight_inputs, source_weights)[-2:],
+        coefficients(weight_inputs, 2 * source_weights)[-2:],
+        rtol=5e-15,
     )
-    assert not np.allclose(update(x, w, variant), update(x, 2 * w, variant))
+    assert not np.allclose(
+        update(weight_inputs, source_weights, variant),
+        update(weight_inputs, 2 * source_weights, variant),
+    )
     reverse = replace(
-        x,
-        density=x.density[::-1],
-        quadrature=x.quadrature[::-1],
-        variance=x.variance[::-1],
+        weight_inputs,
+        density=weight_inputs.density[::-1],
+        quadrature=weight_inputs.quadrature[::-1],
+        variance=weight_inputs.variance[::-1],
     )
     np.testing.assert_allclose(
-        update(reverse, w[::-1], variant)[::-1], update(x, w, variant), rtol=5e-15
+        update(reverse, source_weights[::-1], variant)[::-1],
+        update(weight_inputs, source_weights, variant),
+        rtol=5e-15,
     )
 
 
 def test_homogeneous_quadratic_fixed_point_and_zero_noise():
-    x = inputs()
-    x = replace(x, variance=np.full(2, 2.0))
-    state = solve(x, "sum_historical", rtol=1e-10)
-    c = x.signal * x.length * sum(x.density * x.quadrature)
+    """Check homogeneous quadratic fixed point and zero noise."""
+    weight_inputs = inputs()
+    weight_inputs = replace(weight_inputs, variance=np.full(2, 2.0))
+    state = solve(weight_inputs, "sum_historical", rtol=1e-10)
+    quadratic_coefficient = (
+        weight_inputs.signal
+        * weight_inputs.length
+        * sum(weight_inputs.density * weight_inputs.quadrature)
+    )
     # c w^2 + (B+lp*v-c) w - B = 0.
-    linear = x.p1d + x.pixel * 2 - c
-    root = (-linear + np.sqrt(linear**2 + 4 * c * x.p1d)) / (2 * c)
+    linear = weight_inputs.p1d + weight_inputs.pixel * 2 - quadratic_coefficient
+    root = (
+        -linear + np.sqrt(linear**2 + 4 * quadratic_coefficient * weight_inputs.p1d)
+    ) / (2 * quadratic_coefficient)
     assert state["status"] == "converged"
     np.testing.assert_allclose(state["weights"], root, rtol=1e-12)
-    zero = solve(replace(x, variance=np.zeros(2)), "sum_historical")
+    zero = solve(replace(weight_inputs, variance=np.zeros(2)), "sum_historical")
     assert zero["updates"] == 6
     np.testing.assert_array_equal(zero["weights"], np.ones(2))
     assert zero["coefficients"][-1] == 0
     for p in (0.0, 1e-12):
-        small = replace(x, signal=p)
+        small = replace(weight_inputs, signal=p)
         np.testing.assert_allclose(
             update(small, seed(small), "sum_historical"), seed(small), rtol=1e-11
         )
-    assert solve(replace(x, signal=0.0), "sum_historical")["status"] == "ineligible"
-    assert solve(x, "sum_historical", max_updates=3)["status"] == "capped"
+    assert (
+        solve(replace(weight_inputs, signal=0.0), "sum_historical")["status"]
+        == "ineligible"
+    )
+    assert solve(weight_inputs, "sum_historical", max_updates=3)["status"] == "capped"
 
 
 def test_strict_public_methods_and_cap():
+    """Check strict public methods and cap."""
     for method in ("early_lyaforecast", "mcdonald"):
         result = prepare(method=method, iterations=None)
         assert result.convergence["status"] == "converged"
@@ -95,6 +144,7 @@ def test_strict_public_methods_and_cap():
 
 
 def test_selected_bin1_and_historical_identity():
+    """Check selected bin1 and historical identity."""
     case = "lya_qso_lbg_lae_15x2pt"
     historical = request(case, 0, "accuracy")
     revised = request(case, 0, "accuracy", recipe_revision=REVISION)
@@ -114,11 +164,37 @@ class AdaptiveStudy:
     )
 
     def __init__(self):
+        """Initialize the synthetic AdaptiveStudy fixture.
+
+        Notes
+        -----
+        Sets the instance state used by the enclosing test; no scientific calculation is run.
+        """
         self._prepared = {}
 
     def evaluate(self, task, controls):
-        f = np.diag([2.0, 1.0])
-        return dict(fisher=f, pair_fisher=f[None]), dict(
+        """Evaluate the synthetic Fisher trial for the supplied numerical controls.
+
+        Parameters
+        ----------
+        task : dict
+            Synthetic forecast request including case, redshift-bin index, profile,
+            and pair selection.
+        controls : dict
+            Numerical quadrature and weighting controls for this synthetic trial.
+
+        Returns
+        -------
+        payload : tuple
+            Synthetic numerical arrays and validation report, including the
+            requested test modification.
+
+        Notes
+        -----
+        Uses small analytic matrices to exercise validation control flow; it does not run a survey forecast.
+        """
+        fisher = np.diag([2.0, 1.0])
+        return dict(fisher=fisher, pair_fisher=fisher[None]), dict(
             settings=dict(
                 controls=dict(controls),
                 grid=dict(
@@ -136,6 +212,7 @@ class AdaptiveStudy:
 
 
 def test_adaptive_trial_v3_replays_and_tightens_tolerance():
+    """Check adaptive trial v3 replays and tightens tolerance."""
     arrays, report = study(AdaptiveStudy(), {})
     assert report["trial_contract"]["version"] == 3
     assert report["actual_levels"]["weights"] == [1e-4, 1e-5]
@@ -145,6 +222,7 @@ def test_adaptive_trial_v3_replays_and_tightens_tolerance():
 
 
 def test_auxiliary_units_field_reuse_and_frozen_derivatives():
+    """Check auxiliary units field reuse and frozen derivatives."""
     from test_weights import geometry
 
     from fishhighz.fields import ObservedField, PairSelection
@@ -166,6 +244,30 @@ def test_auxiliary_units_field_reuse_and_frozen_derivatives():
     auxiliary_calls = []
 
     def model(t, z, k, mu, pairs):
+        """Evaluate the synthetic spectrum used by the enclosing regression test.
+
+        Parameters
+        ----------
+        t : ndarray of shape (n_parameters,)
+            Local model parameters in the provider binding order.
+        z : float or ndarray
+            Dimensionless redshift.
+        k : ndarray of shape (n_nodes,)
+            Comoving wavenumbers in h/Mpc.
+        mu : ndarray of shape (n_nodes,)
+            Dimensionless line-of-sight direction cosines.
+        pairs : ndarray of int, shape (n_pairs, 2)
+            Observed-field indices defining the requested spectra.
+
+        Returns
+        -------
+        power : ndarray of shape (n_nodes, n_pairs)
+            Synthetic intrinsic power in (Mpc/h)^3 before response and noise.
+
+        Notes
+        -----
+        Appends to the enclosing test call log so provider dispatch can be checked.
+        """
         if len(k) == 1:
             auxiliary_calls.append((pairs.copy(), t.copy()))
         base = np.array([[4.0, 1.0], [1.0, 9.0]])
@@ -176,6 +278,26 @@ def test_auxiliary_units_field_reuse_and_frozen_derivatives():
     p1d_calls = []
 
     def p1d(t, z, q):
+        """Evaluate an independent synthetic one-dimensional forest spectrum.
+
+        Parameters
+        ----------
+        t : ndarray of shape (n_parameters,)
+            Local model parameters in the provider binding order.
+        z : float or ndarray
+            Dimensionless redshift.
+        q : ndarray of shape (n_nodes,)
+            Line-of-sight velocity wavenumbers in s/km.
+
+        Returns
+        -------
+        power : ndarray of shape (n_nodes,)
+            Intrinsic one-dimensional power in km/s.
+
+        Notes
+        -----
+        Appends to the enclosing test call log so provider dispatch can be checked.
+        """
         p1d_calls.append(q.copy())
         return np.full_like(q, 3.0)
 
@@ -219,15 +341,21 @@ def test_auxiliary_units_field_reuse_and_frozen_derivatives():
     assert len(auxiliary_calls) == 2 and len(p1d_calls) == 4
     for i, field in enumerate(fields):
         weights = prepared.weights[field.id]
-        w = velocity_response(
+        response_amplitude = velocity_response(
             [0.00035],
             pixel_width_velocity=responses[field.id].pixel_width_velocity,
             gaussian_sigma_velocity=responses[field.id].gaussian_sigma_velocity,
         )[0]
         assert weights.signal == pytest.approx(
-            [4.0, 9.0][i] * w * w * geom.a_v / geom.d_deg**2
+            [4.0, 9.0][i]
+            * response_amplitude
+            * response_amplitude
+            * geom.a_v
+            / geom.d_deg**2
         )
-        assert weights.alias == pytest.approx(3.0 * w * w)
+        assert weights.alias == pytest.approx(
+            3.0 * response_amplitude * response_amplitude
+        )
         noise = (
             (weights.A * 3.0 * prepared.response[:, i] ** 2 + weights.P_pixel)
             * geom.d_deg**2
@@ -235,25 +363,37 @@ def test_auxiliary_units_field_reuse_and_frozen_derivatives():
         )
         column = list(map(tuple, selection.required_pairs)).index((i, i))
         np.testing.assert_allclose(prepared.noise[:, column], noise, rtol=5e-15)
-    snapshots = {name: w.weights.copy() for name, w in prepared.weights.items()}
+    snapshots = {
+        name: source_weights.weights.copy()
+        for name, source_weights in prepared.weights.items()
+    }
     run_bin(prepared)
     assert len(auxiliary_calls) == 2 and len(p1d_calls) == 4
-    for name, w in prepared.weights.items():
-        np.testing.assert_array_equal(w.weights, snapshots[name])
+    for name, response_amplitude in prepared.weights.items():
+        np.testing.assert_array_equal(response_amplitude.weights, snapshots[name])
     # Independent auto/cross Wick variances.
-    t = prepared.total
+    total_power = prepared.total
     covariance = prepared.factors @ prepared.factors.swapaxes(-1, -2)
     np.testing.assert_allclose(
-        covariance[:, 0, 0], 2 * t[:, 0] ** 2 / prepared.modes, rtol=5e-15
+        covariance[:, 0, 0], 2 * total_power[:, 0] ** 2 / prepared.modes, rtol=5e-15
     )
     np.testing.assert_allclose(
         covariance[:, 1, 1],
-        (t[:, 0] * t[:, 2] + t[:, 1] ** 2) / prepared.modes,
+        (total_power[:, 0] * total_power[:, 2] + total_power[:, 1] ** 2)
+        / prepared.modes,
         rtol=5e-15,
     )
 
 
 def test_accuracy_recipe_records_own_auxiliary_and_stopping(monkeypatch):
+    """Check accuracy recipe records own auxiliary and stopping.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that restores patched callables, attributes, and environment
+        variables after the test.
+    """
     from test_weighting_w12 import profile_fixture
 
     from fishhighz.forecast import prepare_bin
@@ -283,6 +423,17 @@ def test_accuracy_recipe_records_own_auxiliary_and_stopping(monkeypatch):
 
 
 def test_revised_runner_dispatches_exact_selected_profiles(tmp_path, monkeypatch):
+    """Check revised runner dispatches exact selected profiles.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that restores patched callables, attributes, and environment
+        variables after the test.
+    """
     from fishhighz.validation import profiles, revised_compatibility
     from fishhighz.validation.evidence import modern_requests
 
@@ -301,6 +452,21 @@ def test_revised_runner_dispatches_exact_selected_profiles(tmp_path, monkeypatch
 
     class Recipe:
         def __init__(self, *a, **kw):
+            """Initialize the synthetic Recipe fixture.
+
+            Parameters
+            ----------
+            *a : tuple
+                Positional arguments forwarded to the original callable or accepted by
+                the test callback.
+            **kw : dict
+                Keyword options forwarded to the original callable or inspected by the
+                test callback.
+
+            Notes
+            -----
+            Sets the instance state used by the enclosing test; no scientific calculation is run.
+            """
             assert kw == dict(
                 weight_method="early_lyaforecast", recipe_revision=REVISION
             )
@@ -308,6 +474,24 @@ def test_revised_runner_dispatches_exact_selected_profiles(tmp_path, monkeypatch
             self._prepared = {}
 
         def study(self, task):
+            """Record a synthetic task and return its fixed convergence result.
+
+            Parameters
+            ----------
+            task : dict
+                Synthetic forecast request including case, redshift-bin index, profile,
+                and pair selection.
+
+            Returns
+            -------
+            payload : tuple
+                Synthetic numerical arrays and validation report, including the
+                requested test modification.
+
+            Notes
+            -----
+            Appends to the enclosing test call log so provider dispatch can be checked.
+            """
             seen.append(task)
             return dict(
                 fisher=np.eye(2), pair_fisher=np.tile(np.eye(2), (3, 1, 1))
@@ -316,6 +500,21 @@ def test_revised_runner_dispatches_exact_selected_profiles(tmp_path, monkeypatch
     monkeypatch.setattr(profiles, "AccuracyRecipe", Recipe)
 
     def execute(out, **kw):
+        """Dispatch only the requested synthetic profile tasks.
+
+        Parameters
+        ----------
+        out : pathlib.Path
+            Directory containing the synthetic evidence bundle.
+        **kw : dict
+            Keyword options forwarded to the original callable or inspected by the
+            test callback.
+
+        Returns
+        -------
+        tasks : list of dict
+            Generated requests in dispatch order.
+        """
         tasks = modern_requests(
             kw["suite"],
             kw["cases"],
@@ -350,6 +549,7 @@ def test_revised_runner_dispatches_exact_selected_profiles(tmp_path, monkeypatch
 
 
 def test_angular_velocity_and_comoving_recurrence_equivalence():
+    """Check angular velocity and comoving recurrence equivalence."""
     angular = inputs()
     a_v, d_deg = 73.0, 61.0
     comoving = replace(
@@ -361,13 +561,15 @@ def test_angular_velocity_and_comoving_recurrence_equivalence():
         p1d=angular.p1d / a_v,
     )
     for variant in ("sum_historical", "sum_aliasing"):
-        a = solve(angular, variant)
-        b = solve(comoving, variant)
-        assert a["status"] == b["status"] == "converged"
-        assert a["updates"] == b["updates"]
-        np.testing.assert_allclose(a["weights"], b["weights"], rtol=5e-15)
+        angular_solution = solve(angular, variant)
+        comoving_solution = solve(comoving, variant)
+        assert angular_solution["status"] == comoving_solution["status"] == "converged"
+        assert angular_solution["updates"] == comoving_solution["updates"]
         np.testing.assert_allclose(
-            b["coefficients"][-2:],
-            a["coefficients"][-2:] * [d_deg**2, d_deg**2 / a_v],
+            angular_solution["weights"], comoving_solution["weights"], rtol=5e-15
+        )
+        np.testing.assert_allclose(
+            comoving_solution["coefficients"][-2:],
+            angular_solution["coefficients"][-2:] * [d_deg**2, d_deg**2 / a_v],
             rtol=5e-15,
         )

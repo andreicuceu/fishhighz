@@ -45,9 +45,24 @@ from fishhighz.validation.synthetic import evidence_payload
     ],
 )
 def test_original_review_probes(tmp_path, name, arrays, report):
+    """Check original review probes.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    name : str
+        Named quantity or policy under examination, supplied by pytest
+        parametrization.
+    arrays : dict
+        Named numerical evidence arrays, supplied by pytest parametrization.
+    report : dict
+        Validation report fixture, supplied by pytest parametrization.
+    """
     out = tmp_path / name
-    m = execute(out, suite="quick", worker=lambda task: (arrays, report))
-    assert m["execution_finished"] and not m["complete"]
+    manifest = execute(out, suite="quick", worker=lambda task: (arrays, report))
+    assert manifest["execution_finished"] and not manifest["complete"]
     with pytest.raises(ValueError):
         check(out)
 
@@ -57,13 +72,27 @@ def test_original_review_probes(tmp_path, name, arrays, report):
 )
 @pytest.mark.parametrize("null", [False, True])
 def test_valid_information(tmp_path, kind, null):
-    m = execute(
+    """Check valid information.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    kind : str
+        Tracer, input, or calculation classification for this case, supplied by
+        pytest parametrization.
+    null : bool
+        Choice of exact null direction or zero-response case, supplied by pytest
+        parametrization.
+    """
+    manifest = execute(
         tmp_path / "bundle",
         suite="quick",
         kind=kind,
         worker=lambda t: evidence_payload(t, null=null),
     )
-    assert m["complete"]
+    assert manifest["complete"]
     assert check(tmp_path / "bundle")["complete"]
     if null and kind == "synthetic_bao":
         with np.load(tmp_path / "bundle/records-000.npz") as a:
@@ -72,17 +101,26 @@ def test_valid_information(tmp_path, kind, null):
 
 
 def mutate(out, operation):
-    p = out / "manifest.json"
-    m = json.loads(p.read_text())
-    r = m["records"][0]
-    with np.load(out / r["arrays"], allow_pickle=False) as d:
-        a = {k: d[k] for k in d.files}
-    operation(a, r)
-    np.savez_compressed(out / r["arrays"], **a)
-    r["sha256"] = digest(out / r["arrays"])
-    r["inventory"] = {k: list(v.shape) for k, v in a.items()}
-    r["effective_hash"] = canonical(r["report"])
-    p.write_text(json.dumps(m))
+    """Mutate a synthetic payload and refresh its manifest checksums.
+
+    Parameters
+    ----------
+    out : pathlib.Path
+        Directory containing the synthetic evidence bundle.
+    operation : callable
+        Mutation receiving the numerical-array dictionary and manifest record.
+    """
+    manifest_path = out / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    record = manifest["records"][0]
+    with np.load(out / record["arrays"], allow_pickle=False) as d:
+        arrays = {k: d[k] for k in d.files}
+    operation(arrays, record)
+    np.savez_compressed(out / record["arrays"], **arrays)
+    record["sha256"] = digest(out / record["arrays"])
+    record["inventory"] = {k: list(v.shape) for k, v in arrays.items()}
+    record["effective_hash"] = canonical(record["report"])
+    manifest_path.write_text(json.dumps(manifest))
 
 
 @pytest.mark.parametrize(
@@ -107,10 +145,30 @@ def mutate(out, operation):
     ],
 )
 def test_rehashed_semantic_mutations(tmp_path, change):
+    """Check rehashed semantic mutations.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    change : str
+        Input override exercising the specified validation boundary, supplied by
+        pytest parametrization.
+    """
     out = tmp_path / "bundle"
     execute(out, suite="quick", kind="synthetic_bao", worker=evidence_payload)
 
     def edit(a, r):
+        """Apply the selected semantic corruption to arrays or report metadata.
+
+        Parameters
+        ----------
+        a : dict of ndarray
+            Named numerical arrays in the synthetic evidence payload.
+        r : dict
+            Manifest record containing the report to be modified in place.
+        """
         if change == "shape":
             a["fisher"] = np.ones(2)
         if change == "negative":
@@ -152,35 +210,86 @@ def test_rehashed_semantic_mutations(tmp_path, change):
 
 
 def test_wrong_convergence_not_hidden(tmp_path):
+    """Check wrong convergence not hidden.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
+
     def worker(t):
-        a, r = evidence_payload(t)
+        """Construct synthetic evidence for the requested forecast task.
+
+        Parameters
+        ----------
+        t : dict
+            Synthetic forecast request including case, redshift-bin index, profile,
+            and pair selection.
+
+        Returns
+        -------
+        payload : tuple
+            Synthetic numerical arrays and validation report, including the
+            requested test modification.
+        """
+        evidence_arrays, evidence_report = evidence_payload(t)
         add_metrics(
-            a,
-            r,
+            evidence_arrays,
+            evidence_report,
             ["k"],
-            [[a["fisher"] * 2, a["fisher"]]],
-            [[a["pair_fisher"] * 2, a["pair_fisher"]]],
+            [[evidence_arrays["fisher"] * 2, evidence_arrays["fisher"]]],
+            [[evidence_arrays["pair_fisher"] * 2, evidence_arrays["pair_fisher"]]],
             [[1, 1]],
         )
-        r["passed"] = True
-        r["metrics"][0] = {k: 0.0 for k in r["metrics"][0]}
-        return a, r
+        evidence_report["passed"] = True
+        evidence_report["metrics"][0] = {k: 0.0 for k in evidence_report["metrics"][0]}
+        return evidence_arrays, evidence_report
 
-    m = execute(tmp_path / "b", suite="quick", kind="synthetic_bao", worker=worker)
-    assert not m["complete"]
+    manifest = execute(
+        tmp_path / "b", suite="quick", kind="synthetic_bao", worker=worker
+    )
+    assert not manifest["complete"]
     with pytest.raises(ValueError):
         check(tmp_path / "b")
 
 
 def test_exact_78_records_and_swaps(tmp_path):
+    """Check exact 78 records and swaps.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     seen = []
 
     def worker(t):
+        """Construct synthetic evidence for the requested forecast task.
+
+        Parameters
+        ----------
+        t : dict
+            Synthetic forecast request including case, redshift-bin index, profile,
+            and pair selection.
+
+        Returns
+        -------
+        payload : tuple
+            Synthetic numerical arrays and validation report, including the
+            requested test modification.
+
+        Notes
+        -----
+        Appends to the enclosing test call log so provider dispatch can be checked.
+        """
         seen.append((t["case"], t["bin"], t["profile"]))
         return evidence_payload(t)
 
     out = tmp_path / "full"
-    m = execute(
+    manifest = execute(
         out,
         suite="full",
         profiles=("compatibility", "accuracy"),
@@ -191,15 +300,23 @@ def test_exact_78_records_and_swaps(tmp_path):
     assert len({x[0] for x in seen}) == 7
     assert check(out)["complete"]
     # Consistent file/hash swapping of plausible same-shaped profiles still fails token binding.
-    r0, r1 = m["records"][:2]
+    r0, r1 = manifest["records"][:2]
     for key in ("arrays", "sha256", "inventory"):
         r0[key], r1[key] = r1[key], r0[key]
-    (out / "manifest.json").write_text(json.dumps(m))
+    (out / "manifest.json").write_text(json.dumps(manifest))
     with pytest.raises(ValueError):
         check(out)
 
 
 def test_legacy_explicit_limit(tmp_path):
+    """Check legacy explicit limit.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     (tmp_path / "manifest.json").write_text(json.dumps(dict(schema=1, complete=True)))
     assert (
         inspect_legacy(tmp_path)["limited"] and not inspect_legacy(tmp_path)["complete"]
@@ -209,45 +326,89 @@ def test_legacy_explicit_limit(tmp_path):
 
 
 def test_roundoff_information_control():
-    t = request("lya_qso_2x2pt", 0, "accuracy", kind="synthetic_bao")
-    a, r = evidence_payload(t)
-    a["fisher"][0, 1] *= 1 + 2 * np.finfo(float).eps
-    validate_payload(t, a, r)
+    """Check roundoff information control."""
+    task = request("lya_qso_2x2pt", 0, "accuracy", kind="synthetic_bao")
+    evidence_arrays, evidence_report = evidence_payload(task)
+    evidence_arrays["fisher"][0, 1] *= 1 + 2 * np.finfo(float).eps
+    validate_payload(task, evidence_arrays, evidence_report)
 
 
 def test_literal_backward_derivative(monkeypatch):
+    """Check literal backward derivative.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that restores patched callables, attributes, and environment
+        variables after the test.
+    """
     from fishhighz.validation import numerics
 
-    k = np.linspace(0.01, 0.5, 12)
-    mu = 0.3
+    k_grid = np.linspace(0.01, 0.5, 12)
+    direction_cosine = 0.3
     monkeypatch.setattr(numerics, "legacy_peak", lambda model, k: np.array([k**2]))
-    j = numerics.legacy_jacobian(np.ones((1, len(k))), k, mu, widths=[[0, 0]])
-    expected = np.zeros(len(k))
-    expected[1:] = (k[1:] + k[:-1]) * k[1:]
-    np.testing.assert_allclose(j[:, 0, 0], expected * mu**2, rtol=5e-13, atol=0)
-    np.testing.assert_allclose(j[:, 0, 1], expected * (1 - mu**2), rtol=5e-13, atol=0)
+    j = numerics.legacy_jacobian(
+        np.ones((1, len(k_grid))), k_grid, direction_cosine, widths=[[0, 0]]
+    )
+    expected = np.zeros(len(k_grid))
+    expected[1:] = (k_grid[1:] + k_grid[:-1]) * k_grid[1:]
+    np.testing.assert_allclose(
+        j[:, 0, 0], expected * direction_cosine**2, rtol=5e-13, atol=0
+    )
+    np.testing.assert_allclose(
+        j[:, 0, 1], expected * (1 - direction_cosine**2), rtol=5e-13, atol=0
+    )
     assert np.array_equal(j[0], [[0, 0]])
 
 
 def test_composite_polynomial_and_partition():
+    """Check composite polynomial and partition."""
     from fishhighz.validation.accuracy import composite
 
-    x, w = composite(np.array([16.0, 19.0, 20.5, 24.0]), 4)
-    assert np.all(np.diff(x) > 0) and np.all(w > 0)
-    np.testing.assert_allclose(w @ x**3, (24.0**4 - 16.0**4) / 4, rtol=1e-14)
+    magnitude_nodes, quadrature_weights = composite(
+        np.array([16.0, 19.0, 20.5, 24.0]), 4
+    )
+    assert np.all(np.diff(magnitude_nodes) > 0) and np.all(quadrature_weights > 0)
+    np.testing.assert_allclose(
+        quadrature_weights @ magnitude_nodes**3, (24.0**4 - 16.0**4) / 4, rtol=1e-14
+    )
 
 
 def test_offline_plot_values_and_failed_rows(tmp_path):
+    """Check offline plot values and failed rows.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     from fishhighz.validation.plots import difference, tables
 
     def worker(t):
-        a, r = evidence_payload(t)
+        """Construct synthetic evidence for the requested forecast task.
+
+        Parameters
+        ----------
+        t : dict
+            Synthetic forecast request including case, redshift-bin index, profile,
+            and pair selection.
+
+        Returns
+        -------
+        payload : tuple
+            Synthetic numerical arrays and validation report, including the
+            requested test modification.
+        """
+        evidence_arrays, evidence_report = evidence_payload(t)
         if t["profile"] == "compatibility":
-            a["reference_fisher"] = a["fisher"].copy()
-            a["reference_pair_fisher"] = a["pair_fisher"].copy()
+            evidence_arrays["reference_fisher"] = evidence_arrays["fisher"].copy()
+            evidence_arrays["reference_pair_fisher"] = evidence_arrays[
+                "pair_fisher"
+            ].copy()
         else:
-            r["passed"] = False
-        return a, r
+            evidence_report["passed"] = False
+        return evidence_arrays, evidence_report
 
     execute(
         tmp_path / "source",
@@ -271,27 +432,32 @@ def test_offline_plot_values_and_failed_rows(tmp_path):
 
 
 def test_linear_common_node_interpolation():
+    """Check linear common node interpolation."""
     from fishhighz.validation.attribution import interpolate
 
-    k = np.linspace(0.01, 0.5, 5)
-    mu = np.array([0.05, 0.45, 0.95])
-    values = (2 * np.tile(k, 3) + 3 * np.repeat(mu, 5))[:, None]
+    k_grid = np.linspace(0.01, 0.5, 5)
+    mu_grid = np.array([0.05, 0.45, 0.95])
+    values = (2 * np.tile(k_grid, 3) + 3 * np.repeat(mu_grid, 5))[:, None]
     tk = np.array([0.02, 0.31, 0.49])
     tm = np.array([0.0, 0.5, 1.0])
     np.testing.assert_allclose(
-        interpolate(values, k, mu, tk, tm)[:, 0], 2 * tk + 3 * tm, rtol=1e-14
+        interpolate(values, k_grid, mu_grid, tk, tm)[:, 0], 2 * tk + 3 * tm, rtol=1e-14
     )
 
 
 def test_no_false_pass_with_unresolved_control():
+    """Check no false pass with unresolved control."""
     task = request("lya_qso_2x2pt", 0, "accuracy", kind="synthetic_bao")
-    a, r = evidence_payload(task)
-    r["unresolved_controls"] = [{"control": "weights", "error": "underflow"}]
+    evidence_arrays, evidence_report = evidence_payload(task)
+    evidence_report["unresolved_controls"] = [
+        {"control": "weights", "error": "underflow"}
+    ]
     with pytest.raises(ValueError, match="unresolved"):
-        validate_payload(task, a, r)
+        validate_payload(task, evidence_arrays, evidence_report)
 
 
 def test_arithmetic_mean_swap_preserves_fixed_geometry_contract():
+    """Check arithmetic mean swap preserves fixed geometry contract."""
     import configparser
     from types import SimpleNamespace
 
@@ -300,44 +466,65 @@ def test_arithmetic_mean_swap_preserves_fixed_geometry_contract():
     from fishhighz.validation.accuracy import AccuracyRecipe
     from fishhighz.validation.cases import bins, recipe, selection
 
-    r = AccuracyRecipe.__new__(AccuracyRecipe)
-    r.case = "lbg_lae_3x2pt"
-    r.selection = selection(r.case)
-    r.config = configparser.ConfigParser()
-    r.config.read_dict(recipe(r.case))
-    r.tracers = {f.id: {"tracer": f.id} for f in r.selection.fields}
-    r.external = SimpleNamespace(
+    accuracy_recipe = AccuracyRecipe.__new__(AccuracyRecipe)
+    accuracy_recipe.case = "lbg_lae_3x2pt"
+    accuracy_recipe.selection = selection(accuracy_recipe.case)
+    accuracy_recipe.config = configparser.ConfigParser()
+    accuracy_recipe.config.read_dict(recipe(accuracy_recipe.case))
+    accuracy_recipe.tracers = {
+        f.id: {"tracer": f.id} for f in accuracy_recipe.selection.fields
+    }
+    accuracy_recipe.external = SimpleNamespace(
         bias=SimpleNamespace(_get_density_bias=lambda z, n: 2.0)
     )
-    r.cosmo = SimpleNamespace(sigma8=0.8)
-    r._growth = lambda z: (0.3, 0.95)
-    r.registry = ParameterRegistry(
+    accuracy_recipe.cosmo = SimpleNamespace(sigma8=0.8)
+    accuracy_recipe._growth = lambda z: (0.3, 0.95)
+    accuracy_recipe.registry = ParameterRegistry(
         [Parameter(n, 1.0, "target", step=0.001) for n in ("ap_0", "at_0")]
     )
-    k = np.geomspace(0.001, 1.0, 20)
-    r.template = prepare_template(
-        k,
-        10 + np.sin(k * 100),
-        np.full(len(k), 10.0),
+    k_grid = np.geomspace(0.001, 1.0, 20)
+    accuracy_recipe.template = prepare_template(
+        k_grid,
+        10 + np.sin(k_grid * 100),
+        np.full(len(k_grid), 10.0),
         z_ref=2.4,
         h_template=0.7,
         h_fid=0.7,
     )
-    mean = sum(bins(r.case)[0]) / 2
-    provider, settings = r.model(0, mean_z=mean)
+    mean = sum(bins(accuracy_recipe.case)[0]) / 2
+    provider, settings = accuracy_recipe.model(0, mean_z=mean)
     from fishhighz.models.external import evaluate_p3d
 
     power = evaluate_p3d(
-        provider, r.registry.fiducials, r.z(0), np.array([0.1]), np.array([0.5])
+        provider,
+        accuracy_recipe.registry.fiducials,
+        accuracy_recipe.z(0),
+        np.array([0.1]),
+        np.array([0.5]),
     )
     assert power.shape == (1, 3) and settings["z_eval"] == mean
     with pytest.raises(ValueError, match="redshift"):
         evaluate_p3d(
-            provider, r.registry.fiducials, mean, np.array([0.1]), np.array([0.5])
+            provider,
+            accuracy_recipe.registry.fiducials,
+            mean,
+            np.array([0.1]),
+            np.array([0.5]),
         )
 
 
 def test_real_orchestrator_dispatch_without_reference_imports(tmp_path, monkeypatch):
+    """Check real orchestrator dispatch without reference imports.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that restores patched callables, attributes, and environment
+        variables after the test.
+    """
     from fishhighz.validation import profiles
     from fishhighz.validation.numerics import change
 
@@ -369,32 +556,85 @@ def test_real_orchestrator_dispatch_without_reference_imports(tmp_path, monkeypa
     )
 
     def compatibility(task, *args):
-        a, r = evidence_payload(task)
-        a["reference_fisher"] = a["fisher"].copy()
-        a["reference_pair_fisher"] = a["pair_fisher"].copy()
-        r["provenance"] = identity
-        r["comparison"] = change(
-            a["fisher"], a["fisher"], a["pair_fisher"], a["pair_fisher"], 1, 1
+        """Return synthetic compatibility evidence with identical reference Fisher data.
+
+        Parameters
+        ----------
+        task : dict
+            Synthetic forecast request including case, redshift-bin index, profile,
+            and pair selection.
+        *args : tuple
+            Positional arguments forwarded to the original callable or accepted by
+            the test callback.
+
+        Returns
+        -------
+        payload : tuple
+            Numerical arrays and report with provenance and comparison metrics.
+        """
+        evidence_arrays, evidence_report = evidence_payload(task)
+        evidence_arrays["reference_fisher"] = evidence_arrays["fisher"].copy()
+        evidence_arrays["reference_pair_fisher"] = evidence_arrays["pair_fisher"].copy()
+        evidence_report["provenance"] = identity
+        evidence_report["comparison"] = change(
+            evidence_arrays["fisher"],
+            evidence_arrays["fisher"],
+            evidence_arrays["pair_fisher"],
+            evidence_arrays["pair_fisher"],
+            1,
+            1,
         )
-        return a, r
+        return evidence_arrays, evidence_report
 
     monkeypatch.setattr(profiles, "compatibility", compatibility)
 
     class FakeRecipe:
         def __init__(self, root, case, *args, **kwargs):
+            """Initialize the synthetic FakeRecipe fixture.
+
+            Parameters
+            ----------
+            root : pathlib.Path
+                Directory containing the synthetic input files.
+            case : str
+                Authoritative forecast-case identifier.
+            *args : tuple
+                Positional arguments forwarded to the original callable or accepted by
+                the test callback.
+            **kwargs : dict
+                Keyword options forwarded to the original callable or inspected by the
+                test callback.
+
+            Notes
+            -----
+            Sets the instance state used by the enclosing test; no scientific calculation is run.
+            """
             cases.append(case)
             self._samples = {}
             self._prepared = {}
 
         def study(self, task):
+            """Return synthetic convergence evidence with explicit provenance.
+
+            Parameters
+            ----------
+            task : dict
+                Synthetic forecast request including case, redshift-bin index, profile,
+                and pair selection.
+
+            Returns
+            -------
+            payload : tuple
+                Convergence arrays and report for the supplied task.
+            """
             from fishhighz.validation.synthetic import convergence_payload
 
-            a, r = convergence_payload(task)
-            r["provenance"] = identity
-            return a, r
+            evidence_arrays, evidence_report = convergence_payload(task)
+            evidence_report["provenance"] = identity
+            return evidence_arrays, evidence_report
 
     monkeypatch.setattr(profiles, "AccuracyRecipe", FakeRecipe)
-    m = profiles.run(
+    manifest = profiles.run(
         tmp_path / "out",
         reference=reference,
         template=source,
@@ -406,11 +646,19 @@ def test_real_orchestrator_dispatch_without_reference_imports(tmp_path, monkeypa
         accuracy_method="legacy",
         recipe_revision=None,
     )
-    assert m["complete"] and len(m["records"]) == 78
+    assert manifest["complete"] and len(manifest["records"]) == 78
     assert len(backgrounds) == 1 and len(cases) == 7
 
 
 def test_full_assignment_gate_rejects_narrowed_inventory(tmp_path):
+    """Check full assignment gate rejects narrowed inventory.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     import runpy
     from pathlib import Path
 
@@ -438,6 +686,17 @@ def test_full_assignment_gate_rejects_narrowed_inventory(tmp_path):
 
 
 def test_controlled_attribution_chain_endpoints_without_assets(tmp_path, monkeypatch):
+    """Check controlled attribution chain endpoints without assets.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that restores patched callables, attributes, and environment
+        variables after the test.
+    """
     import builtins
     import copy
     import runpy
@@ -451,6 +710,30 @@ def test_controlled_attribution_chain_endpoints_without_assets(tmp_path, monkeyp
     original_import = builtins.__import__
 
     def no_models(name, *args, **kwargs):
+        """Reject scientific model imports during offline attribution tests.
+
+        Parameters
+        ----------
+        name : str
+            Name of the artifact, module, or result under examination.
+        *args : tuple
+            Positional arguments forwarded to the original callable or accepted by
+            the test callback.
+        **kwargs : dict
+            Keyword options forwarded to the original callable or inspected by the
+            test callback.
+
+        Returns
+        -------
+        module : module
+            Imported module when it is outside the prohibited model families.
+
+        Raises
+        ------
+        AssertionError
+            Deliberately raised to exercise the rejection path in the enclosing
+            test.
+        """
         if name.startswith("fishhighz.models") or name.split(".")[0] in (
             "camb",
             "lyaforecast",
@@ -466,11 +749,11 @@ def test_controlled_attribution_chain_endpoints_without_assets(tmp_path, monkeyp
     attribute = module["attribution"]
     case = "lbg_lae_3x2pt"
     task = request(case, 0, "accuracy", kind="synthetic_bao")
-    k = np.geomspace(0.001, 2, 100)
+    k_grid = np.geomspace(0.001, 2, 100)
     template = prepare_template(
-        k,
-        10 + 0.1 * np.sin(k * 100),
-        np.full(len(k), 10.0),
+        k_grid,
+        10 + 0.1 * np.sin(k_grid * 100),
+        np.full(len(k_grid), 10.0),
         z_ref=2.4,
         h_template=0.7,
         h_fid=0.7,
@@ -501,10 +784,26 @@ def test_controlled_attribution_chain_endpoints_without_assets(tmp_path, monkeyp
     )
 
     def payload(t, s):
-        k, mu, _ = grid_nodes(s)
-        total = np.tile([100.0, 1.0, 100.0], (len(k), 1))
+        """Construct a three-spectrum angular Jacobian on the requested grid.
+
+        Parameters
+        ----------
+        t : dict
+            Synthetic forecast request including case, redshift-bin index, profile,
+            and pair selection.
+        s : dict
+            Synthetic grid, selection, and numerical settings.
+
+        Returns
+        -------
+        payload : tuple
+            Assembled numerical arrays and evidence report.
+        """
+        k_grid, mu_grid, _ = grid_nodes(s)
+        total = np.tile([100.0, 1.0, 100.0], (len(k_grid), 1))
         j = np.broadcast_to(
-            np.column_stack((mu**2, 1 - mu**2))[:, None, :], (len(k), 3, 2)
+            np.column_stack((mu_grid**2, 1 - mu_grid**2))[:, None, :],
+            (len(k_grid), 3, 2),
         ).copy()
         return assemble(t, total, j, s)
 
@@ -570,6 +869,14 @@ def test_controlled_attribution_chain_endpoints_without_assets(tmp_path, monkeyp
 
 
 def test_external_reports_are_bounded_and_semantically_checked(tmp_path):
+    """Check external reports are bounded and semantically checked.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     from fishhighz.validation.evidence import record_report
 
     diagnostic = request(
@@ -581,21 +888,35 @@ def test_external_reports_are_bounded_and_semantically_checked(tmp_path):
     )
 
     def worker(task):
-        a, r = evidence_payload(task)
+        """Construct synthetic evidence for the requested forecast task.
+
+        Parameters
+        ----------
+        task : dict
+            Synthetic forecast request including case, redshift-bin index, profile,
+            and pair selection.
+
+        Returns
+        -------
+        payload : tuple
+            Synthetic numerical arrays and validation report, including the
+            requested test modification.
+        """
+        evidence_arrays, evidence_report = evidence_payload(task)
         if task["kind"] == "diagnostic":
-            r["large_notes"] = "x" * 200000
-        return a, r
+            evidence_report["large_notes"] = "x" * 200000
+        return evidence_arrays, evidence_report
 
     root = tmp_path / "bundle"
-    m = execute(
+    manifest = execute(
         root,
         suite="quick",
         kind="synthetic_bao",
         worker=worker,
         diagnostic_requests=[diagnostic],
     )
-    assert m["complete"] and (root / "manifest.json").stat().st_size < 60000
-    row = m["diagnostics"][0]
+    assert manifest["complete"] and (root / "manifest.json").stat().st_size < 60000
+    row = manifest["diagnostics"][0]
     assert "report" not in row and "report_file" in row
     report = record_report(root, row)
     assert len(report["large_notes"]) == 200000
@@ -605,7 +926,7 @@ def test_external_reports_are_bounded_and_semantically_checked(tmp_path):
     path.write_text(json.dumps(report))
     row["report_sha256"] = digest(path)
     row["effective_hash"] = canonical(report)
-    (root / "manifest.json").write_text(json.dumps(m))
+    (root / "manifest.json").write_text(json.dumps(manifest))
     with pytest.raises(ValueError):
         check(root)
     row["report_file"] = "../outside.json"
@@ -614,6 +935,14 @@ def test_external_reports_are_bounded_and_semantically_checked(tmp_path):
 
 
 def test_reuse_rejects_scientific_changes_and_preserves_producer(tmp_path):
+    """Check reuse rejects scientific changes and preserves producer.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     import copy
 
     from fishhighz.validation.evidence import modern_requests
@@ -633,9 +962,23 @@ def test_reuse_rejects_scientific_changes_and_preserves_producer(tmp_path):
     (tmp_path / "fixture.whl").write_bytes(b"fixture")
 
     def worker(task):
-        a, r = evidence_payload(task)
-        r["provenance"] = identity
-        return a, r
+        """Construct synthetic evidence for the requested forecast task.
+
+        Parameters
+        ----------
+        task : dict
+            Synthetic forecast request including case, redshift-bin index, profile,
+            and pair selection.
+
+        Returns
+        -------
+        payload : tuple
+            Synthetic numerical arrays and validation report, including the
+            requested test modification.
+        """
+        evidence_arrays, evidence_report = evidence_payload(task)
+        evidence_report["provenance"] = identity
+        return evidence_arrays, evidence_report
 
     root = tmp_path / "old"
     execute(root, suite="quick", kind="synthetic_bao", worker=worker)

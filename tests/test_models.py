@@ -23,6 +23,7 @@ from fishhighz.parameters import (
 
 
 def test_plain_providers_join_contracts_and_fixed_grid():
+    """Check plain providers join contracts and fixed grid."""
     selection = PairSelection(
         [
             ObservedField("A", "galaxy", "shared"),
@@ -37,6 +38,26 @@ def test_plain_providers_join_contracts_and_fixed_grid():
     binding = ParameterBinding(registry, ["x", "y"], {"x": "global", "y": "global"})
 
     def power(theta, z, k, mu, pairs):
+        """Evaluate the synthetic spectrum used by the enclosing regression test.
+
+        Parameters
+        ----------
+        theta : ndarray of shape (n_parameters,)
+            Local model parameters in the provider binding order.
+        z : float or ndarray
+            Dimensionless redshift.
+        k : ndarray of shape (n_nodes,)
+            Comoving wavenumbers in h/Mpc.
+        mu : ndarray of shape (n_nodes,)
+            Dimensionless line-of-sight direction cosines.
+        pairs : ndarray of int, shape (n_pairs, 2)
+            Observed-field indices defining the requested spectra.
+
+        Returns
+        -------
+        power : nested list with shape (n_nodes, n_pairs)
+            Synthetic intrinsic power in (Mpc/h)^3 before response and noise.
+        """
         return [
             [
                 (2 * theta[0] + 3 * theta[1]) * (kk + mm + z) * (1 if i == j else -1)
@@ -46,6 +67,27 @@ def test_plain_providers_join_contracts_and_fixed_grid():
         ]
 
     def derivative(theta, z, k, mu, pairs):
+        """Evaluate analytic local-parameter derivatives of the synthetic spectrum.
+
+        Parameters
+        ----------
+        theta : ndarray of shape (n_parameters,)
+            Local model parameters in the provider binding order.
+        z : float or ndarray
+            Dimensionless redshift.
+        k : ndarray of shape (n_nodes,)
+            Comoving wavenumbers in h/Mpc.
+        mu : ndarray of shape (n_nodes,)
+            Dimensionless line-of-sight direction cosines.
+        pairs : ndarray of int, shape (n_pairs, 2)
+            Observed-field indices defining the requested spectra.
+
+        Returns
+        -------
+        jacobian : nested list with shape (n_nodes, n_pairs, n_parameters)
+            Derivatives of synthetic intrinsic power with respect to local
+            parameters; units are power divided by parameter units.
+        """
         return [
             [
                 [(kk + mm + z) * factor * (1 if i == j else -1) for factor in (2, 3)]
@@ -55,6 +97,22 @@ def test_plain_providers_join_contracts_and_fixed_grid():
         ]
 
     def one_dimensional(theta, z, velocity):
+        """Evaluate an independent synthetic one-dimensional forest spectrum.
+
+        Parameters
+        ----------
+        theta : ndarray of shape (n_parameters,)
+            Local model parameters in the provider binding order.
+        z : float or ndarray
+            Dimensionless redshift.
+        velocity : array_like of shape (n_nodes,)
+            Line-of-sight velocity wavenumbers in s/km.
+
+        Returns
+        -------
+        power : nested list with shape (n_nodes,)
+            Intrinsic one-dimensional power in km/s.
+        """
         return [theta[0] + z + v for v in velocity]
 
     p3d: P3D = power
@@ -103,6 +161,14 @@ def test_plain_providers_join_contracts_and_fixed_grid():
     ],
 )
 def test_p3d_invalid(bad):
+    """Check p3d invalid.
+
+    Parameters
+    ----------
+    bad : int or float or ndarray or list
+        Invalid input exercising the specified rejection path, supplied by
+        pytest parametrization.
+    """
     with pytest.raises(ValueError):
         validate_p3d(bad, 2, 3)
 
@@ -112,6 +178,16 @@ def test_p3d_invalid(bad):
     [(validate_p1d, (5,)), (validate_p3d, (5, 3)), (validate_p3d_jacobian, (5, 3, 2))],
 )
 def test_all_output_types_shapes_and_normalization(validator, shape):
+    """Check all output types shapes and normalization.
+
+    Parameters
+    ----------
+    validator : callable
+        Output-validation callable, supplied by pytest parametrization.
+    shape : tuple
+        Expected or deliberately invalid array shape, supplied by pytest
+        parametrization.
+    """
     raw = np.full(shape, -2, dtype=np.float32, order="F")
     out = validator(raw, *shape)
     raw.flat[0] = 9
@@ -134,6 +210,7 @@ def test_all_output_types_shapes_and_normalization(validator, shape):
 
 
 def test_empty_jacobian_and_invalid_dimensions():
+    """Check empty jacobian and invalid dimensions."""
     assert validate_p3d_jacobian(np.empty((2, 3, 0)), 2, 3, 0).shape == (2, 3, 0)
     for dimension in (True, 1.5, 0, -1):
         with pytest.raises(ValueError):

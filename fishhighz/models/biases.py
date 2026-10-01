@@ -16,6 +16,23 @@ OPTIONS = ("lya", "qso", "elgqso", "lbg", "lae")
 
 
 def _z_array(redshift):
+    """Validate finite real redshifts without changing their shape.
+
+    Parameters
+    ----------
+    redshift : float or array_like
+        Dimensionless evaluation redshift; scalar or arbitrary array shape.
+
+    Returns
+    -------
+    redshifts : ndarray
+        Float64 redshifts with the input shape.
+
+    Raises
+    ------
+    ValueError
+        If any redshift is nonfinite or not real numeric data.
+    """
     array = np.asarray(redshift)
     if array.dtype.kind not in "iuf" or not np.all(np.isfinite(array)):
         raise ValueError("redshift must contain finite real values")
@@ -23,6 +40,20 @@ def _z_array(redshift):
 
 
 def _scalar_or_array(value, input_value):
+    """Preserve the scalar-versus-array convention of an evaluation input.
+
+    Parameters
+    ----------
+    value : array_like
+        Numeric result, retaining its physical units.
+    input_value : array_like
+        Original query used to decide whether the result is scalar.
+
+    Returns
+    -------
+    result : float or ndarray
+        Python float for scalar input, otherwise a float64 array.
+    """
     array = np.asarray(value, dtype=np.float64)
     return float(array) if np.asarray(input_value).ndim == 0 else array
 
@@ -35,25 +66,59 @@ class LinearTabulatedBias:
     values: np.ndarray
 
     def __post_init__(self):
-        z = np.asarray(self.redshifts, dtype=np.float64)
+        """Validate and freeze tabulated redshifts and density biases.
+
+        Returns
+        -------
+        None
+            Store immutable float64 copies of both one-dimensional arrays.
+
+        Raises
+        ------
+        ValueError
+            If arrays differ in shape, contain nonfinite entries, have fewer than
+            two nodes, or redshifts are not strictly increasing.
+        """
+        redshift_grid = np.asarray(self.redshifts, dtype=np.float64)
         values = np.asarray(self.values, dtype=np.float64)
-        if z.ndim != 1 or values.shape != z.shape or len(z) < 2:
+        if (
+            redshift_grid.ndim != 1
+            or values.shape != redshift_grid.shape
+            or len(redshift_grid) < 2
+        ):
             raise ValueError(
                 "tabulated bias requires matching 1D arrays with >=2 points"
             )
-        if not np.all(np.isfinite(z)) or not np.all(np.isfinite(values)):
+        if not np.all(np.isfinite(redshift_grid)) or not np.all(np.isfinite(values)):
             raise ValueError("tabulated bias values must be finite")
-        if np.any(np.diff(z) <= 0):
+        if np.any(np.diff(redshift_grid) <= 0):
             raise ValueError("tabulated bias redshifts must be strictly increasing")
         # Keep source arrays owned and read-only; no sorting or duplicate merging.
         object.__setattr__(
-            self, "redshifts", np.frombuffer(z.tobytes(), dtype=np.float64)
+            self, "redshifts", np.frombuffer(redshift_grid.tobytes(), dtype=np.float64)
         )
         object.__setattr__(
             self, "values", np.frombuffer(values.tobytes(), dtype=np.float64)
         )
 
     def __call__(self, redshift):
+        """Interpolate density bias and extrapolate using the endpoint slopes.
+
+        Parameters
+        ----------
+        redshift : float or array_like
+            Dimensionless evaluation redshift; scalar or arbitrary array shape.
+
+        Returns
+        -------
+        bias : float or ndarray
+            Dimensionless bias, preserving scalar input or the redshift array shape.
+
+        Raises
+        ------
+        ValueError
+            If query redshifts are not finite real values.
+        """
         query = _z_array(redshift)
         flat = query.reshape(-1)
         result = np.interp(flat, self.redshifts, self.values)
@@ -63,22 +128,64 @@ class LinearTabulatedBias:
         right_slope = (self.values[-1] - self.values[-2]) / (
             self.redshifts[-1] - self.redshifts[-2]
         )
-        left = flat < self.redshifts[0]
-        right = flat > self.redshifts[-1]
-        result[left] = self.values[0] + left_slope * (flat[left] - self.redshifts[0])
-        result[right] = self.values[-1] + right_slope * (
-            flat[right] - self.redshifts[-1]
+        left_mask = flat < self.redshifts[0]
+        right_mask = flat > self.redshifts[-1]
+        result[left_mask] = self.values[0] + left_slope * (
+            flat[left_mask] - self.redshifts[0]
+        )
+        result[right_mask] = self.values[-1] + right_slope * (
+            flat[right_mask] - self.redshifts[-1]
         )
         result = result.reshape(query.shape)
         return _scalar_or_array(result, redshift)
 
 
 def linear_tabulated_bias(redshifts, values):
-    """Return a callable reproducing lyaforecast's linear bias interpolation."""
+    """Prepare linear density-bias interpolation with endpoint extrapolation.
+
+    Parameters
+    ----------
+    redshifts : array_like of shape (n_redshift,)
+        Increasing finite redshift nodes, with at least two entries.
+    values : array_like of shape (n_redshift,)
+        Dimensionless density biases at the corresponding redshifts.
+
+    Returns
+    -------
+    bias : LinearTabulatedBias
+        Callable preserving scalar or array query shape.
+
+    Raises
+    ------
+    ValueError
+        If the table does not contain matching finite arrays on increasing
+        nodes.
+    """
     return LinearTabulatedBias(redshifts, values)
 
 
 def _tracer_parameters(tracer):
+    """Select the reference bias and power-law redshift evolution.
+
+    Parameters
+    ----------
+    tracer : {'lya', 'qso', 'elgqso', 'lbg', 'lae'}
+        Physical tracer whose bias prescription is evaluated.
+
+    Returns
+    -------
+    exponent : float
+        Dimensionless exponent of (1+z)/(1+z_ref).
+    bias_reference : float
+        Dimensionless density bias at the reference redshift.
+    redshift_reference : float
+        Dimensionless reference redshift.
+
+    Raises
+    ------
+    ValueError
+        If the tracer is unknown or not a string.
+    """
     if not isinstance(tracer, str):
         raise ValueError(f"invalid biasing: {tracer!r}, select from: {OPTIONS}")
     if tracer == "lya":
@@ -93,23 +200,72 @@ def _tracer_parameters(tracer):
 
 
 def analytic_density_bias(redshift, tracer):
-    """Return the established analytic linear density bias ``b(z)``."""
-    z = _z_array(redshift)
-    alpha, bias_zref, zref = _tracer_parameters(tracer)
-    result = bias_zref * ((1 + z) / (1 + zref)) ** alpha
+    """Evaluate the adopted power-law density-bias evolution.
+
+    Parameters
+    ----------
+    redshift : float or array_like
+        Dimensionless evaluation redshift; scalar or arbitrary array shape.
+    tracer : {'lya', 'qso', 'elgqso', 'lbg', 'lae'}
+        Physical tracer whose bias prescription is evaluated.
+
+    Returns
+    -------
+    bias : float or ndarray
+        Dimensionless bias, preserving scalar input or the redshift array shape.
+
+    Raises
+    ------
+    ValueError
+        If the tracer or redshift input is invalid.
+
+    Notes
+    -----
+    Constants and exponents follow the established lyaforecast prescription.
+    """
+    redshift_grid = _z_array(redshift)
+    evolution_exponent, reference_bias, reference_redshift = _tracer_parameters(tracer)
+    result = (
+        reference_bias
+        * ((1 + redshift_grid) / (1 + reference_redshift)) ** evolution_exponent
+    )
     return _scalar_or_array(result, redshift)
 
 
 def analytic_beta_rsd(redshift, tracer, growth_rate=None):
-    """Return the established analytic Kaiser ``beta(z)`` prescription.
+    """Evaluate the adopted Kaiser redshift-space distortion parameter.
 
-    Ly-alpha uses the fixed ``1.45`` normalization.  Other tracers use the
-    supplied growth rate divided by their analytic density bias, as in
-    lyaforecast's ``AnalyticBias`` implementation.
+    Parameters
+    ----------
+    redshift : float or array_like
+        Dimensionless evaluation redshift; scalar or arbitrary array shape.
+    tracer : {'lya', 'qso', 'elgqso', 'lbg', 'lae'}
+        Physical tracer whose bias prescription is evaluated.
+    growth_rate : float, array_like, callable, or CAMBBackground, optional
+        Dimensionless f(z), supplied directly, through a callable, or through
+        exact prepared redshift lookup. Default None; required for non-Ly-alpha
+        tracers.
+
+    Returns
+    -------
+    beta : float or ndarray
+        Dimensionless beta with the redshift input shape, or a float for scalar
+        input.
+
+    Raises
+    ------
+    ValueError
+        If growth is absent for a non-Ly-alpha tracer, has incompatible shape,
+        or gives nonfinite beta.
+
+    Notes
+    -----
+    Ly-alpha uses the fixed normalization 1.45. Other tracers use f(z)/b(z).
+    Prepared CAMB growth values require an exact requested redshift.
     """
-    z = _z_array(redshift)
+    redshift_grid = _z_array(redshift)
     if tracer == "lya":
-        result = 1.45 * ((1 + z) / (1 + 2.33)) ** 0.0
+        result = 1.45 * ((1 + redshift_grid) / (1 + 2.33)) ** 0.0
     else:
         if growth_rate is None:
             raise ValueError("growth_rate is required for non-lya beta evolution")
@@ -118,13 +274,16 @@ def analytic_beta_rsd(redshift, tracer, growth_rate=None):
         elif hasattr(growth_rate, "growth_rate_at"):
             # Exact-redshift CAMB backgrounds intentionally reject interpolation.
             growth = np.asarray(
-                [growth_rate.growth_rate_at(value) for value in z.reshape(-1)]
+                [
+                    growth_rate.growth_rate_at(value)
+                    for value in redshift_grid.reshape(-1)
+                ]
             )
-            growth = growth.reshape(z.shape)
+            growth = growth.reshape(redshift_grid.shape)
         else:
             growth = growth_rate
         growth = np.asarray(growth, dtype=np.float64)
-        if growth.shape not in ((), z.shape):
+        if growth.shape not in ((), redshift_grid.shape):
             raise ValueError(
                 "growth_rate must be scalar, callable, or match redshift shape"
             )
@@ -151,6 +310,26 @@ class AnalyticBias:
     _density_bias_functions: dict = field(default_factory=dict, init=False, repr=False)
 
     def set_density_bias_func(self, tracer, bias_func):
+        """Register a density-bias callable for one physical tracer.
+
+        Parameters
+        ----------
+        tracer : {'lya', 'qso', 'elgqso', 'lbg', 'lae'}
+            Physical tracer whose bias prescription is evaluated.
+        bias_func : callable
+            Function of scalar or array redshift returning dimensionless density
+            bias.
+
+        Returns
+        -------
+        None
+            Replace the stored callable for this tracer.
+
+        Raises
+        ------
+        ValueError
+            If the tracer is unknown or the supplied object is not callable.
+        """
         if tracer not in OPTIONS:
             raise ValueError(f"tracer name must be in {OPTIONS}")
         if not callable(bias_func):
@@ -158,6 +337,20 @@ class AnalyticBias:
         self._density_bias_functions[tracer] = bias_func
 
     def density_bias(self, redshift, tracer):
+        """Evaluate a registered density-bias function or the analytic prescription.
+
+        Parameters
+        ----------
+        redshift : float or array_like
+            Dimensionless evaluation redshift; scalar or arbitrary array shape.
+        tracer : {'lya', 'qso', 'elgqso', 'lbg', 'lae'}
+            Physical tracer whose bias prescription is evaluated.
+
+        Returns
+        -------
+        bias : float or ndarray
+            Dimensionless bias, preserving scalar input or the redshift array shape.
+        """
         function = self._density_bias_functions.get(tracer)
         return (
             function(redshift)
@@ -166,6 +359,31 @@ class AnalyticBias:
         )
 
     def beta_rsd(self, redshift, tracer):
+        """Evaluate beta using the stored growth rate and selected density bias.
+
+        Parameters
+        ----------
+        redshift : float or array_like
+            Dimensionless evaluation redshift; scalar or arbitrary array shape.
+        tracer : {'lya', 'qso', 'elgqso', 'lbg', 'lae'}
+            Physical tracer whose bias prescription is evaluated.
+
+        Returns
+        -------
+        beta : float or ndarray
+            Dimensionless beta with the redshift input shape, or a float for scalar
+            input.
+
+        Raises
+        ------
+        ValueError
+            If the tracer/redshift is invalid or required growth is absent.
+
+        Notes
+        -----
+        Ly-alpha retains beta=1.45; other tracers use the registered density bias
+        when present and the stored f(z).
+        """
         if tracer == "lya":
             return analytic_beta_rsd(redshift, tracer)
         function = self._density_bias_functions.get(tracer)
@@ -192,6 +410,35 @@ class AnalyticBias:
     _get_beta_rsd = beta_rsd
 
     def compute_bias(self, redshift, k_hmpc, mu, corr, linear=True):
+        """Multiply the two tracer Kaiser factors for a named correlation.
+
+        Parameters
+        ----------
+        redshift : float or array_like
+            Dimensionless evaluation redshift; scalar or arbitrary array shape.
+        k_hmpc : array_like
+            Wavenumbers in h/Mpc; accepted for compatibility and unused.
+        mu : float or array_like
+            Dimensionless direction cosine, broadcast against the redshift-dependent
+            biases.
+        corr : str
+            Two tracer names joined by an underscore; names beginning with lya use
+            the Ly-alpha prescription.
+        linear : bool, default=True
+            Compatibility argument; this method always uses linear Kaiser factors.
+
+        Returns
+        -------
+        factor : float or ndarray
+            Dimensionless pair factor b_i*(1+beta_i*mu**2)*b_j*(1+beta_j*mu**2),
+            with the broadcast input shape.
+
+        Raises
+        ------
+        ValueError
+            If corr does not identify two tracers or required bias inputs are
+            invalid.
+        """
         del k_hmpc, linear
         tracers = corr.split("_")
         if len(tracers) != 2:

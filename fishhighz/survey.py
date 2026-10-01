@@ -14,6 +14,23 @@ from .models.external import BoundParameters, PreparedP3D, _state
 def freeze(value):
     """Own input snapshots without casting ahead of scientific validation.
 
+    Parameters
+    ----------
+    value : object
+        Arrays, mappings, sequences or plain scalar metadata.
+
+    Returns
+    -------
+    snapshot : object
+        Recursively immutable snapshot; array shapes and dtypes are preserved.
+
+    Raises
+    ------
+    ValueError
+        If object arrays or unsupported metadata types are supplied.
+
+    Notes
+    -----
     Non-object array dtypes (including metadata indices/Booleans) are preserved.
     Object arrays are rejected: their elements cannot be frozen as byte-backed
     values. Scientific arrays become float64 only at their existing validator.
@@ -54,20 +71,38 @@ class ForestInput:
     provenance: object = None
 
     def __post_init__(self):
+        """Validate and freeze independent P1D and weighting inputs.
+
+        Returns
+        -------
+        None
+            No value is returned.
+
+        Raises
+        ------
+        ValueError
+            If the P1D binding, weight mapping or auxiliary coordinates are
+            inconsistent.
+
+        Notes
+        -----
+        Replaces parameter arrays and metadata with immutable owned snapshots.
+        """
         if not callable(self.p1d_model) or not isinstance(
             self.p1d_parameters, BoundParameters
         ):
             raise ValueError("forest requires independent P1D callable and binding")
-        theta, _ = _state(self.p1d_parameters.registry, self.theta_p1d, 0)
-        object.__setattr__(self, "theta_p1d", _immutable(theta))
+
+        theta_p1d, _ = _state(self.p1d_parameters.registry, self.theta_p1d, 0)
+        object.__setattr__(self, "theta_p1d", _immutable(theta_p1d))
         object.__setattr__(self, "weight_options", freeze(self.weight_options))
         object.__setattr__(self, "provenance", freeze(self.provenance))
         if not hasattr(self.weight_options, "keys"):
             raise ValueError("weight_options must be a mapping")
         if self.auxiliary_coordinates is not None:
-            coords = tuple(self.auxiliary_coordinates)
+            auxiliary_coordinates = tuple(self.auxiliary_coordinates)
             if (
-                len(coords) != 2
+                len(auxiliary_coordinates) != 2
                 or self.weight_options.get("method")
                 not in ("legacy", "early_lyaforecast", "mcdonald")
                 or any(
@@ -76,7 +111,7 @@ class ForestInput:
                 )
             ):
                 raise ValueError("auxiliary coordinates conflict with weight settings")
-            object.__setattr__(self, "auxiliary_coordinates", coords)
+            object.__setattr__(self, "auxiliary_coordinates", auxiliary_coordinates)
 
 
 @dataclass(frozen=True)
@@ -98,6 +133,22 @@ class BinSpec:
     full_noise: np.ndarray | None = None
 
     def __post_init__(self):
+        """Validate bin geometry and own response and noise metadata.
+
+        Returns
+        -------
+        None
+            No value is returned.
+
+        Raises
+        ------
+        ValueError
+            If identifiers, prepared inputs or fiducial Hubble conventions disagree.
+
+        Notes
+        -----
+        Converts supplied mappings to read-only views and copies full-noise arrays.
+        """
         label(self.id, "bin ID")
         if (
             not isinstance(self.geometry, BinGeometry)
@@ -149,7 +200,22 @@ class PreparedBin:
 
 
 def snapshot_p3d(prepared):
-    """Own structural arrays while retaining exact registry and callable identities."""
+    """Own structural arrays while retaining registry and callable identities.
+
+    Parameters
+    ----------
+    prepared : PreparedP3D
+        Prepared spectrum routing and parameter bindings.
+
+    Returns
+    -------
+    snapshot : PreparedP3D
+        Shallow structural copy with immutable pair, column and binding arrays.
+
+    Notes
+    -----
+    External model callables and the parameter registry retain their identities.
+    """
     from copy import copy
 
     result = copy(prepared)
@@ -164,26 +230,28 @@ def snapshot_p3d(prepared):
     object.__setattr__(result, "selection", selection)
     routes = []
     for route in prepared.routes:
-        new = copy(route)
+        route_copy = copy(route)
         provider = copy(route.provider)
         parameters = copy(provider.parameters)
         binding = copy(parameters.binding)
-        index = binding.local_to_global
+        parameter_indices = binding.local_to_global
         object.__setattr__(
             binding,
             "local_to_global",
-            np.frombuffer(index.tobytes(), dtype=index.dtype).reshape(index.shape),
+            np.frombuffer(
+                parameter_indices.tobytes(), dtype=parameter_indices.dtype
+            ).reshape(parameter_indices.shape),
         )
         object.__setattr__(parameters, "binding", binding)
         object.__setattr__(provider, "parameters", parameters)
-        object.__setattr__(new, "provider", provider)
+        object.__setattr__(route_copy, "provider", provider)
         for name in ("pairs", "columns"):
             value = getattr(route, name)
             object.__setattr__(
-                new,
+                route_copy,
                 name,
                 np.frombuffer(value.tobytes(), dtype=value.dtype).reshape(value.shape),
             )
-        routes.append(new)
+        routes.append(route_copy)
     object.__setattr__(result, "routes", tuple(routes))
     return result

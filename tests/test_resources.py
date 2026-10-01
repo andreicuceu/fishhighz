@@ -154,6 +154,18 @@ EXPECTED = {
 
 
 def _inventory(resource):
+    """Collect relative filenames below one bounded package resource.
+
+    Parameters
+    ----------
+    resource : importlib.resources.abc.Traversable
+        Resource directory whose relative file inventory is collected.
+
+    Returns
+    -------
+    paths : list of str
+        Relative file paths, including nested resource directories.
+    """
     result = []
     for child in resource.iterdir():
         relative = child.name
@@ -165,6 +177,7 @@ def _inventory(resource):
 
 
 def test_exact_bundled_inventory_and_checksums():
+    """Check exact bundled inventory and checksums."""
     root = resources.files("fishhighz").joinpath("data")
     assert set(_inventory(root)) == set(EXPECTED)
     for name, (size, digest) in EXPECTED.items():
@@ -174,6 +187,7 @@ def test_exact_bundled_inventory_and_checksums():
 
 
 def test_bundled_resource_path_works_in_installed_style_context():
+    """Check bundled resource path works in installed style context."""
     with bundled_path("camb_configs/Planck18.ini") as path:
         assert path.is_file()
         assert (
@@ -183,6 +197,7 @@ def test_bundled_resource_path_works_in_installed_style_context():
 
 
 def test_bundled_snr_directory_materializes_each_file_with_live_context():
+    """Check bundled snr directory materializes each file with live context."""
     with bundled_paths("DESI-2-QSO") as paths:
         assert len(paths) == 12
         assert all(path.is_file() and path.stat().st_size > 0 for path in paths)
@@ -192,6 +207,17 @@ def test_bundled_snr_directory_materializes_each_file_with_live_context():
 def test_bundled_snr_directory_materializes_zip_traversable_files(
     tmp_path, monkeypatch
 ):
+    """Check bundled snr directory materializes zip traversable files.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that restores patched callables, attributes, and environment
+        variables after the test.
+    """
     names = (
         "DESI-2-QSO/snr-r19.25-t4000-nexp4.dat",
         "DESI-2-QSO/snr-r19.75-t4000-nexp4.dat",
@@ -216,6 +242,17 @@ def test_bundled_snr_directory_materializes_zip_traversable_files(
 
 
 def test_ini_relative_paths_do_not_depend_on_cwd(tmp_path, monkeypatch):
+    """Check ini relative paths do not depend on cwd.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that restores patched callables, attributes, and environment
+        variables after the test.
+    """
     ini = tmp_path / "survey" / "run.ini"
     ini.parent.mkdir()
     other = tmp_path / "other"
@@ -228,6 +265,7 @@ def test_ini_relative_paths_do_not_depend_on_cwd(tmp_path, monkeypatch):
 
 
 def test_distribution_declarations_include_package_data():
+    """Check distribution declarations include package data."""
     root = Path(__file__).parents[1]
     assert 'fishhighz = ["data/**/*"]' in (root / "pyproject.toml").read_text()
     assert "recursive-include fishhighz/data *" in (root / "MANIFEST.in").read_text()

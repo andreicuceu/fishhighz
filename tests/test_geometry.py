@@ -24,6 +24,19 @@ from fishhighz.grids import IntegrationGrid, gauss_legendre_grid
 
 
 def geometry(**kwargs):
+    """Prepare a synthetic common-volume redshift-bin geometry.
+
+    Parameters
+    ----------
+    **kwargs : dict
+        Geometry overrides for evaluation redshift, area in deg^2, fiducial h, redshift quadrature, and expansion/distance callables.
+
+    Returns
+    -------
+    geometry : BinGeometry
+        Distances in Mpc/h, volume in (Mpc/h)^3, and velocity conversion in km/s
+        per Mpc/h.
+    """
     args = dict(
         z_eval=2.4,
         area_deg2=1000,
@@ -39,51 +52,105 @@ def geometry(**kwargs):
 @pytest.mark.parametrize("z", [2.0, 2.4, 3.0])
 @pytest.mark.parametrize("h", [0.5, 0.7, 1.0])
 def test_geometry_units_and_shell(z, h):
-    g = geometry(z_eval=z, h_fid=h)
+    """Check geometry units and shell.
+
+    Parameters
+    ----------
+    z : float
+        Dimensionless redshift test input, supplied by pytest parametrization.
+    h : float
+        Hubble parameter or finite-difference scale specified by the case,
+        supplied by pytest parametrization.
+    """
+    bin_geometry = geometry(z_eval=z, h_fid=h)
     omega = 1000 * (np.pi / 180) ** 2
-    assert_allclose(g.volume, omega * h**3 * (C / 200) ** 3 * (27 - 8) / 3, rtol=5e-15)
-    assert_allclose(g.a_v, 200 / ((1 + z) * h), rtol=2e-15)
-    assert_allclose(g.d_deg, h * C * z / 200 * np.pi / 180, rtol=2e-15)
-    assert g.speed_light_kms == C
-    k, p = np.array([0.0, 0.1, 0.3]), np.array([2.0, 5.0, 8.0])
-    q = wavenumber_comoving_to_velocity(k, a_v=g.a_v)
-    pc = p1d_velocity_to_comoving(p, a_v=g.a_v)
-    assert_allclose(k * pc, q * p, rtol=2e-15)
-    assert_allclose(wavenumber_velocity_to_comoving(q, a_v=g.a_v), k)
-    assert_allclose(p1d_comoving_to_velocity(pc, a_v=g.a_v), p)
-    width = width_velocity_to_comoving(p, a_v=g.a_v)
-    assert_allclose(width_comoving_to_velocity(width, a_v=g.a_v), p)
+    assert_allclose(
+        bin_geometry.volume, omega * h**3 * (C / 200) ** 3 * (27 - 8) / 3, rtol=5e-15
+    )
+    assert_allclose(bin_geometry.a_v, 200 / ((1 + z) * h), rtol=2e-15)
+    assert_allclose(bin_geometry.d_deg, h * C * z / 200 * np.pi / 180, rtol=2e-15)
+    assert bin_geometry.speed_light_kms == C
+    k_grid, velocity_p1d = np.array([0.0, 0.1, 0.3]), np.array([2.0, 5.0, 8.0])
+    velocity_k = wavenumber_comoving_to_velocity(k_grid, a_v=bin_geometry.a_v)
+    comoving_p1d = p1d_velocity_to_comoving(velocity_p1d, a_v=bin_geometry.a_v)
+    assert_allclose(k_grid * comoving_p1d, velocity_k * velocity_p1d, rtol=2e-15)
+    assert_allclose(
+        wavenumber_velocity_to_comoving(velocity_k, a_v=bin_geometry.a_v), k_grid
+    )
+    assert_allclose(
+        p1d_comoving_to_velocity(comoving_p1d, a_v=bin_geometry.a_v), velocity_p1d
+    )
+    width = width_velocity_to_comoving(velocity_p1d, a_v=bin_geometry.a_v)
+    assert_allclose(
+        width_comoving_to_velocity(width, a_v=bin_geometry.a_v), velocity_p1d
+    )
 
 
 def test_h_scaling_and_modes():
-    a, b = geometry(h_fid=0.4), geometry(h_fid=0.8)
+    """Check h scaling and modes."""
+    low_h_geometry, high_h_geometry = geometry(h_fid=0.4), geometry(h_fid=0.8)
     assert_allclose(
-        [b.volume / a.volume, b.d_deg / a.d_deg, b.a_v / a.a_v], [8, 2, 0.5]
+        [
+            high_h_geometry.volume / low_h_geometry.volume,
+            high_h_geometry.d_deg / low_h_geometry.d_deg,
+            high_h_geometry.a_v / low_h_geometry.a_v,
+        ],
+        [8, 2, 0.5],
     )
     grid = gauss_legendre_grid([0.01, 0.1, 0.3], k_order=3, mu_order=3, h_fid=0.4)
     original = grid.q_mode.copy()
     assert_allclose(
-        mode_counts(a, grid).sum(),
-        a.volume * (0.3**3 - 0.01**3) / (6 * np.pi**2),
+        mode_counts(low_h_geometry, grid).sum(),
+        low_h_geometry.volume * (0.3**3 - 0.01**3) / (6 * np.pi**2),
         rtol=3e-15,
     )
     custom = IntegrationGrid(
         grid.k, grid.w_k, grid.mu, grid.w_mu, k_min=0.01, k_max=0.3, h_fid=0.4
     )
-    assert_allclose(mode_counts(a, custom), mode_counts(a, grid), rtol=0, atol=0)
+    assert_allclose(
+        mode_counts(low_h_geometry, custom),
+        mode_counts(low_h_geometry, grid),
+        rtol=0,
+        atol=0,
+    )
     assert_allclose(grid.q_mode, original, rtol=0, atol=0)
     with pytest.raises(ValueError, match="h_fid"):
-        mode_counts(b, grid)
+        mode_counts(high_h_geometry, grid)
 
 
 def test_eds_convergence():
-    h0 = 70
+    """Check eds convergence."""
+    hubble_0 = 70
 
     def hubble(z):
-        return h0 * (1 + z) ** 1.5
+        """Evaluate the synthetic expansion law and record ownership where required.
+
+        Parameters
+        ----------
+        z : float or ndarray
+            Dimensionless redshift.
+
+        Returns
+        -------
+        hubble : float or ndarray
+            Hubble parameter in km/s/Mpc, matching the input shape.
+        """
+        return hubble_0 * (1 + z) ** 1.5
 
     def distance(z):
-        return 2 * C / h0 * (1 - 1 / np.sqrt(1 + z))
+        """Evaluate the Einstein-de Sitter transverse distance.
+
+        Parameters
+        ----------
+        z : float or ndarray
+            Dimensionless redshift.
+
+        Returns
+        -------
+        distance : float or ndarray
+            Transverse comoving distance in Mpc, matching the input shape.
+        """
+        return 2 * C / hubble_0 * (1 - 1 / np.sqrt(1 + z))
 
     exact = (
         1000 * (np.pi / 180) ** 2 * 0.7**3 * (distance(3) ** 3 - distance(2) ** 3) / 3
@@ -102,10 +169,27 @@ def test_eds_convergence():
 
 
 def test_preparation_ownership():
+    """Check preparation ownership."""
     calls, outputs = [], []
     state = [200.0]
 
     def hubble(z):
+        """Evaluate the synthetic expansion law and record ownership where required.
+
+        Parameters
+        ----------
+        z : float or ndarray
+            Dimensionless redshift.
+
+        Returns
+        -------
+        hubble : float or ndarray
+            Hubble parameter in km/s/Mpc, matching the input shape.
+
+        Notes
+        -----
+        Appends to the enclosing test call log so provider dispatch can be checked.
+        """
         assert z.ndim == 1 and not z.flags.writeable
         with pytest.raises(ValueError):
             z.flags.writeable = True
@@ -114,21 +198,26 @@ def test_preparation_ownership():
         outputs.append(result)
         return result
 
-    g = geometry(hubble=hubble)
+    bin_geometry = geometry(hubble=hubble)
     assert [len(z) for z in calls] == [4, 1]
-    old = g.volume
+    old = bin_geometry.volume
     for output in outputs:
         output[:] = 9
     state[0] = 400
     grid = gauss_legendre_grid([0.1, 0.2], k_order=2, mu_order=2, h_fid=0.7)
-    mode_counts(g, grid)
-    assert g.volume == old and len(calls) == 2
-    assert np.all(g.hubble_nodes == 200)
-    for array in (g.z_nodes, g.w_z, g.hubble_nodes, g.transverse_distance_nodes):
+    mode_counts(bin_geometry, grid)
+    assert bin_geometry.volume == old and len(calls) == 2
+    assert np.all(bin_geometry.hubble_nodes == 200)
+    for array in (
+        bin_geometry.z_nodes,
+        bin_geometry.w_z,
+        bin_geometry.hubble_nodes,
+        bin_geometry.transverse_distance_nodes,
+    ):
         with pytest.raises(ValueError):
             array.flags.writeable = True
     with pytest.raises(FrozenInstanceError):
-        g.volume = 0
+        bin_geometry.volume = 0
 
 
 @pytest.mark.parametrize(
@@ -156,6 +245,14 @@ def test_preparation_ownership():
     ],
 )
 def test_geometry_invalid(kwargs):
+    """Check geometry invalid.
+
+    Parameters
+    ----------
+    kwargs : dict
+        Keyword arguments selecting the parametrized case, supplied by pytest
+        parametrization.
+    """
     with pytest.raises(ValueError):
         geometry(**kwargs)
 
@@ -164,6 +261,15 @@ def test_geometry_invalid(kwargs):
     "lo,hi", [(-1, 2), (2, 2), (3, 2), (2, np.nextafter(2.0, 3.0))]
 )
 def test_invalid_bin(lo, hi):
+    """Check invalid bin.
+
+    Parameters
+    ----------
+    lo : int
+        Lower test boundary, supplied by pytest parametrization.
+    hi : int or ndarray
+        Upper test boundary, supplied by pytest parametrization.
+    """
     with pytest.raises(ValueError):
         prepare_geometry(
             lo,
@@ -189,6 +295,13 @@ def test_invalid_bin(lo, hi):
     ],
 )
 def test_conversion_errors(convert):
+    """Check conversion errors.
+
+    Parameters
+    ----------
+    convert : callable
+        Unit-conversion callable, supplied by pytest parametrization.
+    """
     inverse = convert in (
         wavenumber_velocity_to_comoving,
         p1d_comoving_to_velocity,
@@ -206,6 +319,13 @@ def test_conversion_errors(convert):
 
 @pytest.mark.parametrize("curvature", [0.0, 0.15, -0.15])
 def test_astropy(curvature):
+    """Check astropy.
+
+    Parameters
+    ----------
+    curvature : float
+        Background-curvature case, supplied by pytest parametrization.
+    """
     astropy = pytest.importorskip("astropy.cosmology")
     u = pytest.importorskip("astropy.units")
     model = (
@@ -219,25 +339,28 @@ def test_astropy(curvature):
         )
         for n in (4, 8, 16)
     ]
-    g = values[-1]
-    assert g.h_fid != model.h
+    bin_geometry = values[-1]
+    assert bin_geometry.h_fid != model.h
     assert_allclose(
-        g.hubble_eval, model.H(2.4).to_value(u.km / u.s / u.Mpc), rtol=1e-15
+        bin_geometry.hubble_eval, model.H(2.4).to_value(u.km / u.s / u.Mpc), rtol=1e-15
     )
     assert_allclose(
-        g.transverse_distance_eval,
+        bin_geometry.transverse_distance_eval,
         model.comoving_transverse_distance(2.4).to_value(u.Mpc),
         rtol=1e-15,
     )
-    assert_allclose(g.hubble_nodes, model.H(g.z_nodes).to_value(u.km / u.s / u.Mpc))
     assert_allclose(
-        g.transverse_distance_nodes,
-        model.comoving_transverse_distance(g.z_nodes).to_value(u.Mpc),
+        bin_geometry.hubble_nodes,
+        model.H(bin_geometry.z_nodes).to_value(u.km / u.s / u.Mpc),
+    )
+    assert_allclose(
+        bin_geometry.transverse_distance_nodes,
+        model.comoving_transverse_distance(bin_geometry.z_nodes).to_value(u.Mpc),
     )
     exact = (
-        g.solid_angle
+        bin_geometry.solid_angle
         / (4 * np.pi)
-        * g.h_fid**3
+        * bin_geometry.h_fid**3
         * (model.comoving_volume(3) - model.comoving_volume(2)).to_value(u.Mpc**3)
     )
     errors = [abs(item.volume / exact - 1) for item in values]
@@ -251,7 +374,8 @@ def test_astropy(curvature):
 
 
 def test_zero_lower_edge_and_mode_representability():
-    g = prepare_geometry(
+    """Check zero lower edge and mode representability."""
+    bin_geometry = prepare_geometry(
         0,
         1,
         z_eval=1,
@@ -261,9 +385,13 @@ def test_zero_lower_edge_and_mode_representability():
         hubble=lambda z: np.full_like(z, 100),
         transverse_distance=lambda z: 299792.458 * z / 100,
     )
-    assert g.z_eval == g.z_max and np.all(g.z_nodes > 0)
+    assert bin_geometry.z_eval == bin_geometry.z_max and np.all(
+        bin_geometry.z_nodes > 0
+    )
     assert_allclose(
-        g.volume, 4 * np.pi * 0.7**3 * (299792.458 / 100) ** 3 / 3, rtol=3e-15
+        bin_geometry.volume,
+        4 * np.pi * 0.7**3 * (299792.458 / 100) ** 3 / 3,
+        rtol=3e-15,
     )
     enormous = geometry(transverse_distance=lambda z: np.full_like(z, 1e149))
     grid = gauss_legendre_grid([1e5, 2e5], k_order=2, mu_order=2, h_fid=0.7)

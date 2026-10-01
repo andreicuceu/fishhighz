@@ -30,34 +30,63 @@ class IntrinsicP3D:
     def __init__(
         self, provider, *, routes, n_fields, h_source, h_fid, k_domain, z_domain
     ):
+        """Bind an explicit intrinsic-power provider and unit conventions.
+
+        Parameters
+        ----------
+        provider : object
+            Object exposing compute_p3d_hmpc(z, k, mu, corr).
+        routes : mapping
+            Integer field-index pairs mapped to reference correlation labels.
+        n_fields : int
+            Positive number of observed fields.
+        h_source : float
+            Positive dimensionless reduced Hubble constant used by the source.
+        h_fid : float
+            Positive dimensionless fiducial reduced Hubble constant.
+        k_domain : array_like
+            Closed source wavenumber bounds in h_source/Mpc, shape (2,).
+        z_domain : array_like
+            Closed dimensionless redshift bounds, shape (2,).
+
+        Returns
+        -------
+        None
+            No value is returned.
+
+        Raises
+        ------
+        ValueError
+            If provider, routes, units or declared domains are invalid.
+        """
         if not callable(getattr(provider, "compute_p3d_hmpc", None)):
             raise ValueError("provider must expose compute_p3d_hmpc")
-        n = integer(n_fields, "n_fields", 1)
+        field_count = integer(n_fields, "n_fields", 1)
         prepared = {}
         for pair, name in routes.items():
             if len(pair) != 2 or not isinstance(name, str) or not name.strip():
                 raise ValueError("routes require integer pairs and nonempty labels")
             key = tuple(integer(x, "field index") for x in pair)
-            if max(key) >= n:
+            if max(key) >= field_count:
                 raise ValueError("route outside field bounds")
             prepared[key] = name
         if not prepared:
             raise ValueError("routes must not be empty")
         domains = []
         for domain, name, minimum in ((k_domain, "k", 0), (z_domain, "z", -1)):
-            a = real_array(domain, name)
+            domain_bounds = real_array(domain, name)
             if (
-                a.shape != (2,)
-                or a[0] <= minimum
-                or a[1] <= a[0]
-                or (name == "z" and a[0] < 0)
+                domain_bounds.shape != (2,)
+                or domain_bounds[0] <= minimum
+                or domain_bounds[1] <= domain_bounds[0]
+                or (name == "z" and domain_bounds[0] < 0)
             ):
                 raise ValueError("invalid closed domain")
-            domains.append(tuple(a))
+            domains.append(tuple(domain_bounds))
         for key, value in dict(
             provider=provider,
             routes=freeze(prepared),
-            n_fields=n,
+            n_fields=field_count,
             h_source=_positive(h_source, "h_source"),
             h_fid=_positive(h_fid, "h_fid"),
             k_domain=domains[0],
@@ -66,7 +95,36 @@ class IntrinsicP3D:
             object.__setattr__(self, key, value)
 
     def __call__(self, theta_local, z, k, mu, pairs):
-        """Validate all queries before any reference call; preserve pair order."""
+        """Evaluate intrinsic power after validating all requested coordinates.
+
+        Parameters
+        ----------
+        theta_local : array_like
+            Empty parameter vector, shape (0,).
+        z : float
+            Dimensionless evaluation redshift.
+        k : array_like
+            Paired observed wavenumbers in h_fid/Mpc, shape (n_node,).
+        mu : array_like
+            Paired line-of-sight cosines in [0, 1], shape (n_node,).
+        pairs : array_like
+            Integer observed-field pairs, shape (n_pair, 2).
+
+        Returns
+        -------
+        power : ndarray
+            Owned intrinsic power in (Mpc/h_fid)^3, shape (n_node, n_pair),
+            preserving pair order.
+
+        Raises
+        ------
+        ValueError
+            If parameters, coordinates, pair routes or output shapes are invalid.
+
+        Notes
+        -----
+        Converts k_source=k*h_fid/h_source and P_fid=P_source*(h_fid/h_source)^3. No response, noise or P1D is added.
+        """
         if real_array(theta_local, "theta_local").shape != (0,):
             raise ValueError("intrinsic bridge has zero local parameters")
         z = scalar(z, "z")
@@ -78,35 +136,39 @@ class IntrinsicP3D:
             or np.any((mu < 0) | (mu > 1))
         ):
             raise ValueError("require paired 1D k/mu with mu in [0,1]")
-        p = np.asarray(pairs, dtype=object)
-        if p.ndim != 2 or p.shape[1] != 2 or not len(p):
+        pair_array = np.asarray(pairs, dtype=object)
+        if pair_array.ndim != 2 or pair_array.shape[1] != 2 or not len(pair_array):
             raise ValueError("require nonempty integer pairs")
-        keys = [tuple(integer(v, "field index") for v in row) for row in p]
+        keys = [tuple(integer(v, "field index") for v in row) for row in pair_array]
         if any(max(key) >= self.n_fields or key not in self.routes for key in keys):
             raise ValueError("pair outside bounds or missing explicit route")
+
+        # Source and forecast h conventions rescale both k and power volume.
         try:
             with np.errstate(
                 over="raise", under="raise", invalid="raise", divide="raise"
             ):
-                ratio = np.float64(self.h_fid) / self.h_source
-                source = k * ratio
-                factor = ratio**3
+                hubble_ratio = np.float64(self.h_fid) / self.h_source
+                source_wavenumbers = k * hubble_ratio
+                power_conversion = hubble_ratio**3
         except FloatingPointError as error:
             raise ValueError("h conversion not representable") from error
         if not self.z_domain[0] <= z <= self.z_domain[1] or np.any(
-            (source < self.k_domain[0]) | (source > self.k_domain[1])
+            (source_wavenumbers < self.k_domain[0])
+            | (source_wavenumbers > self.k_domain[1])
         ):
             raise ValueError("query outside declared source k/z domain")
+
         columns = []
         for key in keys:
-            raw = real_array(
+            source_power = real_array(
                 self.provider.compute_p3d_hmpc(
-                    z, source.copy(), mu.copy(), self.routes[key]
+                    z, source_wavenumbers.copy(), mu.copy(), self.routes[key]
                 ),
                 "intrinsic output",
             )
-            if raw.shape != k.shape:
+            if source_power.shape != k.shape:
                 raise ValueError("intrinsic output must match paired nodes")
             with np.errstate(over="raise", under="raise", invalid="raise"):
-                columns.append(raw * factor)
+                columns.append(source_power * power_conversion)
         return np.array(np.column_stack(columns), copy=True)

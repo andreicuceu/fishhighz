@@ -21,6 +21,29 @@ SPEC.loader.exec_module(TOOL)
 
 
 def legacy_inputs(density, variance, *, length=2.0, pixel=1.0, signal=1.0, alias=1.0):
+    """Construct explicit raw inputs for the legacy cumulative recurrence.
+
+    Parameters
+    ----------
+    density : array_like of shape (n_magnitudes,)
+        Source density per deg^2, velocity interval in km/s, and magnitude.
+    variance : array_like of shape (n_magnitudes,)
+        Dimensionless pixel-noise variance for each magnitude sample.
+    length : float, optional
+        Forest length in km/s. Default is 2.0.
+    pixel : float, optional
+        Pixel width in km/s. Default is 1.0.
+    signal : float, optional
+        Auxiliary three-dimensional signal power in deg^2 km/s. Default is 1.0.
+    alias : float, optional
+        Auxiliary one-dimensional forest power in km/s. Default is 1.0.
+
+    Returns
+    -------
+    inputs : LegacyInputs
+        Magnitudes, source density, pixel variance, length, width, and auxiliary
+        spectra.
+    """
     density = np.asarray(density, dtype=np.float64)
     return TOOL.LegacyInputs(
         magnitudes=np.arange(len(density), dtype=np.float64),
@@ -36,6 +59,14 @@ def legacy_inputs(density, variance, *, length=2.0, pixel=1.0, signal=1.0, alias
 
 @pytest.mark.parametrize("d", [0.5, 1.0, 2.0])
 def test_one_cell_coefficients_do_not_follow_weight_amplitude(d):
+    """Check one cell coefficients do not follow weight amplitude.
+
+    Parameters
+    ----------
+    d : float
+        Parametrized derivative or density input, supplied by pytest
+        parametrization.
+    """
     length, pixel, signal, variance = 2.0, 1.0, 1.0, 1.0
     mass = d * pixel * variance / (length * signal)
     inputs = legacy_inputs(
@@ -59,6 +90,18 @@ def test_one_cell_coefficients_do_not_follow_weight_amplitude(d):
 )
 @pytest.mark.parametrize("count", [0, 3, 6])
 def test_vectorized_literal_order_matches_scalar_decimal(density, variance, count):
+    """Check vectorized literal order matches scalar decimal.
+
+    Parameters
+    ----------
+    density : list
+        Source-density test input, supplied by pytest parametrization.
+    variance : list
+        Pixel-noise variance test input, supplied by pytest parametrization.
+    count : int
+        Number of iterations, samples, or records selected by this case,
+        supplied by pytest parametrization.
+    """
     inputs = legacy_inputs(
         density, variance, length=5.0, pixel=0.7, signal=1.3, alias=2.1
     )
@@ -75,6 +118,7 @@ def test_vectorized_literal_order_matches_scalar_decimal(density, variance, coun
 
 
 def test_signed_cancellation_is_classified_as_a_singularity():
+    """Check signed cancellation is classified as a singularity."""
     inputs = legacy_inputs([1.0, -1.0], [1.0, 1.0])
     previous = np.geterr()
     with pytest.raises(
@@ -87,6 +131,7 @@ def test_signed_cancellation_is_classified_as_a_singularity():
 
 
 def test_coefficient_trigger_is_not_hidden_by_small_absolute_weights():
+    """Check coefficient trigger is not hidden by small absolute weights."""
     reference = {"a": 1.0, "p_pixel": 2.0, "weights": np.array([1e-200])}
     changed = {"a": 1.002, "p_pixel": 2.0, "weights": np.array([2e-200])}
     comparison = TOOL.coefficient_comparison(changed, reference)
@@ -96,6 +141,7 @@ def test_coefficient_trigger_is_not_hidden_by_small_absolute_weights():
 
 
 def test_scalar_fisher_normalization_and_analytic_inverse():
+    """Check scalar fisher normalization and analytic inverse."""
     jacobian = np.array([[1.0, 0.0], [0.0, 2.0], [1.0, 1.0]])
     covariance = np.array([2.0, 4.0, 5.0])
     fisher, errors = TOOL.scalar_fisher_oracle(jacobian, covariance)
@@ -109,6 +155,7 @@ def test_scalar_fisher_normalization_and_analytic_inverse():
 
 
 def test_null_fisher_direction_has_no_invented_error_bar():
+    """Check null fisher direction has no invented error bar."""
     summary = TOOL._rank_aware_summary(np.diag([4.0, 0.0]))
     assert summary["rank"] == 1
     assert summary["errors"][0] == pytest.approx(0.5)
@@ -117,6 +164,7 @@ def test_null_fisher_direction_has_no_invented_error_bar():
 
 
 def test_field_and_pair_permutations_resolve_columns_by_identity():
+    """Check field and pair permutations resolve columns by identity."""
     fields = ("qso", "lya(qso)", "lbg")
     selected = np.array([[0, 0], [1, 2], [1, 1], [0, 1]])
     required = np.array([[1, 2], [0, 0], [0, 1], [1, 1]])
@@ -128,6 +176,14 @@ def test_field_and_pair_permutations_resolve_columns_by_identity():
 
 
 def synthetic_source():
+    """Construct a self-consistent signed-density recurrence and projection fixture.
+
+    Returns
+    -------
+    source : SourceInputs
+        Legacy inputs, captured weights/noise, and independent reference Fisher
+        matrices.
+    """
     inputs = legacy_inputs(
         [0.2, -0.01, 0.7],
         [0.3, 1.1, 2.0],
@@ -180,6 +236,13 @@ def synthetic_source():
 
 @pytest.fixture(scope="module")
 def payload():
+    """Run and validate the bounded synthetic legacy-weight diagnostic.
+
+    Returns
+    -------
+    fixture : tuple
+        Source inputs, validated summary, and numerical evidence arrays.
+    """
     source = synthetic_source()
     result = TOOL.run_diagnostic(source)
     summary = TOOL._summary(source, result, "synthetic focused test")
@@ -194,6 +257,17 @@ def payload():
 
 @pytest.mark.parametrize("mutation", ["scalar", "density", "population", "pair"])
 def test_source_and_pair_binding_rejects_mutations(payload, mutation):
+    """Check source and pair binding rejects mutations.
+
+    Parameters
+    ----------
+    payload : tuple of dict
+        Synthetic source inputs, validated summary, and numerical evidence
+        arrays supplied by the payload fixture.
+    mutation : str
+        Modification applied to the otherwise valid fixture, supplied by pytest
+        parametrization.
+    """
     source, original_summary, original_arrays = payload
     summary = copy.deepcopy(original_summary)
     arrays = {name: value.copy() for name, value in original_arrays.items()}
@@ -214,6 +288,14 @@ def test_source_and_pair_binding_rejects_mutations(payload, mutation):
 
 
 def test_changed_count_with_unchanged_trajectory_is_rejected(payload):
+    """Check changed count with unchanged trajectory is rejected.
+
+    Parameters
+    ----------
+    payload : tuple of dict
+        Synthetic source inputs, validated summary, and numerical evidence
+        arrays supplied by the payload fixture.
+    """
     source, summary, original_arrays = payload
     arrays = {name: value.copy() for name, value in original_arrays.items()}
     arrays["state_counts"][-1] = 12
@@ -226,6 +308,7 @@ def test_changed_count_with_unchanged_trajectory_is_rejected(payload):
 
 
 def test_attempt_inventory_preserves_failures_caps_and_early_stop():
+    """Check attempt inventory preserves failures caps and early stop."""
     failure = [
         {"count": 0, "status": "completed"},
         {"count": 3, "status": "completed"},
@@ -245,11 +328,24 @@ def test_attempt_inventory_preserves_failures_caps_and_early_stop():
 
 
 def test_first_discrepancy_stops_later_counts_and_broad_calls():
+    """Check first discrepancy stops later counts and broad calls."""
     evaluated = []
     confirmed = []
     broad_calls = []
 
     def state(count):
+        """Return a synthetic recurrence checkpoint and record its iteration count.
+
+        Parameters
+        ----------
+        count : int
+            Number of cumulative weight updates.
+
+        Returns
+        -------
+        state : dict
+            Noise coefficients and magnitude-ordered weights for the checkpoint.
+        """
         evaluated.append(count)
         return {
             "a": 1.002 if count == 6 else 1.0,
@@ -258,6 +354,20 @@ def test_first_discrepancy_stops_later_counts_and_broad_calls():
         }
 
     def confirm(count, error):
+        """Record an arbitrary-precision confirmation request.
+
+        Parameters
+        ----------
+        count : int
+            Number of cumulative weight updates.
+        error : float
+            Relative discrepancy requiring independent precision confirmation.
+
+        Returns
+        -------
+        confirmation : dict
+            Confirmation status for the synthetic recurrence discrepancy.
+        """
         confirmed.append((count, error))
         return {"confirmed": True}
 
@@ -276,13 +386,39 @@ def test_first_discrepancy_stops_later_counts_and_broad_calls():
 
 
 def test_failed_baseline_gate_stops_before_later_count():
+    """Check failed baseline gate stops before later count."""
     evaluated = []
 
     def state(count):
+        """Return a synthetic recurrence checkpoint and record its iteration count.
+
+        Parameters
+        ----------
+        count : int
+            Number of cumulative weight updates.
+
+        Returns
+        -------
+        state : dict
+            Noise coefficients and magnitude-ordered weights for the checkpoint.
+        """
         evaluated.append(count)
         return {"a": 1.0, "p_pixel": 2.0, "weights": np.ones(1)}
 
     def reject(_state):
+        """Reject the synthetic baseline before later iterations can run.
+
+        Parameters
+        ----------
+        _state : dict
+            Baseline recurrence checkpoint intentionally rejected by this callback.
+
+        Raises
+        ------
+        ValueError
+            Deliberately raised to exercise the rejection path in the enclosing
+            test.
+        """
         raise ValueError("baseline identity")
 
     with pytest.raises(ValueError, match="baseline identity"):
@@ -291,6 +427,17 @@ def test_failed_baseline_gate_stops_before_later_count():
 
 
 def test_output_directory_is_exclusive_and_cli_paths_are_explicit(tmp_path, payload):
+    """Check output directory is exclusive and cli paths are explicit.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    payload : tuple of dict
+        Synthetic source inputs, validated summary, and numerical evidence
+        arrays supplied by the payload fixture.
+    """
     source, _, _ = payload
     result = TOOL.run_diagnostic(source)
     instructions = tmp_path / "instructions.md"
@@ -322,6 +469,22 @@ def test_output_directory_is_exclusive_and_cli_paths_are_explicit(tmp_path, payl
     [(0.0, 0.0, True), (1.0, 0.0, False), (0.0, 1.0, False)],
 )
 def test_scalar_baseline_zero_matching_is_exact(quantity, value, reference, passed):
+    """Check scalar baseline zero matching is exact.
+
+    Parameters
+    ----------
+    quantity : str
+        Scientific quantity under examination, supplied by pytest
+        parametrization.
+    value : float
+        Value at the tested validation boundary, supplied by pytest
+        parametrization.
+    reference : float
+        Reference fixture or reference-value input, supplied by pytest
+        parametrization.
+    passed : bool
+        Expected validation outcome, supplied by pytest parametrization.
+    """
     source = synthetic_source()
     state = TOOL.float_snapshot(source.legacy, TOOL.BASELINE_COUNT)
     state[quantity] = value
@@ -335,10 +498,33 @@ def test_scalar_baseline_zero_matching_is_exact(quantity, value, reference, pass
 
 
 def _write_json(path, value):
+    """Write a deterministic temporary JSON evidence file.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Path of the temporary test artifact to read or write.
+    value : object
+        JSON-serializable value written to the temporary artifact.
+    """
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
 def _finalized_bundle(tmp_path, source):
+    """Write and finalize a synthetic evidence bundle for offline checks.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory supplied by pytest for generated inputs and results.
+    source : SourceInputs
+        Self-contained legacy-weight inputs and saved reference projection.
+
+    Returns
+    -------
+    paths : tuple of pathlib.Path
+        Evidence directory, instruction file, and handoff file.
+    """
     output = tmp_path / "evidence"
     instructions = tmp_path / "instructions.md"
     handoff = tmp_path / "handoff.md"
@@ -359,6 +545,15 @@ def _finalized_bundle(tmp_path, source):
 
 
 def _refresh_manifest_hash(output, name):
+    """Refresh a deliberately modified artifact checksum in the manifest.
+
+    Parameters
+    ----------
+    output : pathlib.Path
+        Directory containing the synthetic evidence bundle.
+    name : str
+        Name of the artifact, module, or result under examination.
+    """
     manifest_path = output / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
     manifest["files"][name] = TOOL.sha256_file(output / name)
@@ -387,6 +582,20 @@ def _refresh_manifest_hash(output, name):
 def test_full_check_only_rejects_bound_claim_corruption(
     tmp_path, monkeypatch, mutation
 ):
+    """Check full check only rejects bound claim corruption.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that restores patched callables, attributes, and environment
+        variables after the test.
+    mutation : str
+        Modification applied to the otherwise valid fixture, supplied by pytest
+        parametrization.
+    """
     source = synthetic_source()
     monkeypatch.setattr(TOOL, "load_source", lambda _path: source)
     output, instructions, handoff = _finalized_bundle(tmp_path, source)
@@ -464,6 +673,21 @@ def test_full_check_only_rejects_bound_claim_corruption(
 def test_failed_baseline_cli_writes_and_rechecks(
     tmp_path, monkeypatch, route, expected_terminal
 ):
+    """Check failed baseline cli writes and rechecks.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that restores patched callables, attributes, and environment
+        variables after the test.
+    route : str
+        Model-provider route, supplied by pytest parametrization.
+    expected_terminal : str
+        Expected final validation status, supplied by pytest parametrization.
+    """
     source = synthetic_source()
     original_float = TOOL.float_snapshot
     original_decimal = TOOL.decimal_snapshot
@@ -478,6 +702,26 @@ def test_failed_baseline_cli_writes_and_rechecks(
     elif route == "three_update":
 
         def fail_three_update(inputs, count):
+            """Inject an unrepresentable floating-point value at update three.
+
+            Parameters
+            ----------
+            inputs : LegacyInputs
+                Legacy recurrence inputs passed unchanged to the original evaluation.
+            count : int
+                Number of cumulative weight updates.
+
+            Returns
+            -------
+            state : dict
+                Original floating-point checkpoint for other iteration counts.
+
+            Raises
+            ------
+            TOOL.DiagnosticArithmeticError
+                Deliberately raised to exercise the rejection path in the enclosing
+                test.
+            """
             if count == 3:
                 raise TOOL.DiagnosticArithmeticError(
                     "arithmetic_failure", "update 3", "synthetic float64 range"
@@ -488,6 +732,23 @@ def test_failed_baseline_cli_writes_and_rechecks(
     elif route == "decimal_disagreement":
 
         def disagree(inputs, count, precision):
+            """Perturb one Decimal checkpoint to test precision-consistency rejection.
+
+            Parameters
+            ----------
+            inputs : LegacyInputs
+                Legacy recurrence inputs passed to the Decimal evaluation.
+            count : int
+                Number of cumulative weight updates.
+            precision : int
+                Decimal arithmetic precision in significant digits.
+
+            Returns
+            -------
+            state : dict
+                Arbitrary-precision recurrence state, intentionally altered at the
+                selected checkpoint.
+            """
             state = original_decimal(inputs, count, precision)
             if count == 3 and precision == 160:
                 state = dict(state)
@@ -546,10 +807,39 @@ def test_failed_baseline_cli_writes_and_rechecks(
 def test_float_failure_with_successful_decimal_is_not_algebraic_singularity(
     monkeypatch,
 ):
+    """Check float failure with successful decimal is not algebraic singularity.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that restores patched callables, attributes, and environment
+        variables after the test.
+    """
     source = synthetic_source()
     original_float = TOOL.float_snapshot
 
     def fail_float(inputs, count):
+        """Inject float cancellation at initialization of the synthetic recurrence.
+
+        Parameters
+        ----------
+        inputs : LegacyInputs
+            Legacy recurrence inputs passed unchanged to the original evaluation.
+        count : int
+            Number of cumulative weight updates.
+
+        Returns
+        -------
+        state : dict
+            Original floating-point checkpoint when the injected failure does not
+            apply.
+
+        Raises
+        ------
+        TOOL.DiagnosticArithmeticError
+            Deliberately raised to exercise the rejection path in the enclosing
+            test.
+        """
         if count == 0:
             raise TOOL.DiagnosticArithmeticError(
                 "singular_signed_recurrence", "initialization", "float cancellation"

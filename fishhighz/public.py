@@ -29,7 +29,18 @@ from .survey_config import (
 
 
 def _plain(value):
-    """Return JSON-compatible values from immutable FishHighz metadata."""
+    """Convert immutable forecast metadata to JSON-compatible values.
+
+    Parameters
+    ----------
+    value : object
+        Metadata value, nested mapping, sequence, array or path.
+
+    Returns
+    -------
+    converted : object
+        Plain mapping, list, scalar or string retaining the metadata contents.
+    """
 
     if isinstance(value, MappingProxyType) or hasattr(value, "items"):
         return {str(key): _plain(item) for key, item in value.items()}
@@ -45,7 +56,24 @@ def _plain(value):
 
 
 def _constraints(result):
-    """Extract two-parameter diagnostics without hiding rank failures."""
+    """Read two-parameter errors without hiding rank deficiency.
+
+    Parameters
+    ----------
+    result : FisherResult
+        Fisher matrix for the two ordered BAO dilation parameters.
+
+    Returns
+    -------
+    status : str
+        available for full rank, otherwise unavailable.
+    sigma_ap : float or None
+        Dimensionless parallel dilation uncertainty.
+    sigma_at : float or None
+        Dimensionless transverse dilation uncertainty.
+    correlation : float or None
+        Dimensionless correlation coefficient.
+    """
 
     if result.diagnostics.rank != len(result.registry.ids):
         return "unavailable", None, None, None
@@ -79,12 +107,25 @@ class SpectrumConstraint:
 
     @property
     def result(self):
-        """Alias for the retained FisherResult."""
+        """Return the retained Fisher result.
+
+        Returns
+        -------
+        result : FisherResult or None
+            Fisher information, or None for an excluded selection.
+        """
 
         return self.fisher
 
     @property
     def available(self):
+        """Test whether the target constraint is available.
+
+        Returns
+        -------
+        available : bool
+            True when the recorded status is available.
+        """
         return self.status == "available"
 
 
@@ -101,10 +142,24 @@ class PreparedForecast:
 
     @property
     def prepared_bins(self):
+        """Return the fixed prepared bin states.
+
+        Returns
+        -------
+        bins : tuple of PreparedBin
+            Numerical states in prepared survey-bin order.
+        """
         return self.bins
 
     @property
     def bin_specs(self):
+        """Return the native survey bin specifications.
+
+        Returns
+        -------
+        bins : tuple of BinSpec
+            Selected-bin geometry, spectrum models and noise inputs.
+        """
         return self.survey.bins
 
 
@@ -123,22 +178,70 @@ class SurveyResult:
 
     @property
     def individual_spectra(self):
+        """Return the individual spectrum constraints.
+
+        Returns
+        -------
+        constraints : tuple of SpectrumConstraint
+            Individual results using their own covariance.
+        """
         return self.individual
 
     @property
     def joint_constraints(self):
+        """Return the joint spectrum constraints.
+
+        Returns
+        -------
+        constraints : tuple of SpectrumConstraint
+            Joint results for each redshift bin.
+        """
         return self.joint
 
     @property
     def constraints(self):
+        """Return all calculated spectrum constraints.
+
+        Returns
+        -------
+        constraints : tuple of SpectrumConstraint
+            Individual constraints followed by joint constraints.
+        """
         return self.individual + self.joint
 
     @property
     def fisher_results(self):
+        """Return the Fisher results of all calculated constraints.
+
+        Returns
+        -------
+        results : tuple of FisherResult or None
+            Retained Fisher objects in individual-then-joint order.
+        """
         return tuple(item.fisher for item in self.constraints)
 
     def save(self, path):
-        """Save identities/statuses as JSON and retained matrices as NPZ."""
+        """Save identities and statuses as JSON and matrices as NPZ.
+
+        Parameters
+        ----------
+        path : path-like
+            New output directory; parents are created as needed.
+
+        Returns
+        -------
+        output : pathlib.Path
+            Absolute directory containing settings.json and results.npz.
+
+        Raises
+        ------
+        FileExistsError
+            If the output directory already exists.
+
+        Notes
+        -----
+        Creates a new directory and serializes the appropriate forecast-mode schema.
+        """
 
         output = Path(path).expanduser().resolve()
         output.mkdir(parents=True, exist_ok=False)
@@ -195,6 +298,22 @@ class SurveyResult:
 
 
 def _resource_path(config, value, stack):
+    """Materialize a package input or resolve an INI-relative path.
+
+    Parameters
+    ----------
+    config : SurveyConfig
+        Parsed native survey configuration.
+    value : str or path-like
+        Configured resource name, optionally prefixed with package:.
+    stack : contextlib.ExitStack
+        Context retaining temporary package resources.
+
+    Returns
+    -------
+    path : pathlib.Path
+        Input path valid while the stack remains open.
+    """
     value = str(value)
     if value.startswith("package:") or config.path is None:
         return stack.enter_context(bundled_path(value.removeprefix("package:")))
@@ -202,7 +321,20 @@ def _resource_path(config, value, stack):
 
 
 def _input_identifier(config, value):
-    """Keep package identities independent of temporary extraction paths."""
+    """Retain package identities independently of extraction paths.
+
+    Parameters
+    ----------
+    config : SurveyConfig
+        Parsed native survey configuration.
+    value : str or path-like
+        Configured resource reference.
+
+    Returns
+    -------
+    identifier : str
+        Stable package reference or resolved external path.
+    """
 
     if str(value).startswith("package:"):
         return str(value)
@@ -212,7 +344,20 @@ def _input_identifier(config, value):
 
 
 def _object_identity(value, source):
-    """Retain known input digests without opening an injected object's files."""
+    """Read available input digests without reopening injected files.
+
+    Parameters
+    ----------
+    value : object
+        Prepared background, template or raw-input adapter.
+    source : str
+        Provenance label identifying configured or injected inputs.
+
+    Returns
+    -------
+    identity : dict
+        Source, type, known digest and available resource identifiers.
+    """
 
     result = {"source": source, "type": type(value).__name__, "sha256": None}
     provenance = getattr(getattr(value, "reader", value), "provenance", {})
@@ -228,6 +373,22 @@ def _object_identity(value, source):
 
 
 def _reader_identity(config, readers, source):
+    """Collect density and SNR identities by observed field.
+
+    Parameters
+    ----------
+    config : SurveyConfig
+        Parsed native survey configuration.
+    readers : mapping
+        Density/SNR adapters keyed by observed-field ID.
+    source : str
+        Provenance label for configured or injected readers.
+
+    Returns
+    -------
+    identities : dict
+        Per-field reader identities, with stable configured paths.
+    """
     result = {}
     for item in config.fields:
         values = {}
@@ -251,6 +412,26 @@ def _reader_identity(config, readers, source):
 
 
 def _default_background(config, stack, identity):
+    """Prepare the configured CAMB background and record its identity.
+
+    Parameters
+    ----------
+    config : SurveyConfig
+        Parsed native survey configuration.
+    stack : contextlib.ExitStack
+        Context retaining materialized package inputs.
+    identity : dict
+        Mutable identity record populated in place.
+
+    Returns
+    -------
+    background : CAMBBackground
+        Background at the configured evaluation and normalization redshifts.
+
+    Notes
+    -----
+    Reads the CAMB INI and may populate the CAMB growth cache.
+    """
     path = _resource_path(config, config.cosmology["camb_ini"], stack)
     identity.update(
         source="configured",
@@ -273,6 +454,22 @@ def _default_background(config, stack, identity):
 
 
 def _default_template(config, background, stack):
+    """Load the configured matter-power template.
+
+    Parameters
+    ----------
+    config : SurveyConfig
+        Parsed native survey configuration.
+    background : CAMBBackground or object
+        Prepared background with exact growth and geometry.
+    stack : contextlib.ExitStack
+        Context retaining materialized package inputs.
+
+    Returns
+    -------
+    template : object
+        Prepared template with the configured reference redshift and h_fid.
+    """
     return load_template(
         _resource_path(config, config.cosmology["template"], stack),
         h_fid=float(background.h_fid),
@@ -281,7 +478,20 @@ def _default_template(config, background, stack):
 
 
 def _pair_spec(spec, pair):
-    """Construct one spectrum with a new, one-spectrum covariance closure."""
+    """Construct one spectrum and its required covariance closure.
+
+    Parameters
+    ----------
+    spec : BinSpec
+        Joint spectrum specification.
+    pair : tuple of int
+        Selected spectrum by observed-field index.
+
+    Returns
+    -------
+    individual : BinSpec
+        One-spectrum specification with matching noise and model routes.
+    """
 
     fields = spec.p3d.selection.fields
     pair = tuple(pair)
@@ -345,7 +555,32 @@ def _pair_spec(spec, pair):
 
 
 def _convergence(prepared_bins):
+    """Collect immutable forest-weight convergence records.
+
+    Parameters
+    ----------
+    prepared_bins : sequence of PreparedBin
+        Prepared bins with fixed forest weights.
+
+    Returns
+    -------
+    convergence : mappingproxy
+        Records keyed by bin and observed forest ID.
+    """
+
     def record(convergence):
+        """Convert one convergence result to plain metadata.
+
+        Parameters
+        ----------
+        convergence : object or None
+            Mapping, result object or status; None denotes no iterative solve.
+
+        Returns
+        -------
+        record : dict
+            Serializable convergence diagnostics or a not_applicable status.
+        """
         if convergence is None:
             return {"status": "not_applicable"}
         if hasattr(convergence, "items"):
@@ -379,6 +614,41 @@ class Forecast:
         template_factory=None,
         readers_factory=None,
     ):
+        """Parse a native survey and retain optional preparation inputs.
+
+        Parameters
+        ----------
+        source : path-like or None, optional
+            Native survey INI; None selects the bundled DESI-2 accuracy recipe.
+        background : object or None, optional
+            Prepared background; default None prepares the configured CAMB input.
+        template : object or None, optional
+            Prepared matter-power template; default None loads the configured
+            template.
+        readers : mapping or None, optional
+            Per-field density/SNR readers; default None loads configured inputs.
+        background_factory : callable or None, optional
+            Factory called with config when no background is injected; default None.
+        template_factory : callable or None, optional
+            Factory called with config and background when no template is injected;
+            default None.
+        readers_factory : callable or None, optional
+            Factory called with config when no readers are injected; default None.
+
+        Returns
+        -------
+        None
+            No value is returned.
+
+        Raises
+        ------
+        ValueError
+            If the native survey configuration is invalid.
+
+        Notes
+        -----
+        Construction parses the INI. Background, template and bin covariance preparation are deferred until prepare or run.
+        """
         if (
             source is not None
             and str(source) == "desi2_accuracy.ini"
@@ -395,7 +665,22 @@ class Forecast:
         self._prepared = None
 
     def prepare(self):
-        """Prepare background, native survey bins and fixed covariance state."""
+        """Prepare and cache the background, survey and fixed bin covariance.
+
+        Returns
+        -------
+        prepared : PreparedForecast
+            Cached owned numerical bins and their input identities.
+
+        Raises
+        ------
+        ValueError
+            If configuration, template support or prepared inputs are inconsistent.
+
+        Notes
+        -----
+        The first call may read configured resources, solve CAMB and write its growth cache. Later calls return the cached preparation.
+        """
 
         if self._prepared is not None:
             return self._prepared
@@ -413,6 +698,7 @@ class Forecast:
                 background,
                 "injected" if self._background is not None else "injected_factory",
             )
+
             template = self._template
             if template is None:
                 template = (
@@ -432,6 +718,7 @@ class Forecast:
                 identities["template"]["identifier"] = _input_identifier(
                     self.config, self.config.cosmology["template"]
                 )
+
             readers = self._readers
             if readers is None and self._readers_factory is not None:
                 readers = self._readers_factory(self.config)
@@ -446,6 +733,8 @@ class Forecast:
                 self.config, self.config.fields, readers, stack
             )
             identities["fields"] = _reader_identity(self.config, readers, reader_source)
+
+            # Prepare the selected spectra before freezing their joint covariance.
             survey = prepare_survey(
                 self.config,
                 background=background,
@@ -469,7 +758,36 @@ class Forecast:
     def run(
         self, *, batch_size=2048, step_scale=None, numerical=False, individuals=True
     ):
-        """Run joint and own-covariance individual constraints."""
+        """Calculate joint and individual constraints with fixed covariance.
+
+        Parameters
+        ----------
+        batch_size : int, optional
+            Maximum Fourier nodes per derivative batch; default 2048.
+        step_scale : float or None, optional
+            Positive finite-difference step multiplier. None uses the configured BAO
+            step or 1.0 for full-shape and marginalized BAO modes.
+        numerical : bool, optional
+            Force numerical derivatives; default False.
+        individuals : bool, optional
+            Calculate individual spectra as well as joint constraints; default True.
+            False is supported for full-shape and marginalized BAO modes.
+
+        Returns
+        -------
+        result : SurveyResult
+            Constraints, combined Fisher information and numerical provenance.
+
+        Raises
+        ------
+        ValueError
+            If run options, numerical inputs or required template support are
+            invalid.
+
+        Notes
+        -----
+        Prepares the survey on first use. Rank-deficient constraints remain unavailable.
+        """
 
         if self.config.model.get("mode", "bao") == "full_shape":
             from .full_shape import run_full_shape

@@ -18,6 +18,14 @@ BASE = np.array([[4, -1, 0.5], [-1, 3, -0.2], [0.5, -0.2, 2]])
 
 
 def _geometry():
+    """Prepare a synthetic common-volume redshift-bin geometry.
+
+    Returns
+    -------
+    geometry : BinGeometry
+        Distances in Mpc/h, volume in (Mpc/h)^3, and velocity conversion in km/s
+        per Mpc/h.
+    """
     return prepare_geometry(
         2,
         3,
@@ -32,6 +40,13 @@ def _geometry():
 
 def _registry():
     # "c" is bound to no provider, so its global column stays exactly zero.
+    """Construct the shared target/nuisance registry for spectrum extraction.
+
+    Returns
+    -------
+    registry : ParameterRegistry
+        Two target parameters and one nuisance parameter in fixed order.
+    """
     return ParameterRegistry(
         [
             Parameter("a", 1.5, "target", step=0.01),
@@ -42,11 +57,49 @@ def _registry():
 
 
 def _model(t, z, k, mu, pairs):
+    """Evaluate the synthetic spectrum used by the enclosing regression test.
+
+    Parameters
+    ----------
+    t : ndarray of shape (n_parameters,)
+        Local model parameters in the provider binding order.
+    z : float or ndarray
+        Dimensionless redshift.
+    k : ndarray of shape (n_nodes,)
+        Comoving wavenumbers in h/Mpc.
+    mu : ndarray of shape (n_nodes,)
+        Dimensionless line-of-sight direction cosines.
+    pairs : ndarray of int, shape (n_pairs, 2)
+        Observed-field indices defining the requested spectra.
+
+    Returns
+    -------
+    power : ndarray of shape (n_nodes, n_pairs)
+        Synthetic intrinsic power in (Mpc/h)^3 before response and noise.
+    """
     shape = (1 + k[:, None]) * (1 + t[1] * mu[:, None] ** 2)
     return t[0] * shape * BASE[pairs[:, 0], pairs[:, 1]]
 
 
 def _spec(fields, selected, *, noise="galaxy"):
+    """Construct a forecast bin with the requested field, pair, and noise choices.
+
+    Parameters
+    ----------
+    fields : sequence of ObservedField
+        Observed fields in the order used by pair indices.
+    selected : sequence of pair or None
+        Selected field pairs; None selects every unique pair.
+    noise : str, optional
+        Noise construction: galaxy, forest, or explicitly supplied full noise.
+        Default is 'galaxy'.
+
+    Returns
+    -------
+    spec : BinSpec
+        Synthetic bin with fixed response and either full, galaxy, or forest
+        noise.
+    """
     registry = _registry()
     selection = PairSelection(fields, selected)
     binding = BoundParameters(registry, ("a", "b"), {"a": "a", "b": "b"})
@@ -121,6 +174,19 @@ MIXED = [
 def test_individual_equals_independent_one_spectrum_bins(
     fields, selected, noise, batch
 ):
+    """Check individual equals independent one spectrum bins.
+
+    Parameters
+    ----------
+    fields : list
+        Observed-field definitions, supplied by pytest parametrization.
+    selected : list or None
+        Selected spectrum definitions, supplied by pytest parametrization.
+    noise : str
+        Known-noise test input, supplied by pytest parametrization.
+    batch : int or None
+        Fourier-node batch size, supplied by pytest parametrization.
+    """
     spec = _spec(fields, selected, noise=noise)
     joint = prepare_bin(spec)
     run = run_bin(joint, batch_size=batch, individual=True)
@@ -134,6 +200,7 @@ def test_individual_equals_independent_one_spectrum_bins(
 
 
 def test_variances_are_the_covariance_diagonal():
+    """Check variances are the covariance diagonal."""
     rng = np.random.default_rng(7)
     selection = PairSelection(GALAXIES, [("2", "0"), ("1", "1"), ("0", "0")])
     raw = rng.normal(size=(40, 3, 3))
@@ -148,6 +215,7 @@ def test_variances_are_the_covariance_diagonal():
 
 
 def test_inactive_columns_are_exactly_zero_and_joint_matches_direct_solve():
+    """Check inactive columns are exactly zero and joint matches direct solve."""
     spec = _spec(GALAXIES, None)
     prepared = prepare_bin(spec)
     data = run_bin(prepared, batch_size=5).result.data_fisher
@@ -173,6 +241,16 @@ def test_inactive_columns_are_exactly_zero_and_joint_matches_direct_solve():
 
 @pytest.mark.parametrize("nodes", [1, 7, 300])
 def test_one_spectrum_numpy_contraction_matches_reference_loop(nodes, monkeypatch):
+    """Check one spectrum numpy contraction matches reference loop.
+
+    Parameters
+    ----------
+    nodes : int
+        Evaluation nodes, supplied by pytest parametrization.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that restores patched callables, attributes, and environment
+        variables after the test.
+    """
     from fishhighz.fisher import factor_covariance, fisher_from_factors
 
     monkeypatch.setenv("FISHHIGHZ_FISHER_BACKEND", "numpy")

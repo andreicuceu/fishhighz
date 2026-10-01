@@ -6,6 +6,14 @@ from fishhighz.validation.three_profile_plots import PROFILES, REVISION, build_t
 
 
 def synthetic_records():
+    """Construct six-bin AP records for each of the three profiles.
+
+    Returns
+    -------
+    records : list of tuple
+        Task metadata and numerical arrays with dimensionless joint/individual
+        AP errors.
+    """
     records = []
     for profile in PROFILES:
         for index in range(6):
@@ -40,6 +48,7 @@ def synthetic_records():
 
 
 def test_selection_and_joint_preserved():
+    """Check selection and joint preserved."""
     table = build_tables(synthetic_records())
     for profile in PROFILES:
         rows = [r for r in table["rows"] if r["profile"] == profile]
@@ -58,6 +67,7 @@ def test_selection_and_joint_preserved():
 
 
 def test_hidden_values_and_both_ratio_operands():
+    """Check hidden values and both ratio operands."""
     records = synthetic_records()
     records[0][1]["pair_errors"][0] = [0.3, 0.1]
     table = build_tables(records)
@@ -76,6 +86,7 @@ def test_hidden_values_and_both_ratio_operands():
 
 
 def test_failure_distinct_from_exclusion():
+    """Check failure distinct from exclusion."""
     records = synthetic_records()
     records[0] = (records[0][0], None)
     rows = build_tables(records)["rows"][:16]
@@ -84,6 +95,14 @@ def test_failure_distinct_from_exclusion():
 
 
 def test_render_saved_weights_and_coefficients(tmp_path):
+    """Check render saved weights and coefficients.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     from fishhighz.validation.three_profile_plots import render
 
     records = synthetic_records()

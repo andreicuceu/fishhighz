@@ -14,6 +14,19 @@ from fishhighz.results import FisherResult, combine_results, diagonal_prior
 
 
 def registry(ids=("theta", "eta")):
+    """Construct an ordered target/nuisance registry for Fisher algebra.
+
+    Parameters
+    ----------
+    ids : sequence of str, optional
+        Global parameter names in Fisher-matrix order. Default is ('theta',
+        'eta').
+
+    Returns
+    -------
+    registry : ParameterRegistry
+        First parameter is the target; subsequent parameters are nuisances.
+    """
     return ParameterRegistry(
         [
             Parameter(name, 0.0, "target" if i == 0 else "nuisance", (-10.0, 10.0), 0.1)
@@ -23,6 +36,7 @@ def registry(ids=("theta", "eta")):
 
 
 def test_analytic_uncertainties_order_fixing_and_correlation():
+    """Check analytic uncertainties order fixing and correlation."""
     result = FisherResult(registry(), [[4.0, 1.0], [1.0, 1.0]])
     expected = np.array([[1.0, -1.0], [-1.0, 4.0]]) / 3
     np.testing.assert_allclose(result.marginalized_covariance(), expected)
@@ -43,6 +57,7 @@ def test_analytic_uncertainties_order_fixing_and_correlation():
 
 
 def test_independent_bins_bindings_and_shared_nuisance():
+    """Check independent bins bindings and shared nuisance."""
     reg = registry(("theta", "eta(bin1)", "eta(bin2)"))
     contributions = []
     for name in ("eta(bin1)", "eta(bin2)"):
@@ -75,6 +90,7 @@ def test_independent_bins_bindings_and_shared_nuisance():
 
 
 def test_priors_once_correlated_and_resolution():
+    """Check priors once correlated and resolution."""
     reg = registry()
     data = FisherResult(reg, [[1.0, 1.0], [1.0, 1.0]])
     prior = diagonal_prior(reg, {"eta": 2.0})
@@ -113,6 +129,16 @@ def test_priors_once_correlated_and_resolution():
     [(np.zeros((2, 2)), 0), (np.diag([4.0, 0.0]), 1), (np.ones((2, 2)), 1)],
 )
 def test_singular_information_null_space_and_resolution(matrix, rank):
+    """Check singular information null space and resolution.
+
+    Parameters
+    ----------
+    matrix : ndarray
+        Covariance or Fisher-information test matrix, supplied by pytest
+        parametrization.
+    rank : int
+        Expected information rank, supplied by pytest parametrization.
+    """
     result = FisherResult(registry(), matrix)
     diagnostic = result.diagnostics
     assert diagnostic.rank == rank and np.isinf(diagnostic.condition)
@@ -135,6 +161,7 @@ def test_singular_information_null_space_and_resolution(matrix, rank):
 
 
 def test_parameter_units_rank_and_null_coordinate_conversion():
+    """Check parameter units rank and null coordinate conversion."""
     reg = registry()
     base = np.array([[4.0, 1.0], [1.0, 1.0]])
     scales = np.array([1e-70, 1e70])  # theta=S phi
@@ -171,6 +198,7 @@ def test_parameter_units_rank_and_null_coordinate_conversion():
 
 
 def test_threshold_and_owned_arrays():
+    """Check threshold and owned arrays."""
     for delta, rank in ((1e-15, 1), (1e-12, 2)):
         result = FisherResult(registry(), [[1.0, 1 - delta], [1 - delta, 1.0]])
         assert result.diagnostics.rank == rank
@@ -215,6 +243,14 @@ def test_threshold_and_owned_arrays():
 
 @pytest.mark.parametrize("ids", [[], ["theta", "theta"], ["missing"], "theta", [True]])
 def test_bad_subsets(ids):
+    """Check bad subsets.
+
+    Parameters
+    ----------
+    ids : str or list
+        Ordered parameter or field identifiers, supplied by pytest
+        parametrization.
+    """
     result = FisherResult(registry(), np.eye(2))
     for method in (
         result.fix_except,
@@ -231,11 +267,19 @@ def test_bad_subsets(ids):
     "width", [0.0, -1.0, np.nan, np.inf, True, 1j, "1", 1e-200, 1e200]
 )
 def test_bad_prior_widths(width):
+    """Check bad prior widths.
+
+    Parameters
+    ----------
+    width : bool or float or str or complex
+        Instrumental or integration width, supplied by pytest parametrization.
+    """
     with pytest.raises(ValueError):
         diagonal_prior(registry(), {"eta": width})
 
 
 def test_metadata_mismatches_unknown_prior_and_empty_combination():
+    """Check metadata mismatches unknown prior and empty combination."""
     base = registry()
     result = FisherResult(base, np.eye(2))
     for changes in (
@@ -282,6 +326,14 @@ def test_metadata_mismatches_unknown_prior_and_empty_combination():
     ],
 )
 def test_invalid_information(bad):
+    """Check invalid information.
+
+    Parameters
+    ----------
+    bad : ndarray or list
+        Invalid input exercising the specified rejection path, supplied by
+        pytest parametrization.
+    """
     with pytest.raises(ValueError):
         FisherResult(registry(), bad)
     with pytest.raises(ValueError):
@@ -289,6 +341,7 @@ def test_invalid_information(bad):
 
 
 def test_roundoff_symmetry_and_result_overflow():
+    """Check roundoff symmetry and result overflow."""
     raw = np.array([[2.0, 0.5 + 1e-15], [0.5, 1.0]])
     before = raw.copy()
     result = FisherResult(registry(), raw)
@@ -306,9 +359,31 @@ def test_roundoff_symmetry_and_result_overflow():
 
 
 def test_three_parameter_psd_and_no_eager_solves(monkeypatch):
+    """Check three parameter psd and no eager solves.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that restores patched callables, attributes, and environment
+        variables after the test.
+    """
     import fishhighz.results as results_module
 
     def forbidden(*args):
+        """Fail if a supposedly frozen or unused operation is invoked.
+
+        Parameters
+        ----------
+        *args : tuple
+            Positional arguments forwarded to the original callable or accepted by
+            the test callback.
+
+        Raises
+        ------
+        AssertionError
+            Deliberately raised to exercise the rejection path in the enclosing
+            test.
+        """
         raise AssertionError("uncertainty solve performed eagerly")
 
     monkeypatch.setattr(results_module, "_forward_substitute", forbidden)
@@ -323,6 +398,7 @@ def test_three_parameter_psd_and_no_eager_solves(monkeypatch):
 
 
 def test_symmetric_subnormal_information_is_not_averaged_away():
+    """Check symmetric subnormal information is not averaged away."""
     smallest = np.nextafter(0.0, 1.0)
     data = np.array([[1e-320, smallest], [smallest, 1e-320]])
     result = FisherResult(registry(), data)

@@ -9,14 +9,42 @@ from fishhighz.adapters.legacy_compat import plain
 
 
 def create_output(path):
-    """Create and return a new output directory without replacing prior results."""
+    """Create a new output directory without replacing prior results.
+
+    Parameters
+    ----------
+    path : str or pathlib.Path
+        Directory to create, including any missing parents.
+
+    Returns
+    -------
+    output : pathlib.Path
+        Absolute path to the newly created directory.
+
+    Raises
+    ------
+    FileExistsError
+        If the destination already exists.
+    """
     output = Path(path).resolve()
     output.mkdir(parents=True, exist_ok=False)
     return output
 
 
 def print_results(records):
-    """Print individual and joint AP constraints in bin order."""
+    """Print individual and joint AP constraints in bin order.
+
+    Parameters
+    ----------
+    records : iterable of dict
+        Ordered forecast records with bin indices, pair identities,
+        availability, dimensionless AP errors, and correlation.
+
+    Notes
+    -----
+    Writes a compact table to standard output; unavailable rows retain their
+    status instead of displaying numeric constraints.
+    """
     print("bin  result                         sigma(ap)   sigma(at)   corr(ap,at)")
     for row in records:
         label = "joint" if row["pair"] is None else " x ".join(row["pair"])
@@ -31,7 +59,28 @@ def print_results(records):
 
 
 def write_results(output, *, settings, records):
-    """Save JSON identities/status and compact numeric NPZ forecast arrays."""
+    """Save forecast identities, availability, and numerical arrays.
+
+    Parameters
+    ----------
+    output : str or pathlib.Path
+        Existing directory receiving settings.json and results.npz.
+    settings : mapping
+        Forecast prescription and provenance, including the parameter order.
+    records : sequence of dict
+        Per-bin individual and joint results; Fisher matrices share the
+        parameter ordering, and AP errors and correlations are dimensionless.
+
+    Returns
+    -------
+    paths : tuple of pathlib.Path
+        Paths to settings.json and results.npz, in that order.
+
+    Notes
+    -----
+    Writes strict JSON metadata and compressed NumPy arrays. Unavailable
+    errors are null in JSON and NaN in the numeric arrays.
+    """
     output = Path(output).resolve()
     manifest = []
     for index, row in enumerate(records):

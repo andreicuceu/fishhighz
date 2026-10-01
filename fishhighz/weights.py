@@ -19,31 +19,90 @@ from .response import InstrumentResponse, velocity_response
 
 
 def _nonnegative(value, name):
-    a = real_array(value, name)
-    if np.any(a < 0):
+    """Validate finite nonnegative real array values.
+
+    Parameters
+    ----------
+    value : array_like
+        Numeric input of arbitrary shape, in the named quantity's units.
+    name : str
+        Quantity name used in diagnostics.
+
+    Returns
+    -------
+    array : ndarray
+        Owned float64 copy with unchanged shape and units.
+
+    Raises
+    ------
+    ValueError
+        If values are nonnumeric, nonfinite, complex, Boolean, or negative.
+    """
+    array = real_array(value, name)
+    if np.any(array < 0):
         raise ValueError(f"{name} must be nonnegative")
-    return a
+    return array
 
 
 def _redshift(value, name):
-    z = scalar(value, name)
-    if z < 0:
+    """Validate a finite nonnegative scalar redshift.
+
+    Parameters
+    ----------
+    value : float
+        Dimensionless redshift.
+    name : str
+        Redshift label used in diagnostics.
+
+    Returns
+    -------
+    redshift : float
+        Validated dimensionless redshift.
+
+    Raises
+    ------
+    ValueError
+        If the value is not a finite nonnegative real scalar.
+    """
+    redshift = scalar(value, name)
+    if redshift < 0:
         raise ValueError(f"{name} must be nonnegative")
-    return z
+    return redshift
 
 
 def density_per_velocity(dndzdm, *, z_source):
     """Convert normalized dN/(dz dm deg²) to deg⁻² (km/s)⁻¹ mag⁻¹.
 
+    Parameters
+    ----------
+    dndzdm : array_like of shape (n_magnitude,)
+        Nonnegative source density dN/(dz dm deg^2).
+    z_source : float
+        Finite nonnegative dimensionless source redshift.
+
+    Returns
+    -------
+    rho : ndarray of shape (n_magnitude,)
+        Immutable source density in deg^-2 (km/s)^-1 mag^-1, preserving
+        magnitude order.
+
+    Raises
+    ------
+    ValueError
+        If density or source redshift is invalid, or conversion is not
+        representable.
+
+    Notes
+    -----
     No target normalization, integration, sorting, or area factor is applied.
     """
     row = _nonnegative(dndzdm, "dndzdm")
     if row.ndim != 1 or not row.size:
         raise ValueError("dndzdm must be nonempty 1D")
-    z = _redshift(z_source, "z_source")
+    source_redshift = _redshift(z_source, "z_source")
     with np.errstate(over="raise", invalid="raise", under="ignore"):
         try:
-            result = row * ((1 + z) / SPEED_LIGHT_KMS)
+            result = row * ((1 + source_redshift) / SPEED_LIGHT_KMS)
         except FloatingPointError as error:
             raise ValueError("density conversion is not representable") from error
     if np.any((row > 0) & (result == 0)):
@@ -52,6 +111,29 @@ def density_per_velocity(dndzdm, *, z_source):
 
 
 def _context(field, geometry, response):
+    """Identify the field, geometry, and response defining forest-weight reuse.
+
+    Parameters
+    ----------
+    field : ObservedField
+        Forest sample identity, including its physical tracer and background
+        population.
+    geometry : BinGeometry
+        Fixed forest evaluation geometry and fiducial coordinate conversion.
+    response : InstrumentResponse
+        Fixed instrumental widths in km/s, with positive forest pixel width.
+
+    Returns
+    -------
+    context : tuple
+        Field identity, z_eval, h_fid, a_v, d_deg, speed of light, and response
+        in that order; retains the original objects and conventions.
+
+    Raises
+    ------
+    ValueError
+        If types are invalid or forest pixel width is not positive.
+    """
     if not isinstance(field, ObservedField) or field.kind != "forest":
         raise ValueError("require an observed forest field")
     if not isinstance(geometry, BinGeometry):
@@ -100,15 +182,54 @@ def sample_auxiliary(
 ):
     """Query one matching auto and independent P1D once, outside all weight loops.
 
+    Parameters
+    ----------
+    field : ObservedField
+        Forest sample identity, including its physical tracer and background
+        population.
+    geometry : BinGeometry
+        Fixed forest evaluation geometry and fiducial coordinate conversion.
+    response : InstrumentResponse
+        Fixed instrumental widths in km/s, with positive forest pixel width.
+    prepared : PreparedP3D
+        Intrinsic model routes containing the forest auto-spectrum.
+    theta : array_like of shape (n_global_p3d,)
+        P3D fiducial parameter values in their registry units.
+    p1d_model : callable
+        Independent intrinsic one-dimensional forest-power model.
+    p1d_parameters : BoundParameters
+        Explicit local bindings for the P1D model.
+    theta_p1d : array_like of shape (n_global_p1d,)
+        P1D fiducial parameter values in their own registry units.
+    k_t_deg : float
+        Nonnegative transverse angular wavenumber in deg^-1.
+    k_p_velocity : float
+        Nonnegative line-of-sight velocity wavenumber in s/km; both auxiliary
+        components cannot vanish.
+
+    Returns
+    -------
+    samples : AuxiliarySamples
+        Immutable fiducial state with response-smoothed signal S in deg^2 km/s,
+        alias B in km/s, and corresponding observed k and mu.
+
+    Raises
+    ------
+    ValueError
+        If the preparation context, auxiliary mode, model domain, or positive
+        signal/alias requirement fails.
+
+    Notes
+    -----
     Preserve original field indices/bindings, routing only this auto. S is the
     caller's full intrinsic prediction, not a promise of legacy 'smooth' power.
     Explicit legacy examples are (2.4, .00035) for BAO and (7, .001) for P1D.
     Auxiliary nodes add no forecast modes and must be within provider domains.
     """
     context = _context(field, geometry, response)
-    kt = _redshift(k_t_deg, "k_t_deg")
-    kp = _redshift(k_p_velocity, "k_p_velocity")
-    if kt == kp == 0:
+    transverse_angular_wavenumber = _redshift(k_t_deg, "k_t_deg")
+    parallel_velocity_wavenumber = _redshift(k_p_velocity, "k_p_velocity")
+    if transverse_angular_wavenumber == parallel_velocity_wavenumber == 0:
         raise ValueError(f"{field.id}: auxiliary mode cannot be zero")
     if not isinstance(prepared, PreparedP3D) or field not in prepared.selection.fields:
         raise ValueError(f"{field.id}: require matching PreparedP3D field")
@@ -125,33 +246,44 @@ def sample_auxiliary(
         [P3DProvider(owner.label, owner.model, owner.parameters, [(i, i)])],
     )
     with np.errstate(over="ignore", invalid="ignore"):
-        parallel = geometry.a_v * kp
-        k = np.hypot(parallel, kt / geometry.d_deg)
-        mu = parallel / k
+        parallel = geometry.a_v * parallel_velocity_wavenumber
+        wavenumber = np.hypot(parallel, transverse_angular_wavenumber / geometry.d_deg)
+        direction_cosine = parallel / wavenumber
     try:
-        w = velocity_response(
-            [kp],
+        amplitude_response = velocity_response(
+            [parallel_velocity_wavenumber],
             pixel_width_velocity=response.pixel_width_velocity,
             gaussian_sigma_velocity=response.gaussian_sigma_velocity,
         )[0]
-        s = evaluate_p3d(auto, theta, geometry.z_eval, [k], [mu])[0, 0]
-        b = evaluate_p1d(p1d_model, p1d_parameters, theta_p1d, geometry.z_eval, [kp])[0]
+        signal_power = evaluate_p3d(
+            auto, theta, geometry.z_eval, [wavenumber], [direction_cosine]
+        )[0, 0]
+        alias_power = evaluate_p1d(
+            p1d_model,
+            p1d_parameters,
+            theta_p1d,
+            geometry.z_eval,
+            [parallel_velocity_wavenumber],
+        )[0]
         with np.errstate(over="ignore", under="ignore", invalid="ignore"):
-            s = _positive(s * w**2 * geometry.a_v / geometry.d_deg**2, "auxiliary S")
-            b = _positive(b * w**2, "auxiliary B")
+            signal_power = _positive(
+                signal_power * amplitude_response**2 * geometry.a_v / geometry.d_deg**2,
+                "auxiliary S",
+            )
+            alias_power = _positive(alias_power * amplitude_response**2, "auxiliary B")
     except (ValueError, OverflowError) as error:
         raise ValueError(
-            f"{field.id}, auxiliary ({kt}, {kp}), provider {owner.label}: {error}"
+            f"{field.id}, auxiliary ({transverse_angular_wavenumber}, {parallel_velocity_wavenumber}), provider {owner.label}: {error}"
         ) from error
     result = object.__new__(AuxiliarySamples)
     for name, value in dict(
         context=context,
-        k_t_deg=kt,
-        k_p_velocity=kp,
-        k=float(k),
-        mu=float(mu),
-        signal=s,
-        alias=b,
+        k_t_deg=transverse_angular_wavenumber,
+        k_p_velocity=parallel_velocity_wavenumber,
+        k=float(wavenumber),
+        mu=float(direction_cosine),
+        signal=signal_power,
+        alias=alias_power,
         theta_p3d=_immutable(theta),
         theta_p1d=_immutable(theta_p1d),
     ).items():
@@ -190,7 +322,28 @@ class ForestWeights:
     convergence: object
 
     def validate_context(self, field, geometry, response):
-        """Reject reuse across field, evaluation geometry, h or response settings."""
+        """Reject reuse with a different field, evaluation geometry, or response.
+
+        Parameters
+        ----------
+        field : ObservedField
+            Forest sample identity, including its physical tracer and background
+            population.
+        geometry : BinGeometry
+            Fixed forest evaluation geometry and fiducial coordinate conversion.
+        response : InstrumentResponse
+            Fixed instrumental widths in km/s, with positive forest pixel width.
+
+        Returns
+        -------
+        None
+            Validate exact equality with the stored preparation context.
+
+        Raises
+        ------
+        ValueError
+            If the field, fiducial units, local geometry, or response differs.
+        """
         if self.context != _context(field, geometry, response):
             raise ValueError("forest preparation field/geometry/response mismatch")
 
@@ -219,6 +372,70 @@ def prepare_forest_weights(
 ):
     """Prepare from same-shaped 1D m, positive dm weights, rho and pixel variance.
 
+    Parameters
+    ----------
+    field : ObservedField
+        Forest sample identity, including its physical tracer and background
+        population.
+    geometry : BinGeometry
+        Fixed forest evaluation geometry and fiducial coordinate conversion.
+    response : InstrumentResponse
+        Fixed instrumental widths in km/s, with positive forest pixel width.
+    z_source : float
+        Dimensionless source redshift, strictly above the forest evaluation
+        redshift.
+    magnitudes : array_like of shape (n_magnitude,)
+        Finite strictly increasing source magnitudes.
+    quadrature : array_like of shape (n_magnitude,)
+        Positive integration weights in magnitudes.
+    rho : array_like of shape (n_magnitude,)
+        Nonnegative source density in deg^-2 (km/s)^-1 mag^-1, with positive
+        support.
+    variance : array_like of shape (n_magnitude,)
+        Nonnegative dimensionless pixel-noise variance.
+    length_velocity : float
+        Positive forest length in km/s.
+    method : str
+        Explicit supplied, legacy, inverse_variance, early_lyaforecast, or
+        mcdonald weighting prescription.
+    weights : array_like of shape (n_magnitude,), optional
+        Dimensionless supplied weights; default None. Required only for
+        method='supplied'.
+    iterations : int, optional
+        Nonnegative fixed update count. Default None requests adaptive stopping
+        for the full-sample methods; legacy requires an explicit count.
+    signal : float, optional
+        Positive response-smoothed reference S in deg^2 km/s. Default None; used
+        only by iterative prescriptions.
+    alias : float, optional
+        Positive response-smoothed reference B or B_star in km/s. Default None.
+    auxiliary : AuxiliarySamples, optional
+        Matching fiducial samples supplying S/B instead of explicit signal and
+        alias. Default None.
+    rtol : float, default=1e-4
+        Relative tolerance for adaptive weight and noise-coefficient changes.
+    min_updates : int, default=3
+        Minimum adaptive update count before nomination of convergence.
+    stable_steps : int, default=3
+        Consecutive stable updates required before confirmation.
+    max_updates : int, default=96
+        Maximum adaptive update count.
+
+    Returns
+    -------
+    prepared : ForestWeights
+        Immutable input arrays, dimensionless weights, cumulative I1/I2/I3 in
+        deg^-2 (km/s)^-1, A in deg^2, pixel power in deg^2 km/s, and convergence
+        metadata.
+
+    Raises
+    ------
+    ValueError
+        If inputs or method settings conflict, arithmetic is unrepresentable,
+        weighted support is absent, or adaptive convergence is not confirmed.
+
+    Notes
+    -----
     'early_lyaforecast' and 'mcdonald' use full-sample moments and require
     positive signal/alias or matching fiducial auxiliary samples. With no
     iterations they require confirmed adaptive convergence (rtol=1e-4, at
@@ -239,30 +456,40 @@ def prepare_forest_weights(
     z_source = _redshift(z_source, "z_source")
     if z_source <= geometry.z_eval:
         raise ValueError("z_source must exceed z_eval")
-    m = real_array(magnitudes, "magnitudes")
-    q = _nonnegative(quadrature, "quadrature")
-    r = _nonnegative(rho, "rho")
-    v = _nonnegative(variance, "variance")
+
+    magnitude_grid = real_array(magnitudes, "magnitudes")
+    magnitude_weights = _nonnegative(quadrature, "quadrature")
+    source_density = _nonnegative(rho, "rho")
+    pixel_variance = _nonnegative(variance, "variance")
     if (
-        m.ndim != 1
-        or not m.size
-        or any(a.shape != m.shape for a in (q, r, v))
-        or np.any(m[1:] <= m[:-1])
-        or np.any(q <= 0)
-        or not np.any(r > 0)
+        magnitude_grid.ndim != 1
+        or not magnitude_grid.size
+        or any(
+            sample_array.shape != magnitude_grid.shape
+            for sample_array in (
+                magnitude_weights,
+                source_density,
+                pixel_variance,
+            )
+        )
+        or np.any(magnitude_grid[1:] <= magnitude_grid[:-1])
+        or np.any(magnitude_weights <= 0)
+        or not np.any(source_density > 0)
     ):
         raise ValueError(
             "require ordered 1D magnitudes, positive quadrature and density support"
         )
     length = _positive(length_velocity, "length_velocity")
     pixel = response.pixel_width_velocity
+
+    # Resolve the chosen prescription before any nonlinear weight update.
     if method == "supplied":
         if weights is None or any(
             x is not None for x in (iterations, signal, alias, auxiliary)
         ):
             raise ValueError("supplied weights conflict with legacy settings")
-        w = _nonnegative(weights, "weights")
-        if w.shape != m.shape:
+        forest_weights = _nonnegative(weights, "weights")
+        if forest_weights.shape != magnitude_grid.shape:
             raise ValueError("weights shape mismatch")
         changes = np.empty(0)
     elif method == "legacy" or method in METHODS:
@@ -292,17 +519,19 @@ def prepare_forest_weights(
         raise ValueError(
             "method must be supplied, legacy, inverse_variance, early_lyaforecast or mcdonald"
         )
+
     convergence = None
     try:
         with np.errstate(over="raise", invalid="raise", divide="raise", under="ignore"):
-            masses = r * q
-            if np.any((r > 0) & (masses == 0)):
+            masses = source_density * magnitude_weights
+            if np.any((source_density > 0) & (masses == 0)):
                 raise ValueError("quadrature masses are not representable")
+
             if method in METHODS:
                 inputs = SimpleNamespace(
-                    density=r,
-                    quadrature=q,
-                    variance=v,
+                    density=source_density,
+                    quadrature=magnitude_weights,
+                    variance=pixel_variance,
                     length=length,
                     pixel=pixel,
                     signal=signal,
@@ -322,34 +551,48 @@ def prepare_forest_weights(
                             f"{field.id}: {method} {convergence['status']}: "
                             f"{convergence['reason']}"
                         )
-                    w = convergence["weights"]
+                    forest_weights = convergence["weights"]
                 else:
-                    w = fixed_weights(inputs, METHODS[method], iterations)
+                    forest_weights = fixed_weights(inputs, METHODS[method], iterations)
                     convergence = dict(status="fixed_count", updates=iterations)
                 changes = np.empty(0)
             elif method == "legacy":
-                w, changes = _iterate(
-                    masses, v, length, pixel, signal, alias, iterations
+                forest_weights, changes = _iterate(
+                    masses, pixel_variance, length, pixel, signal, alias, iterations
                 )
-                if np.any((r > 0) & (w == 0)):
+                if np.any((source_density > 0) & (forest_weights == 0)):
                     raise ValueError("legacy weights are not representable")
             elif method == "inverse_variance":
-                support = r > 0
-                w = np.zeros_like(r)
+                support_mask = source_density > 0
+                forest_weights = np.zeros_like(source_density)
                 with np.errstate(under="raise"):
-                    instrumental_power = pixel * v[support]
-                w[support] = alias / (alias + instrumental_power)
-                if np.any((w[support] <= 0) | ~np.isfinite(w[support])):
+                    instrumental_power = pixel * pixel_variance[support_mask]
+                forest_weights[support_mask] = alias / (alias + instrumental_power)
+                if np.any(
+                    (forest_weights[support_mask] <= 0)
+                    | ~np.isfinite(forest_weights[support_mask])
+                ):
                     raise ValueError("inverse_variance weights are not representable")
-            i1, i2, i3, a, p = _integrals(masses, w, v, length, pixel)
+
+            # Normalize moments only after the weights have been determined.
+            (
+                first_moment,
+                second_moment,
+                noise_moment,
+                aliasing_coefficient,
+                pixel_power,
+            ) = _integrals(masses, forest_weights, pixel_variance, length, pixel)
             if (
-                not np.isfinite(a)
-                or a <= 0
-                or not np.isfinite(p)
-                or p < 0
-                or (np.any((masses > 0) & (w > 0) & (v > 0)) and p == 0)
-                or i1[-1] <= 0
-                or i2[-1] <= 0
+                not np.isfinite(aliasing_coefficient)
+                or aliasing_coefficient <= 0
+                or not np.isfinite(pixel_power)
+                or pixel_power < 0
+                or (
+                    np.any((masses > 0) & (forest_weights > 0) & (pixel_variance > 0))
+                    and pixel_power == 0
+                )
+                or first_moment[-1] <= 0
+                or second_moment[-1] <= 0
             ):
                 raise ValueError(
                     "integrals/coefficients are not representable or lack weighted support"
@@ -359,27 +602,28 @@ def prepare_forest_weights(
             f"{field.id}: weighting integrals/coefficients are not representable "
             f"or lack support: {error}"
         ) from error
+
     result = object.__new__(ForestWeights)
     values = dict(
         context=context,
         z_source=z_source,
-        magnitudes=m,
-        quadrature=q,
-        rho=r,
-        variance=v,
+        magnitudes=magnitude_grid,
+        quadrature=magnitude_weights,
+        rho=source_density,
+        variance=pixel_variance,
         length_velocity=length,
         method=method,
         iterations=iterations,
         auxiliary=auxiliary,
         signal=signal,
         alias=alias,
-        weights=w,
+        weights=forest_weights,
         weight_changes=changes,
-        I1=i1,
-        I2=i2,
-        I3=i3,
-        A=float(a),
-        P_pixel=float(p),
+        I1=first_moment,
+        I2=second_moment,
+        I3=noise_moment,
+        A=float(aliasing_coefficient),
+        P_pixel=float(pixel_power),
         convergence=convergence,
     )
     for name, value in values.items():

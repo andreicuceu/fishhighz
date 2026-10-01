@@ -24,17 +24,53 @@ SPEC.loader.exec_module(TOOL)
 
 
 def digest(path: Path) -> str:
-    """Hash one test artifact."""
+    """Hash one temporary test artifact.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Path of the temporary test artifact to read or write.
+
+    Returns
+    -------
+    sha256 : str
+        Hexadecimal SHA-256 digest of the file bytes.
+    """
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def write_json(path: Path, value: object) -> None:
-    """Write one strict test JSON file."""
+    """Write a strict JSON artifact for the synthetic reference capture.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Path of the temporary test artifact to read or write.
+    value : object
+        JSON-serializable value written to the temporary artifact.
+    """
     path.write_text(json.dumps(value, indent=2, allow_nan=False) + "\n")
 
 
 def run_tool(arguments, cwd, environment=None):
-    """Run the public CLI from an unrelated directory."""
+    """Run the public validation CLI in an isolated working directory.
+
+    Parameters
+    ----------
+    arguments : sequence
+        Arguments passed to the public validation command.
+    cwd : pathlib.Path
+        Working directory of the validation subprocess.
+    environment : dict of str to str or None, optional
+        Environment overrides for the isolated synthetic worker; None keeps the
+        current environment. Default is None.
+
+    Returns
+    -------
+    completed : subprocess.CompletedProcess
+        Exit code and captured text output; nonzero status is returned for the
+        test to inspect.
+    """
     env = os.environ.copy()
     if environment:
         env.update(environment)
@@ -49,7 +85,23 @@ def run_tool(arguments, cwd, environment=None):
 
 
 def config_text(case_name: str, pair_names: list[str], selected_count: int) -> str:
-    """Build a full-size-inventory but numerically synthetic reference INI."""
+    """Build a synthetic reference INI with the complete case inventory.
+
+    Parameters
+    ----------
+    case_name : str
+        Authoritative case filename represented by the synthetic INI.
+    pair_names : list of str
+        Complete ordered inventory of spectra in the synthetic reference case.
+    selected_count : int
+        Number of leading pair names selected as observables.
+
+    Returns
+    -------
+    text : str
+        INI contents defining tiny numerical grids and the requested tracer
+        selection.
+    """
     correlations = (
         "all"
         if selected_count == len(pair_names)
@@ -114,7 +166,13 @@ def config_text(case_name: str, pair_names: list[str], selected_count: int) -> s
 
 
 def make_reference(path: Path) -> None:
-    """Create a standalone synthetic checkout with the exact seven-case inventory."""
+    """Create and commit a temporary synthetic reference checkout.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Path of the temporary test artifact to read or write.
+    """
     examples = path / "examples" / "desi2"
     package = path / "lyaforecast"
     resources = path / "resources"
@@ -192,7 +250,33 @@ def capture_stub(
     baseline: Path | None = None,
     reference_name: str = "reference",
 ) -> tuple[Path, subprocess.CompletedProcess[str]]:
-    """Capture one complete synthetic bundle with real subprocess isolation."""
+    """Capture synthetic reference evidence through isolated subprocesses.
+
+    Parameters
+    ----------
+    base : pathlib.Path
+        Temporary root containing the fake checkout and output bundles.
+    destination_name : str
+        Name of the new captured bundle under base.
+    environment : dict of str to str or None, optional
+        Environment overrides for the isolated synthetic worker; None keeps the
+        current environment. Default is None.
+    suite : str or None, optional
+        Capture suite; None omits the option to exercise the CLI default.
+        Default is 'full'.
+    baseline : pathlib.Path or None, optional
+        Existing synthetic full bundle used to validate quick-mode capture.
+        Default is None.
+    reference_name : str, optional
+        Directory name for the synthetic reference checkout under base. Default
+        is 'reference'.
+
+    Returns
+    -------
+    capture : tuple
+        Destination pathlib.Path and subprocess.CompletedProcess from the
+        capture command.
+    """
     reference = base / reference_name
     if not reference.exists():
         make_reference(reference)
@@ -224,7 +308,18 @@ def capture_stub(
 
 @pytest.fixture(scope="module")
 def captured(tmp_path_factory):
-    """Return one valid synthetic bundle created from outside the checkout."""
+    """Capture one valid synthetic full bundle outside the package checkout.
+
+    Parameters
+    ----------
+    tmp_path_factory : pytest.TempPathFactory
+        Factory for the module-scoped temporary reference checkout.
+
+    Returns
+    -------
+    paths : tuple of pathlib.Path
+        Temporary base directory and captured full bundle.
+    """
     base = tmp_path_factory.mktemp("baseline-tool")
     action_log = base / "full-actions.jsonl"
     bundle, completed = capture_stub(
@@ -236,7 +331,18 @@ def captured(tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def quick_captured(captured):
-    """Return one valid default-suite quick bundle and its worker action log."""
+    """Capture a default quick bundle against the synthetic full baseline.
+
+    Parameters
+    ----------
+    captured : tuple of pathlib.Path
+        Temporary root and valid synthetic captured bundle.
+
+    Returns
+    -------
+    paths : tuple of pathlib.Path
+        Quick bundle and worker action-log paths.
+    """
     base, full = captured
     action_log = base / "quick-actions.jsonl"
     bundle, completed = capture_stub(
@@ -251,7 +357,23 @@ def quick_captured(captured):
 
 
 def mutable_bundle(captured, tmp_path, name="bundle"):
-    """Copy the valid ignored evidence for one destructive checker test."""
+    """Copy the valid synthetic bundle for a destructive checker test.
+
+    Parameters
+    ----------
+    captured : tuple of pathlib.Path
+        Temporary root and valid synthetic captured bundle.
+    tmp_path : pathlib.Path
+        Temporary directory supplied by pytest for generated inputs and results.
+    name : str, optional
+        Name of the artifact, module, or result under examination. Default is
+        'bundle'.
+
+    Returns
+    -------
+    bundle : pathlib.Path
+        Independent temporary copy of the captured evidence.
+    """
     _, source = captured
     target = tmp_path / name
     shutil.copytree(source, target)
@@ -259,29 +381,80 @@ def mutable_bundle(captured, tmp_path, name="bundle"):
 
 
 def manifest_for(bundle: Path) -> dict[str, object]:
-    """Load a bundle manifest."""
+    """Read the synthetic capture manifest.
+
+    Parameters
+    ----------
+    bundle : pathlib.Path
+        Directory containing the captured synthetic evidence and manifest.
+
+    Returns
+    -------
+    manifest : dict
+        Parsed manifest JSON.
+    """
     return json.loads((bundle / "manifest.json").read_text())
 
 
 def update_artifact(bundle: Path, owner: dict[str, object], artifact_name: str) -> None:
-    """Refresh one intentionally modified artifact digest in the manifest."""
+    """Refresh a deliberately modified artifact digest in the manifest record.
+
+    Parameters
+    ----------
+    bundle : pathlib.Path
+        Directory containing the captured synthetic evidence and manifest.
+    owner : dict
+        Manifest record whose artifact checksum is updated in place.
+    artifact_name : str
+        Key of the artifact whose checksum is refreshed.
+    """
     record = owner["artifacts"][artifact_name]
     record["sha256"] = digest(bundle / record["path"])
 
 
 def update_shared(bundle: Path, manifest: dict[str, object], name: str) -> None:
-    """Refresh one intentionally modified shared artifact digest."""
+    """Refresh a deliberately modified shared artifact digest.
+
+    Parameters
+    ----------
+    bundle : pathlib.Path
+        Directory containing the captured synthetic evidence and manifest.
+    manifest : dict
+        Manifest whose shared artifact checksum is updated in place.
+    name : str
+        Name of the artifact, module, or result under examination.
+    """
     record = manifest["shared_artifacts"][name]
     record["sha256"] = digest(bundle / record["path"])
 
 
 def actions(path: Path) -> list[dict[str, object]]:
-    """Read subprocess actions recorded by the portable worker."""
+    """Read the action log from the portable synthetic worker.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Path of the temporary test artifact to read or write.
+
+    Returns
+    -------
+    actions : list of dict
+        Worker action records in execution order.
+    """
     return [json.loads(line) for line in path.read_text().splitlines()]
 
 
 def test_valid_bundle_and_relocated_cli_check(captured, tmp_path):
-    """A valid bundle, including zero-filled pairs, survives relocation."""
+    """A valid bundle, including zero-filled pairs, survives relocation.
+
+    Parameters
+    ----------
+    captured : tuple
+        Synthetic captured-reference fixture used for offline validation.
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     _, bundle = captured
     checked = TOOL.check_bundle(bundle)
     assert checked["primary_cases"] == 7
@@ -303,7 +476,18 @@ def test_valid_bundle_and_relocated_cli_check(captured, tmp_path):
 
 @pytest.mark.parametrize("mode", ["missing", "duplicate"])
 def test_missing_and_duplicate_primary_cases(captured, tmp_path, mode):
-    """Primary inventory must contain exactly seven unique cases."""
+    """Primary inventory must contain exactly seven unique cases.
+
+    Parameters
+    ----------
+    captured : tuple
+        Synthetic captured-reference fixture used for offline validation.
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    mode : str
+        Calculation or validation mode, supplied by pytest parametrization.
+    """
     bundle = mutable_bundle(captured, tmp_path)
     manifest = manifest_for(bundle)
     if mode == "missing":
@@ -316,7 +500,14 @@ def test_missing_and_duplicate_primary_cases(captured, tmp_path, mode):
 
 
 def test_failed_worker_leaves_incomplete_inspectable_bundle(tmp_path):
-    """A subprocess failure is retained and makes capture exit nonzero."""
+    """A subprocess failure is retained and makes capture exit nonzero.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     bundle, completed = capture_stub(
         tmp_path,
         "failed",
@@ -336,7 +527,18 @@ def test_failed_worker_leaves_incomplete_inspectable_bundle(tmp_path):
 
 @pytest.mark.parametrize("mode", ["missing", "corrupted"])
 def test_missing_and_corrupted_artifacts(captured, tmp_path, mode):
-    """All recorded artifacts must exist with their captured digest."""
+    """All recorded artifacts must exist with their captured digest.
+
+    Parameters
+    ----------
+    captured : tuple
+        Synthetic captured-reference fixture used for offline validation.
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    mode : str
+        Calculation or validation mode, supplied by pytest parametrization.
+    """
     bundle = mutable_bundle(captured, tmp_path)
     manifest = manifest_for(bundle)
     record = manifest["primary_cases"][0]["artifacts"]["summary"]
@@ -356,7 +558,21 @@ def test_missing_and_corrupted_artifacts(captured, tmp_path, mode):
     [("malformed", "shape"), ("nonfinite", "non-finite")],
 )
 def test_malformed_and_nonfinite_results(captured, tmp_path, mutation, message):
-    """The checker inspects numerical JSON rather than trusting worker status."""
+    """The checker inspects numerical JSON rather than trusting worker status.
+
+    Parameters
+    ----------
+    captured : tuple
+        Synthetic captured-reference fixture used for offline validation.
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    mutation : str
+        Modification applied to the otherwise valid fixture, supplied by pytest
+        parametrization.
+    message : str
+        Expected diagnostic text, supplied by pytest parametrization.
+    """
     bundle = mutable_bundle(captured, tmp_path)
     manifest = manifest_for(bundle)
     case = manifest["primary_cases"][0]
@@ -375,7 +591,16 @@ def test_malformed_and_nonfinite_results(captured, tmp_path, mutation, message):
 
 
 def test_unauthorized_scientific_configuration_change(captured, tmp_path):
-    """A changed scientific setting fails even with refreshed artifact hashes."""
+    """A changed scientific setting fails even with refreshed artifact hashes.
+
+    Parameters
+    ----------
+    captured : tuple
+        Synthetic captured-reference fixture used for offline validation.
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     bundle = mutable_bundle(captured, tmp_path)
     manifest = manifest_for(bundle)
     case = manifest["primary_cases"][0]
@@ -397,7 +622,14 @@ def test_unauthorized_scientific_configuration_change(captured, tmp_path):
 
 
 def test_destination_refusal_and_consecutive_captures_are_fresh(tmp_path):
-    """Captures refuse reuse and separate consecutive evidence trees."""
+    """Captures refuse reuse and separate consecutive evidence trees.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     first, first_run = capture_stub(tmp_path, "first")
     assert first_run.returncode == 0, first_run.stderr
     _, refused = capture_stub(tmp_path, "first")
@@ -426,7 +658,16 @@ def test_destination_refusal_and_consecutive_captures_are_fresh(tmp_path):
 
 @pytest.mark.parametrize("mode", ["number", "structure"])
 def test_repeat_comparison_failures(tmp_path, mode):
-    """Changed repeat numbers and structures both make capture incomplete."""
+    """Changed repeat numbers and structures both make capture incomplete.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    mode : str
+        Calculation or validation mode, supplied by pytest parametrization.
+    """
     bundle, completed = capture_stub(
         tmp_path,
         f"repeat-{mode}",
@@ -442,7 +683,15 @@ def test_repeat_comparison_failures(tmp_path, mode):
 
 
 def test_explicit_full_and_default_quick_action_counts(captured, quick_captured):
-    """Suite selection controls scientific runs and resolution-worker counts."""
+    """Suite selection controls scientific runs and resolution-worker counts.
+
+    Parameters
+    ----------
+    captured : tuple
+        Synthetic captured-reference fixture used for offline validation.
+    quick_captured : tuple
+        Synthetic quick-mode reference fixture used for offline validation.
+    """
     base, full = captured
     full_actions = actions(base / "full-actions.jsonl")
     assert [item["action"] for item in full_actions].count("run") == 8
@@ -462,7 +711,16 @@ def test_explicit_full_and_default_quick_action_counts(captured, quick_captured)
 
 
 def test_quick_bundle_suite_requirement_and_relocation(quick_captured, tmp_path):
-    """Quick evidence is self-contained after relocation but cannot satisfy full."""
+    """Quick evidence is self-contained after relocation but cannot satisfy full.
+
+    Parameters
+    ----------
+    quick_captured : tuple
+        Synthetic quick-mode reference fixture used for offline validation.
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     quick, _ = quick_captured
     checked = TOOL.check_bundle(quick)
     assert checked["suite"] == "quick"
@@ -477,7 +735,16 @@ def test_quick_bundle_suite_requirement_and_relocation(quick_captured, tmp_path)
 
 
 def test_quick_embedded_compatibility_is_recomputed(quick_captured, tmp_path):
-    """Relocated checks do not trust stale compatibility pass flags."""
+    """Relocated checks do not trust stale compatibility pass flags.
+
+    Parameters
+    ----------
+    quick_captured : tuple
+        Synthetic quick-mode reference fixture used for offline validation.
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     quick, _ = quick_captured
     bundle = tmp_path / "stale-compatibility"
     shutil.copytree(quick, bundle)
@@ -495,7 +762,18 @@ def test_quick_embedded_compatibility_is_recomputed(quick_captured, tmp_path):
 
 @pytest.mark.parametrize("mode", ["number", "structure"])
 def test_quick_numerical_and_structural_mismatch(captured, tmp_path, mode):
-    """Quick results must match copied full results numerically and structurally."""
+    """Quick results must match copied full results numerically and structurally.
+
+    Parameters
+    ----------
+    captured : tuple
+        Synthetic captured-reference fixture used for offline validation.
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    mode : str
+        Calculation or validation mode, supplied by pytest parametrization.
+    """
     _, full = captured
     bundle, completed = capture_stub(
         tmp_path,
@@ -515,7 +793,14 @@ def test_quick_numerical_and_structural_mismatch(captured, tmp_path, mode):
 
 
 def test_quick_missing_baseline_fails_without_destination(tmp_path):
-    """The default quick suite requires an explicit full baseline."""
+    """The default quick suite requires an explicit full baseline.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     bundle, completed = capture_stub(tmp_path, "missing-baseline", suite=None)
     assert completed.returncode != 0
     assert "requires --baseline" in completed.stderr
@@ -526,7 +811,21 @@ def test_quick_missing_baseline_fails_without_destination(tmp_path):
 def test_invalid_baseline_rejected_before_capture(
     captured, quick_captured, tmp_path, kind
 ):
-    """Only a complete, valid full bundle can authorize a quick forecast."""
+    """Only a complete, valid full bundle can authorize a quick forecast.
+
+    Parameters
+    ----------
+    captured : tuple
+        Synthetic captured-reference fixture used for offline validation.
+    quick_captured : tuple
+        Synthetic quick-mode reference fixture used for offline validation.
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    kind : str
+        Tracer, input, or calculation classification for this case, supplied by
+        pytest parametrization.
+    """
     _, full = captured
     quick, _ = quick_captured
     baseline = quick if kind == "quick" else tmp_path / "invalid-full"
@@ -558,7 +857,19 @@ def test_invalid_baseline_rejected_before_capture(
 def test_quick_science_or_environment_mismatch_prevents_run(
     captured, tmp_path, mismatch
 ):
-    """Compatibility mismatches retain evidence and launch no forecast worker."""
+    """Compatibility mismatches retain evidence and launch no forecast worker.
+
+    Parameters
+    ----------
+    captured : tuple
+        Synthetic captured-reference fixture used for offline validation.
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    mismatch : str
+        Inconsistent metadata or preparation context, supplied by pytest
+        parametrization.
+    """
     base, full = captured
     reference = tmp_path / "reference"
     shutil.copytree(base / "reference", reference)
@@ -597,7 +908,16 @@ def test_quick_science_or_environment_mismatch_prevents_run(
 
 
 def test_location_only_compatibility(captured, tmp_path):
-    """A relocated but byte-identical reference remains compatible."""
+    """A relocated but byte-identical reference remains compatible.
+
+    Parameters
+    ----------
+    captured : tuple
+        Synthetic captured-reference fixture used for offline validation.
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     base, full = captured
     shutil.copytree(base / "reference", tmp_path / "moved-reference")
     bundle, completed = capture_stub(
@@ -612,7 +932,16 @@ def test_location_only_compatibility(captured, tmp_path):
 
 
 def test_manifest_coverage_and_partial_capture_rejected(captured, tmp_path):
-    """Suite labels cannot relabel full coverage or conceal partial captures."""
+    """Suite labels cannot relabel full coverage or conceal partial captures.
+
+    Parameters
+    ----------
+    captured : tuple
+        Synthetic captured-reference fixture used for offline validation.
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     relabeled = mutable_bundle(captured, tmp_path, "relabeled")
     manifest = manifest_for(relabeled)
     manifest["suite"] = "quick"
@@ -630,7 +959,18 @@ def test_manifest_coverage_and_partial_capture_rejected(captured, tmp_path):
 
 @pytest.mark.parametrize("mode", ["missing", "corrupt", "escape"])
 def test_nested_tool_snapshot_validation(captured, tmp_path, mode):
-    """Nested tool paths and bytes are independently checked."""
+    """Nested tool paths and bytes are independently checked.
+
+    Parameters
+    ----------
+    captured : tuple
+        Synthetic captured-reference fixture used for offline validation.
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    mode : str
+        Calculation or validation mode, supplied by pytest parametrization.
+    """
     bundle = mutable_bundle(captured, tmp_path)
     manifest = manifest_for(bundle)
     tool_record = manifest["shared_artifacts"]["tool_state"]
@@ -654,7 +994,16 @@ def test_nested_tool_snapshot_validation(captured, tmp_path, mode):
 
 
 def test_required_shared_artifact_inventory(captured, tmp_path):
-    """Removing shared evidence cannot be hidden by changing the manifest."""
+    """Removing shared evidence cannot be hidden by changing the manifest.
+
+    Parameters
+    ----------
+    captured : tuple
+        Synthetic captured-reference fixture used for offline validation.
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     bundle = mutable_bundle(captured, tmp_path)
     manifest = manifest_for(bundle)
     manifest["shared_artifacts"].pop("tool_state")
@@ -665,7 +1014,18 @@ def test_required_shared_artifact_inventory(captured, tmp_path):
 
 @pytest.mark.parametrize("location", ["manifest", "status"])
 def test_failed_repeat_status_is_semantic_failure(captured, tmp_path, location):
-    """Neither manifest nor stored repeat failure can be masked by agreement."""
+    """Neither manifest nor stored repeat failure can be masked by agreement.
+
+    Parameters
+    ----------
+    captured : tuple
+        Synthetic captured-reference fixture used for offline validation.
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    location : str
+        Location of the injected error, supplied by pytest parametrization.
+    """
     bundle = mutable_bundle(captured, tmp_path)
     manifest = manifest_for(bundle)
     repeated = manifest["repeat"]
@@ -685,7 +1045,16 @@ def test_failed_repeat_status_is_semantic_failure(captured, tmp_path, location):
 
 
 def test_repeat_roundtrip_and_artifact_aliases_rejected(captured, tmp_path):
-    """Repeat evidence must verify serialization and remain independent."""
+    """Repeat evidence must verify serialization and remain independent.
+
+    Parameters
+    ----------
+    captured : tuple
+        Synthetic captured-reference fixture used for offline validation.
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     bundle = mutable_bundle(captured, tmp_path, "roundtrip")
     manifest = manifest_for(bundle)
     repeated = manifest["repeat"]
@@ -716,7 +1085,19 @@ def test_repeat_roundtrip_and_artifact_aliases_rejected(captured, tmp_path):
 
 @pytest.mark.parametrize("coordinate", ["k", "mu"])
 def test_interior_grid_coordinate_mutation(captured, tmp_path, coordinate):
-    """Every interior k and mu coordinate is checked against the INI formula."""
+    """Every interior k and mu coordinate is checked against the INI formula.
+
+    Parameters
+    ----------
+    captured : tuple
+        Synthetic captured-reference fixture used for offline validation.
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    coordinate : str
+        Coordinate component under examination, supplied by pytest
+        parametrization.
+    """
     bundle = mutable_bundle(captured, tmp_path)
     manifest = manifest_for(bundle)
     case = manifest["primary_cases"][0]
@@ -734,7 +1115,18 @@ def test_interior_grid_coordinate_mutation(captured, tmp_path, coordinate):
 
 @pytest.mark.parametrize("location", ["result", "metadata", "bin-count"])
 def test_redshift_configuration_linkage(captured, tmp_path, location):
-    """Result and metadata redshifts must both match the configured binning."""
+    """Result and metadata redshifts must both match the configured binning.
+
+    Parameters
+    ----------
+    captured : tuple
+        Synthetic captured-reference fixture used for offline validation.
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    location : str
+        Location of the injected error, supplied by pytest parametrization.
+    """
     bundle = mutable_bundle(captured, tmp_path)
     manifest = manifest_for(bundle)
     case = manifest["primary_cases"][0]
@@ -766,7 +1158,18 @@ def test_redshift_configuration_linkage(captured, tmp_path, location):
 def test_tracer_and_pair_identities_come_from_configuration(
     captured, tmp_path, identity
 ):
-    """Metadata identities cannot be self-consistent inventions."""
+    """Metadata identities cannot be self-consistent inventions.
+
+    Parameters
+    ----------
+    captured : tuple
+        Synthetic captured-reference fixture used for offline validation.
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    identity : str
+        Provenance identity, supplied by pytest parametrization.
+    """
     bundle = mutable_bundle(captured, tmp_path)
     manifest = manifest_for(bundle)
     case = manifest["primary_cases"][-1]
@@ -795,7 +1198,19 @@ def test_tracer_and_pair_identities_come_from_configuration(
     ],
 )
 def test_capture_detects_reference_mutation(captured, tmp_path, mutation):
-    """Content and bounded inventory changes invalidate preservation evidence."""
+    """Content and bounded inventory changes invalidate preservation evidence.
+
+    Parameters
+    ----------
+    captured : tuple
+        Synthetic captured-reference fixture used for offline validation.
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    mutation : str
+        Modification applied to the otherwise valid fixture, supplied by pytest
+        parametrization.
+    """
     base, full = captured
     shutil.copytree(base / "reference", tmp_path / "reference")
     bundle, completed = capture_stub(

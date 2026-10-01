@@ -24,25 +24,44 @@ from fishhighz.survey import BinSpec, ForestInput
 
 
 def make_readers(root, population):
-    """Generate explicit cell counts and SNR files, never use package resources."""
+    """Write synthetic source counts and SNR tables and construct their readers.
+
+    Parameters
+    ----------
+    root : str or pathlib.Path
+        Existing directory receiving generated density and SNR text files.
+    population : int
+        Population index, either 0 or 1, controlling density and SNR amplitudes.
+
+    Returns
+    -------
+    readers : tuple of DensityReader and SNRReader
+        Readers for source counts per deg^2 per redshift/magnitude cell and
+        dimensionless pixel SNR.
+
+    Notes
+    -----
+    The source cells have explicit redshift spacing 0.5 and magnitude
+    spacing 1. Files are generated locally without using bundled survey data.
+    """
     root = Path(root)
     density = root / f"density-{population}.txt"
-    z = np.arange(2, 5, 0.5)
-    mags = np.arange(20, 24.0)
+    redshift_grid = np.arange(2, 5, 0.5)
+    magnitude_grid = np.arange(20, 24.0)
     np.savetxt(
         density,
         [
             [a, m, (1 + population) * (10 + a + (m - 20) ** 2) * 0.5]
-            for a in z
-            for m in mags
+            for a in redshift_grid
+            for m in magnitude_grid
         ],
     )
     paths = []
-    for m in mags:
+    for m in magnitude_grid:
         path = root / f"snr-{population}-{m}.txt"
-        wave = np.arange(3500, 5501, 100.0)
+        wavelength_grid = np.arange(3500, 5501, 100.0)
         header = f"BAND= r MAG= {m} EXPTIME= 4000 NEXP= 4\nWave " + " ".join(
-            f"SN(z={v})" for v in z
+            f"SN(z={v})" for v in redshift_grid
         )
         np.savetxt(
             path,
@@ -51,10 +70,10 @@ def make_readers(root, population):
                     w,
                     *[
                         (2 + population + 0.2 * a + 0.001 * w) / (1 + 0.1 * (m - 20))
-                        for a in z
+                        for a in redshift_grid
                     ],
                 ]
-                for w in wave
+                for w in wavelength_grid
             ],
             header=header,
         )
@@ -73,7 +92,31 @@ def make_readers(root, population):
 
 
 def run(root=None):
-    """Prepare once, refine derivatives and vary one combined prior without I/O."""
+    """Forecast two synthetic bins with fixed weights and nuisance priors.
+
+    Parameters
+    ----------
+    root : str or pathlib.Path, optional
+        Existing directory for generated raw inputs. Default is None, which uses
+        an automatically cleaned temporary directory.
+
+    Returns
+    -------
+    report : dict
+        Per-bin and combined Fisher matrices, dimensionless marginalized errors,
+        source weights, volumes in (Mpc/h)^3, redshift bounds, and provider-call
+        diagnostics.
+
+    Raises
+    ------
+    AssertionError
+        If derivative refinement changes the data Fisher beyond tolerance.
+
+    Notes
+    -----
+    Writes synthetic raw inputs, prepares each redshift bin once, and compares
+    three derivative step sizes with the same nuisance prior.
+    """
     if root is None:
         with TemporaryDirectory(prefix="fishhighz-survey-") as directory:
             return run(directory)
@@ -93,13 +136,35 @@ def run(root=None):
     base = np.array([[4, 1, -0.5], [1, 3, -0.3], [-0.5, -0.3, 2.0]])
 
     def model(t, z, k, mu, pairs):
+        """Evaluate the synthetic two-forest and galaxy spectra.
+
+        Parameters
+        ----------
+        t : ndarray of shape (n_parameters,)
+            Local model parameters in the provider's declared order.
+        z : float
+            Dimensionless evaluation redshift; unused by this synthetic model.
+        k : ndarray of shape (n_nodes,)
+            Comoving wavenumbers in h/Mpc.
+        mu : ndarray of shape (n_nodes,)
+            Dimensionless line-of-sight direction cosines; unused where the model is
+            isotropic.
+        pairs : ndarray of int, shape (n_pairs, 2)
+            Indices of the two observed fields in each requested spectrum.
+
+        Returns
+        -------
+        power : ndarray of shape (n_nodes, n_pairs)
+            Intrinsic three-dimensional power in (Mpc/h)^3; t contains amplitude and
+            galaxy bias.
+        """
         bias = np.array([1, 1, t[1]])
-        p = base * np.outer(bias, bias)
-        return t[0] * (1 + k[:, None]) * p[pairs[:, 0], pairs[:, 1]]
+        biased_power = base * np.outer(bias, bias)
+        return t[0] * (1 + k[:, None]) * biased_power[pairs[:, 0], pairs[:, 1]]
 
     bins = []
     for index, (lo, hi, z_eval) in enumerate([(2.2, 2.5, 2.3), (2.5, 2.7, 2.62)]):
-        g = prepare_geometry(
+        geometry = prepare_geometry(
             lo,
             hi,
             z_eval=z_eval,
@@ -128,7 +193,7 @@ def run(root=None):
             selection,
             [P3DProvider("external", model, binding, selection.required_pairs)],
         )
-        wavelength = LYA_REST_ANGSTROM * (1 + g.z_eval)
+        wavelength = LYA_REST_ANGSTROM * (1 + geometry.z_eval)
         responses = {"g": InstrumentResponse(0, 0)}
         forests = {}
         for i, name in enumerate(["fq", "fl"]):
@@ -140,20 +205,20 @@ def run(root=None):
             # Explicit illustrative rest limits, not an automatic source estimator.
             rest_min, rest_max = 1040.0, 1200.0
             z_source = wavelength / np.sqrt(rest_min * rest_max) - 1
-            m = np.array([20.0, 21.0, 22.0, 23.0])
+            magnitude_grid = np.array([20.0, 21.0, 22.0, 23.0])
             sampled = sample_forest_readers(
                 *readers[i],
-                g,
+                geometry,
                 responses[name],
                 z_source=z_source,
-                magnitudes=m,
+                magnitudes=magnitude_grid,
                 pixel_width_angstrom=pixel,
                 exposure_count=4,
             )
             forests[name] = ForestInput(
                 dict(
                     z_source=z_source,
-                    magnitudes=m,
+                    magnitudes=magnitude_grid,
                     quadrature=[0.5, 1, 1, 0.5],
                     rho=sampled["rho"],
                     variance=sampled["variance"],
@@ -167,17 +232,19 @@ def run(root=None):
                 auxiliary_coordinates=(2.4, 0.00035),
                 provenance=sampled["provenance"],
             )
-        n = readers[0][0].local_galaxy_density(g, [20, 21, 22, 23], [0.5, 1, 1, 0.5])
+        galaxy_density = readers[0][0].local_galaxy_density(
+            geometry, [20, 21, 22, 23], [0.5, 1, 1, 0.5]
+        )
         bins.append(
             prepare_bin(
                 BinSpec(
                     ("low", "high")[index],
-                    g,
+                    geometry,
                     grid,
                     p3d,
                     responses,
                     forests=forests,
-                    galaxies={"g": n},
+                    galaxies={"g": galaxy_density},
                     independent_sampling=True,
                 )
             )

@@ -7,19 +7,29 @@ from fishhighz.fields import ObservedField, PairSelection
 
 
 def fields():
+    """Construct the ordered synthetic observed-field inventory.
+
+    Returns
+    -------
+    fields : list of ObservedField
+        Field identities and tracer kinds in the order used by pair indices.
+    """
     return [
         ObservedField(x, "galaxy", "shared") for x in ("A_(q)", "B_b", "C", "D", "E")
     ]
 
 
 def test_dependencies_and_opaque_identity():
-    fs = fields()
-    ab = PairSelection(fs, [("B_b", "A_(q)")])
-    np.testing.assert_array_equal(ab.selected_pairs, [[0, 1]])
-    np.testing.assert_array_equal(ab.required_pairs, [[0, 0], [0, 1], [1, 1]])
-    autos = PairSelection(fs, [(0, 0), (1, 1)])
-    np.testing.assert_array_equal(autos.required_pairs, ab.required_pairs)
-    all_pairs = PairSelection(fs)
+    """Check dependencies and opaque identity."""
+    observed_fields = fields()
+    cross_selection = PairSelection(observed_fields, [("B_b", "A_(q)")])
+    np.testing.assert_array_equal(cross_selection.selected_pairs, [[0, 1]])
+    np.testing.assert_array_equal(
+        cross_selection.required_pairs, [[0, 0], [0, 1], [1, 1]]
+    )
+    autos = PairSelection(observed_fields, [(0, 0), (1, 1)])
+    np.testing.assert_array_equal(autos.required_pairs, cross_selection.required_pairs)
+    all_pairs = PairSelection(observed_fields)
     assert all_pairs.selected_pairs.shape == (15, 2)
     assert all_pairs.available_pairs.tolist() == [
         [0, 0],
@@ -49,10 +59,11 @@ def test_dependencies_and_opaque_identity():
 
 
 def test_named_lookup_products_and_permutation():
-    fs = fields()
+    """Check named lookup products and permutation."""
+    observed_fields = fields()
     chosen = [("C", "B_b"), ("A_(q)", "A_(q)"), ("A_(q)", "B_b")]
-    prepared = PairSelection(fs, chosen)
-    names = [f.id for f in fs]
+    prepared = PairSelection(observed_fields, chosen)
+    names = [f.id for f in observed_fields]
     required = [frozenset((names[i], names[j])) for i, j in prepared.required_pairs]
     # Explicit products for BC, AA, AB in that order, each table row-major.
     expected = [
@@ -127,6 +138,13 @@ def test_named_lookup_products_and_permutation():
     ],
 )
 def test_invalid_pairs(selected):
+    """Check invalid pairs.
+
+    Parameters
+    ----------
+    selected : list
+        Selected spectrum definitions, supplied by pytest parametrization.
+    """
     with pytest.raises(ValueError):
         PairSelection(fields(), selected)
 
@@ -142,18 +160,26 @@ def test_invalid_pairs(selected):
     ],
 )
 def test_invalid_fields(args):
+    """Check invalid fields.
+
+    Parameters
+    ----------
+    args : tuple
+        Positional test inputs, supplied by pytest parametrization.
+    """
     with pytest.raises(ValueError):
         ObservedField(*args)
 
 
 def test_duplicate_and_ownership():
-    fs = fields()
+    """Check duplicate and ownership."""
+    observed_fields = fields()
     with pytest.raises(ValueError):
-        PairSelection([fs[0], fs[0]])
+        PairSelection([observed_fields[0], observed_fields[0]])
     selected = np.array([[0, 1]])
-    prepared = PairSelection(fs, selected)
+    prepared = PairSelection(observed_fields, selected)
     selected[:] = 3
-    fs.clear()
+    observed_fields.clear()
     assert len(prepared.fields) == 5
     assert prepared.selected_pairs.tolist() == [[0, 1]]
     for name in (

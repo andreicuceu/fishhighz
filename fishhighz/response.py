@@ -13,6 +13,26 @@ _FWHM_PER_SIGMA = 2 * np.sqrt(2 * np.log(2))
 
 
 def _width(value, name):
+    """Validate a finite nonnegative instrumental width.
+
+    Parameters
+    ----------
+    value : float
+        Width in the units of the named quantity.
+    name : str
+        Quantity name used in validation errors.
+
+    Returns
+    -------
+    width : float
+        Validated width in unchanged units.
+
+    Raises
+    ------
+    ValueError
+        If a width is negative or nonfinite, or the conversion is not
+        representable.
+    """
     value = scalar(value, name)
     if value < 0:
         raise ValueError(f"{name} must be nonnegative")
@@ -20,6 +40,28 @@ def _width(value, name):
 
 
 def _width_conversion(width, factor, name):
+    """Apply a scalar width conversion while checking representability.
+
+    Parameters
+    ----------
+    width : float
+        Input width, already validated as finite and nonnegative.
+    factor : float
+        Multiplicative conversion factor in output units per input unit.
+    name : str
+        Width name used in errors.
+
+    Returns
+    -------
+    width : float
+        Converted width in output units.
+
+    Raises
+    ------
+    ValueError
+        If a width is negative or nonfinite, or the conversion is not
+        representable.
+    """
     with np.errstate(over="ignore", under="ignore", invalid="ignore"):
         result = np.float64(width) * factor
     if not np.isfinite(result) or (width > 0 and result <= 0):
@@ -28,37 +70,133 @@ def _width_conversion(width, factor, name):
 
 
 def pixel_width_angstrom_to_velocity(pixel_width_angstrom, *, lambda_obs_angstrom):
-    """Full pixel width to km/s; local narrow-width wavelength approximation."""
+    """Convert a full pixel width from wavelength to velocity units.
+
+    Parameters
+    ----------
+    pixel_width_angstrom : float
+        Nonnegative full pixel width in Angstrom.
+    lambda_obs_angstrom : float
+        Positive observed wavelength in Angstrom.
+
+    Returns
+    -------
+    width : float
+        Converted full pixel width in km/s.
+
+    Raises
+    ------
+    ValueError
+        If a width is negative or nonfinite, or the conversion is not
+        representable.
+
+    Notes
+    -----
+    Use the local narrow-width approximation c*width/lambda_obs.
+    """
     width = _width(pixel_width_angstrom, "pixel_width_angstrom")
     wavelength = _positive(lambda_obs_angstrom, "lambda_obs_angstrom")
     return _width_conversion(width, SPEED_LIGHT_KMS / wavelength, "pixel width")
 
 
 def gaussian_sigma_angstrom_to_velocity(sigma_angstrom, *, lambda_obs_angstrom):
-    """Gaussian one-sigma wavelength width to km/s, using c*sigma/lambda_obs."""
+    """Convert a Gaussian standard deviation from wavelength to velocity units.
+
+    Parameters
+    ----------
+    sigma_angstrom : float
+        Nonnegative Gaussian standard deviation in Angstrom.
+    lambda_obs_angstrom : float
+        Positive observed wavelength in Angstrom.
+
+    Returns
+    -------
+    width : float
+        Converted Gaussian standard deviation in km/s.
+
+    Raises
+    ------
+    ValueError
+        If a width is negative or nonfinite, or the conversion is not
+        representable.
+
+    Notes
+    -----
+    Use the local narrow-width approximation c*width/lambda_obs.
+    """
     width = _width(sigma_angstrom, "sigma_angstrom")
     wavelength = _positive(lambda_obs_angstrom, "lambda_obs_angstrom")
     return _width_conversion(width, SPEED_LIGHT_KMS / wavelength, "Gaussian sigma")
 
 
 def gaussian_fwhm_velocity_to_sigma(fwhm_velocity):
-    """Gaussian velocity FWHM (km/s) to one-sigma (km/s), exactly once."""
+    """Convert a Gaussian velocity FWHM to its standard deviation.
+
+    Parameters
+    ----------
+    fwhm_velocity : float
+        Nonnegative full width at half maximum in km/s.
+
+    Returns
+    -------
+    sigma : float
+        Gaussian standard deviation in km/s.
+
+    Raises
+    ------
+    ValueError
+        If a width is negative or nonfinite, or the conversion is not
+        representable.
+    """
     return _width_conversion(
         _width(fwhm_velocity, "fwhm_velocity"), 1 / _FWHM_PER_SIGMA, "Gaussian FWHM"
     )
 
 
 def resolving_power_fwhm_to_sigma(resolving_power_fwhm):
-    """R=lambda/FWHM_lambda to Gaussian sigma in km/s."""
+    """Convert FWHM-based resolving power to a Gaussian velocity dispersion.
+
+    Parameters
+    ----------
+    resolving_power_fwhm : float
+        Positive dimensionless R=lambda/FWHM_lambda.
+
+    Returns
+    -------
+    sigma : float
+        Gaussian standard deviation c/(R*sqrt(8*ln(2))) in km/s.
+
+    Raises
+    ------
+    ValueError
+        If resolving power or the converted dispersion is invalid.
+    """
     resolving = _positive(resolving_power_fwhm, "resolving_power_fwhm")
     return _positive((SPEED_LIGHT_KMS / resolving) / _FWHM_PER_SIGMA, "sigma_velocity")
 
 
 def legacy_resolving_power_to_sigma(resolving_power_legacy):
-    """Legacy compatibility only: sigma=c/R, using the new c=299792.458 km/s.
+    """Convert legacy resolving power using the explicit sigma=c/R convention.
 
-    lyaforecast consumes res_kms as sigma and uses c=299800 km/s. This helper
-    preserves that interpretation, with an explicitly different light constant.
+    Parameters
+    ----------
+    resolving_power_legacy : float
+        Positive dimensionless legacy resolving power.
+
+    Returns
+    -------
+    sigma : float
+        Gaussian standard deviation in km/s.
+
+    Raises
+    ------
+    ValueError
+        If resolving power or the converted dispersion is invalid.
+
+    Notes
+    -----
+    The legacy reference treats res_kms as sigma. This function retains that
+    interpretation but uses c=299792.458 km/s instead of 299800 km/s.
     """
     resolving = _positive(resolving_power_legacy, "resolving_power_legacy")
     return _positive(SPEED_LIGHT_KMS / resolving, "legacy sigma_velocity")
@@ -75,6 +213,19 @@ class InstrumentResponse:
     gaussian_sigma_velocity: float
 
     def __post_init__(self):
+        """Validate and normalize the pixel width and Gaussian standard deviation.
+
+        Returns
+        -------
+        None
+            Store finite nonnegative widths in km/s as Python floats.
+
+        Raises
+        ------
+        ValueError
+            If a width is negative or nonfinite, or the conversion is not
+            representable.
+        """
         for name in ("pixel_width_velocity", "gaussian_sigma_velocity"):
             object.__setattr__(self, name, _width(getattr(self, name), name))
 
@@ -82,19 +233,46 @@ class InstrumentResponse:
 def velocity_response(
     k_parallel_velocity, *, pixel_width_velocity, gaussian_sigma_velocity
 ):
-    """Return signed W(node,) for nonnegative paired velocity wavenumbers s/km.
+    """Evaluate the signed instrumental amplitude response in velocity units.
 
-    W=sinc(q*Delta_v/(2*pi))*exp(-(q*sigma_v)^2/2), with exact W(0)=1.
-    Strong attenuation may underflow to zero. Inputs are never mutated.
+    Parameters
+    ----------
+    k_parallel_velocity : array_like of shape (n_node,)
+        Nonnegative line-of-sight wavenumbers in s/km, including zero.
+    pixel_width_velocity : float
+        Nonnegative full pixel width in km/s.
+    gaussian_sigma_velocity : float
+        Nonnegative Gaussian standard deviation in km/s.
+
+    Returns
+    -------
+    response : ndarray of shape (n_node,)
+        Dimensionless signed sinc-times-Gaussian response, with W(0)=1.
+
+    Raises
+    ------
+    ValueError
+        If inputs or intermediate response arguments are invalid.
+
+    Notes
+    -----
+    The Gaussian multiplies the amplitude. Auto power uses W**2. Strong
+    attenuation may underflow to zero; input arrays are not mutated.
     """
-    q = real_array(k_parallel_velocity, "k_parallel_velocity")
-    if q.ndim != 1 or not q.size or np.any(q < 0):
+    velocity_wavenumber = real_array(k_parallel_velocity, "k_parallel_velocity")
+    if (
+        velocity_wavenumber.ndim != 1
+        or not velocity_wavenumber.size
+        or np.any(velocity_wavenumber < 0)
+    ):
         raise ValueError("require nonempty 1D nonnegative velocity wavenumbers")
     pixel = _width(pixel_width_velocity, "pixel_width_velocity")
     sigma = _width(gaussian_sigma_velocity, "gaussian_sigma_velocity")
     with np.errstate(over="ignore", invalid="ignore", under="ignore"):
-        result, x, gaussian = _transfer(q, np.array([pixel]), np.array([sigma]))
-    if not np.all(np.isfinite(x)) or not np.all(np.isfinite(gaussian)):
+        result, pixel_phase, gaussian_phase = _transfer(
+            velocity_wavenumber, np.array([pixel]), np.array([sigma])
+        )
+    if not np.all(np.isfinite(pixel_phase)) or not np.all(np.isfinite(gaussian_phase)):
         raise ValueError("response arguments are not representable")
     if not np.all(np.isfinite(result)):
         raise ValueError("response result is not finite")
@@ -102,11 +280,34 @@ def velocity_response(
 
 
 def prepare_response(fields, k, mu, *, a_v, settings):
-    """Return immutable W(node,field) in explicit ObservedField order.
+    """Prepare immutable instrumental amplitudes in observed field order.
 
-    k (h_fid/Mpc), mu in [0,1] are paired nonempty 1D observed nodes, including
-    zero k. settings maps every field ID to InstrumentResponse, without defaults.
-    Physical labels never merge settings; no AP mapping is applied here.
+    Parameters
+    ----------
+    fields : iterable of ObservedField
+        Ordered field identities; physical tracer labels do not merge settings.
+    k : array_like of shape (n_node,)
+        Nonnegative observed wavenumbers in h_fid/Mpc.
+    mu : array_like of shape (n_node,)
+        Paired direction cosines on [0, 1].
+    a_v : float
+        Positive H(z)/((1+z)*h_fid) in (km/s)/(Mpc/h_fid).
+    settings : mapping of str to InstrumentResponse
+        Explicit pixel and Gaussian widths for every field ID.
+
+    Returns
+    -------
+    response : ndarray of shape (n_node, n_field)
+        Immutable dimensionless amplitude responses.
+
+    Raises
+    ------
+    ValueError
+        If settings, coordinates, or converted response values are invalid.
+
+    Notes
+    -----
+    No Alcock–Paczynski mapping is applied to the instrumental response.
     """
     fields = PairSelection(fields).fields
     if not hasattr(settings, "keys") or set(settings) != {f.id for f in fields}:
@@ -124,16 +325,20 @@ def prepare_response(fields, k, mu, *, a_v, settings):
         raise ValueError("require paired 1D k>=0 and mu in [0,1]")
     a_v = _positive(a_v, "a_v")
     with np.errstate(over="ignore", under="ignore", invalid="ignore"):
-        q = (k * mu) / a_v
-    if not np.all(np.isfinite(q)) or np.any((k > 0) & (mu > 0) & (q == 0)):
+        velocity_wavenumber = (k * mu) / a_v
+    if not np.all(np.isfinite(velocity_wavenumber)) or np.any(
+        (k > 0) & (mu > 0) & (velocity_wavenumber == 0)
+    ):
         raise ValueError("response velocity coordinates are not representable")
     pixel = np.array([settings[f.id].pixel_width_velocity for f in fields])
     sigma = np.array([settings[f.id].gaussian_sigma_velocity for f in fields])
     with np.errstate(over="ignore", under="ignore", invalid="ignore"):
-        result, x, gaussian = _transfer(q, pixel, sigma)
+        result, pixel_phase, gaussian_phase = _transfer(
+            velocity_wavenumber, pixel, sigma
+        )
     if (
-        not np.all(np.isfinite(x))
-        or not np.all(np.isfinite(gaussian))
+        not np.all(np.isfinite(pixel_phase))
+        or not np.all(np.isfinite(gaussian_phase))
         or not np.all(np.isfinite(result))
     ):
         raise ValueError("response arguments/results are not representable")
@@ -141,10 +346,29 @@ def prepare_response(fields, k, mu, *, a_v, settings):
 
 
 def pair_response(response, selection):
-    """Gather W_i*W_j in original required-pair order, shape (node,required_pair).
+    """Multiply field amplitudes for each covariance-required spectrum.
 
-    Multiply intrinsic power and Jacobians by this result, then gather selected
-    means. Supplied noise gets no automatic W; P1D consumers explicitly apply W^2.
+    Parameters
+    ----------
+    response : array_like of shape (n_node, n_field)
+        Finite dimensionless instrumental amplitudes in field order.
+    selection : PairSelection
+        Pair definitions including spectra needed to form covariance.
+
+    Returns
+    -------
+    products : ndarray of shape (n_node, n_required_pair)
+        Dimensionless W_i*W_j in required-pair order.
+
+    Raises
+    ------
+    ValueError
+        If the selection, array shape, or resulting products are invalid.
+
+    Notes
+    -----
+    Apply this factor to intrinsic power and its derivatives. Supplied noise
+    receives no automatic response; a P1D consumer explicitly applies W**2.
     """
     if not isinstance(selection, PairSelection):
         raise ValueError("require PairSelection")

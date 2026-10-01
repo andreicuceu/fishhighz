@@ -16,10 +16,24 @@ from fishhighz.validation.compatibility_weights import (
 
 
 def homogeneous(signal=2.0):
+    """Construct a one-sample homogeneous forest-weight fixture.
+
+    Parameters
+    ----------
+    signal : float, optional
+        Auxiliary three-dimensional signal power in deg^2 km/s. Default is 2.0.
+
+    Returns
+    -------
+    inputs : WeightInputs
+        Unit density, quadrature, variance, length, pixel width, and P1D with
+        the requested auxiliary signal.
+    """
     return WeightInputs(*(np.ones(1) for _ in range(4)), 1.0, 1.0, signal, 1.0)
 
 
 def test_exact_fixed_point_stops_after_actual_double_count():
+    """Check exact fixed point stops after actual double count."""
     result = adaptive_weights(homogeneous(), "sum_intrinsic", context=AUTO_CONTEXTS[0])
     assert result["status"] == "converged"
     assert result["candidate"] == 3
@@ -30,6 +44,7 @@ def test_exact_fixed_point_stops_after_actual_double_count():
 
 
 def test_decay_and_late_candidate_report_cap():
+    """Check decay and late candidate report cap."""
     for inputs, cap in ((homogeneous(0.99), 96), (homogeneous(), 5)):
         result = adaptive_weights(
             inputs, "sum_intrinsic", context=AUTO_CONTEXTS[0], max_updates=cap
@@ -43,6 +58,13 @@ def test_decay_and_late_candidate_report_cap():
 
 @pytest.mark.parametrize("variant", VARIANTS)
 def test_exactly_three_updates_unchanged(variant):
+    """Check exactly three updates unchanged.
+
+    Parameters
+    ----------
+    variant : str
+        Forest-weight recurrence variant, supplied by pytest parametrization.
+    """
     inputs = homogeneous()
     expected = seed(inputs)
     for _ in range(3):
@@ -51,6 +73,7 @@ def test_exactly_three_updates_unchanged(variant):
 
 
 def test_ineligible_prefix_cross_and_nonpositive_signal():
+    """Check ineligible prefix cross and nonpositive signal."""
     for variant, context, signal in (
         ("prefix_intrinsic", AUTO_CONTEXTS[0], 2),
         ("prefix_aliasing", AUTO_CONTEXTS[0], 2),
@@ -65,6 +88,7 @@ def test_ineligible_prefix_cross_and_nonpositive_signal():
 
 def test_arithmetic_failure_retains_last_finite_state():
     # Signed density gives J1=-1/2: P + noise = 2 - 2 = 0.
+    """Check arithmetic failure retains last finite state."""
     inputs = replace(homogeneous(), density=np.array([-1.0]))
     result = adaptive_weights(inputs, "sum_intrinsic", context=AUTO_CONTEXTS[0])
     assert result["status"] == "arithmetic_failure"

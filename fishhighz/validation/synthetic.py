@@ -15,15 +15,55 @@ FIELD_ORDER = ("lya(qso)", "qso", "lbg", "lae", "lya(lbg)")
 
 
 def run_case(case):
-    """Compare correlated selected Fisher with independent full-field slicing."""
+    """Compare correlated selected Fisher with independent full-field slicing.
+
+    Parameters
+    ----------
+    case : str
+        Identifier of one of the seven original DESI-2 validation
+        configurations.
+
+    Returns
+    -------
+    arrays : dict of str to ndarray
+        Scalar amplitude Fisher matrix, shape (1, 1), and error, shape (1,).
+    report : dict
+        Original field/pair ordering and independent-oracle description.
+
+    Notes
+    -----
+    Asserts covariance and information agreement against direct five-field reconstruction using tiny synthetic arrays.
+    """
     select = selection(case)
     registry = ParameterRegistry([Parameter("A", 1, "target", step=0.001)])
-    b = np.array([-0.4, 2, 3, 1.5, -0.3])
-    signal = np.outer(b, b) + np.diag([0.2, 0.3, 0.4, 0.5, 0.6])
+    field_biases = np.array([-0.4, 2, 3, 1.5, -0.3])
+    signal = np.outer(field_biases, field_biases) + np.diag([0.2, 0.3, 0.4, 0.5, 0.6])
     ids = np.array([FIELD_ORDER.index(f.id) for f in select.fields])
     local = signal[np.ix_(ids, ids)]
 
     def model(theta, z, k, mu, pairs):
+        """Evaluate a correlated synthetic amplitude model on paired Fourier nodes.
+
+        Parameters
+        ----------
+        theta : array_like, shape (n_parameter,)
+            Model parameter values in the declared local parameter order.
+        z : float
+            Dimensionless evaluation redshift.
+        k : array_like
+            Comoving Fourier wavenumbers in h/Mpc; array shape follows the model or
+            paired grid.
+        mu : array_like
+            Dimensionless line-of-sight direction cosines aligned with the Fourier
+            grid.
+        pairs : array_like, shape (n_pair, 2)
+            Ordered pairs of integer field indices.
+
+        Returns
+        -------
+        power : ndarray, shape (n_cell, n_pair)
+            Synthetic pair power scaled by the dimensionless amplitude.
+        """
         return theta[0] * (1 + k[:, None]) * local[pairs[:, 0], pairs[:, 1]]
 
     p3d = PreparedP3D(
@@ -71,8 +111,8 @@ def run_case(case):
     fisher = 0.0
     covariances = []
     for k, modes in zip(grid.k_flat, prepared.modes):
-        s = (1 + k) * signal
-        total = s + 2 * np.eye(5)
+        signal_power = (1 + k) * signal
+        total = signal_power + 2 * np.eye(5)
         covariance = np.array(
             [
                 [
@@ -82,10 +122,12 @@ def run_case(case):
                 for i, j in full_pairs
             ]
         )
-        sub = covariance[np.ix_(indices, indices)]
-        jac = np.array([s[i, j] for i, j in wanted])
-        fisher += jac @ np.linalg.solve(sub, jac)
-        covariances.append(sub)
+        selected_covariance = covariance[np.ix_(indices, indices)]
+        amplitude_derivative = np.array([signal_power[i, j] for i, j in wanted])
+        fisher += amplitude_derivative @ np.linalg.solve(
+            selected_covariance, amplitude_derivative
+        )
+        covariances.append(selected_covariance)
     np.testing.assert_allclose(
         prepared.factors @ prepared.factors.swapaxes(-1, -2),
         covariances,
@@ -108,7 +150,13 @@ def run_case(case):
 
 
 def run():
-    """All seven tiny synthetic forecasts, without local files or reference imports."""
+    """All seven tiny synthetic forecasts, without local files or reference imports.
+
+    Returns
+    -------
+    results : dict
+        Seven case summaries and independent scalar amplitude information.
+    """
     return {
         case: {**report, "F_AA": float(arrays["fisher"][0, 0])}
         for case in CASE_IDS
@@ -117,7 +165,24 @@ def run():
 
 
 def evidence_payload(task, *, null=False):
-    """Tiny semantically complete schema-2 oracle fixture, no external assets."""
+    """Tiny semantically complete schema-2 oracle fixture, no external assets.
+
+    Parameters
+    ----------
+    task : dict
+        Declared case, bin, selected field pairs, parameter order and validation
+        thresholds.
+    null : bool
+        Set the second parameter derivative to zero to produce a null direction.
+        Default is ``False``.
+
+    Returns
+    -------
+    arrays : dict of str to ndarray
+        Tiny grid, power, derivative, covariance and Fisher evidence.
+    report : dict
+        Bound synthetic settings and validation metadata.
+    """
     from .schema import assemble, grid_nodes
 
     settings = dict(
@@ -134,23 +199,40 @@ def evidence_payload(task, *, null=False):
             mu_order=3,
         ),
     )
-    k, mu, _ = grid_nodes(settings)
-    n = len(task["fields"])
-    bias = np.arange(1, n + 1, dtype=float)
+    k_grid, mu_grid, _ = grid_nodes(settings)
+    n_fields = len(task["fields"])
+    bias = np.arange(1, n_fields + 1, dtype=float)
     bias[0] *= -1
-    matrix = np.outer(bias, bias) + np.eye(n)
+    matrix = np.outer(bias, bias) + np.eye(n_fields)
     required = np.array(task["required_pairs"])
     selected = np.array(task["selected_pairs"])
-    total = np.tile(matrix[required[:, 0], required[:, 1]], (len(k), 1))
-    base = np.tile(matrix[selected[:, 0], selected[:, 1]], (len(k), 1))
-    targets = np.ones((len(k), len(task["parameters"])))
+    total = np.tile(matrix[required[:, 0], required[:, 1]], (len(k_grid), 1))
+    base = np.tile(matrix[selected[:, 0], selected[:, 1]], (len(k_grid), 1))
+    targets = np.ones((len(k_grid), len(task["parameters"])))
     if len(task["parameters"]) == 2:
-        targets[:, 1] = 0 if null else mu**2
+        targets[:, 1] = 0 if null else mu_grid**2
     return assemble(task, total, base[:, :, None] * targets[:, None, :], settings)
 
 
 def convergence_payload(task, *, null=False):
-    """Analytic constant-information control with distinct recorded refinements."""
+    """Analytic constant-information control with distinct recorded refinements.
+
+    Parameters
+    ----------
+    task : dict
+        Declared case, bin, selected field pairs, parameter order and validation
+        thresholds.
+    null : bool
+        Set the second derivative to zero to test constrained-coordinate
+        handling. Default is ``False``.
+
+    Returns
+    -------
+    arrays : dict of str to ndarray
+        Constant-information payload with distinct recorded trial controls.
+    report : dict
+        Analytic refinement schedule and convergence outcomes.
+    """
     from .schema import assemble, grid_nodes
     from .study import DEFAULT, study
 
@@ -169,20 +251,38 @@ def convergence_payload(task, *, null=False):
             mu_order=32,
         ),
     )
-    k, mu, _ = grid_nodes(settings)
-    n = len(task["fields"])
-    matrix = np.eye(n) + np.ones((n, n))
+    k_grid, mu_grid, _ = grid_nodes(settings)
+    n_fields = len(task["fields"])
+    matrix = np.eye(n_fields) + np.ones((n_fields, n_fields))
     pairs = np.asarray(task["required_pairs"])
-    total = np.tile(matrix[pairs[:, 0], pairs[:, 1]], (len(k), 1))
-    j = np.ones((len(k), len(task["selected_pairs"]), 2))
-    j[:, :, 1] = 0 if null else mu[:, None] ** 2
-    arrays, report = assemble(task, total, j, settings)
+    total = np.tile(matrix[pairs[:, 0], pairs[:, 1]], (len(k_grid), 1))
+    observed_jacobian = np.ones((len(k_grid), len(task["selected_pairs"]), 2))
+    observed_jacobian[:, :, 1] = 0 if null else mu_grid[:, None] ** 2
+    arrays, report = assemble(task, total, observed_jacobian, settings)
 
     class AnalyticStudy:
         selection = selection(task["case"])
         _prepared = {}
 
         def evaluate(self, task, controls):
+            """Return the analytic constant-information state for a declared trial.
+
+            Parameters
+            ----------
+            task : dict
+                Declared case, bin, selected field pairs, parameter order and validation
+                thresholds.
+            controls : dict
+                Quadrature orders, grid subdivisions, derivative step and applicable
+                forest-weight convergence controls.
+
+            Returns
+            -------
+            arrays : dict
+                Shallow copy of the fixed synthetic numerical payload.
+            report : dict
+                Shallow copy of the fixed synthetic report.
+            """
             return dict(arrays), dict(report)
 
     # This fixture asserts the analytic information limit, not a real survey.

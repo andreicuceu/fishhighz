@@ -34,11 +34,51 @@ FIXED_REFERENCE = dict(
 
 
 def trial_id(controls):
+    """Bind a refinement identity to every numerical control.
+
+    Parameters
+    ----------
+    controls : dict
+        Quadrature orders, grid subdivisions, derivative step and applicable
+        forest-weight convergence controls.
+
+    Returns
+    -------
+    identity : str
+        Canonical SHA-256 of the exact control mapping.
+    """
     return canonical(controls)
 
 
 def bind(arrays, report, outcomes, *, method="legacy"):
-    """Persist references without substituting or recomputing numerical operands."""
+    """Persist references without substituting or recomputing numerical operands.
+
+    Parameters
+    ----------
+    arrays : dict of str to ndarray
+        Numerical evidence arrays; Fourier-cell axes and pair order follow the
+        declared task. Powers use (Mpc/h)^3 and volumes use (Mpc/h)^3 unless
+        separately labeled.
+    report : dict
+        Scientific settings, provenance, array inventory and validation outcomes
+        associated with the numerical evidence.
+    outcomes : list of dict
+        Ordered attempted-trial outcomes with identities, controls and
+        successful-array indices.
+    method : str
+        Forest-weight prescription: legacy, inverse_variance, early_lyaforecast
+        or mcdonald, as applicable. Default is ``'legacy'``.
+
+    Raises
+    ------
+    ValueError :
+        If inputs, declared identities or numerical validation conditions are
+        inconsistent.
+
+    Notes
+    -----
+    Adds trial_contract to report in place; numerical arrays are retained unchanged.
+    """
     if method == "legacy":
         version = 1
         control_keys = CONTROL_KEYS
@@ -88,7 +128,32 @@ def bind(arrays, report, outcomes, *, method="legacy"):
 
 
 def validate(arrays, report):
-    """Check identities and controls before any convergence metric is evaluated."""
+    """Check identities and controls before any convergence metric is evaluated.
+
+    Parameters
+    ----------
+    arrays : dict of str to ndarray
+        Numerical evidence arrays; Fourier-cell axes and pair order follow the
+        declared task. Powers use (Mpc/h)^3 and volumes use (Mpc/h)^3 unless
+        separately labeled.
+    report : dict
+        Scientific settings, provenance, array inventory and validation outcomes
+        associated with the numerical evidence.
+
+    Returns
+    -------
+    valid : bool
+        True when saved trials reproduce the controller schedule, metrics and
+        verdict.
+
+    Raises
+    ------
+    ValueError :
+        If inputs, declared identities or numerical validation conditions are
+        inconsistent.
+    KeyError :
+        If a required saved trial or evidence entry is absent.
+    """
     contract = report.get("trial_contract", {})
     version = contract.get("version")
     if version == 1:
@@ -174,11 +239,11 @@ def validate(arrays, report):
     controls = report.get("study_controls", [])
     if [by_id[i]["controls"] for i in successful] != controls:
         raise ValueError("trial controls/array ordering mismatch")
-    n = len(successful)
+    n_successful_trials = len(successful)
     for name, shape in [
-        ("study_fisher", (n, *arrays["fisher"].shape)),
-        ("study_pair_fisher", (n, *arrays["pair_fisher"].shape)),
-        ("study_volume", (n,)),
+        ("study_fisher", (n_successful_trials, *arrays["fisher"].shape)),
+        ("study_pair_fisher", (n_successful_trials, *arrays["pair_fisher"].shape)),
+        ("study_volume", (n_successful_trials,)),
     ]:
         if name not in arrays or arrays[name].shape != shape:
             raise ValueError("wrong trial numerical dimensions")
@@ -280,6 +345,32 @@ def validate(arrays, report):
         weight_method = method
 
         def evaluate(self, task, controls):
+            """Replay one exact saved refinement without evaluating a physical model.
+
+            Parameters
+            ----------
+            task : dict
+                Declared case, bin, selected field pairs, parameter order and validation
+                thresholds.
+            controls : dict
+                Quadrature orders, grid subdivisions, derivative step and applicable
+                forest-weight convergence controls.
+
+            Returns
+            -------
+            arrays : dict of str to ndarray
+                Saved joint and individual Fisher matrices for the exact trial.
+            report : dict
+                Saved volume and applicable forest-weight metadata.
+
+            Raises
+            ------
+            KeyError :
+                If a required saved trial or evidence entry is absent.
+            ValueError :
+                If inputs, declared identities or numerical validation conditions are
+                inconsistent.
+            """
             identity = trial_id(controls)
             if identity not in by_id:
                 raise KeyError("missing attempted refinement trial")

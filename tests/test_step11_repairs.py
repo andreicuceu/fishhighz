@@ -16,23 +16,71 @@ from fishhighz.weights import prepare_forest_weights
 
 
 def poly(z, m):
+    """Evaluate the nonseparable synthetic source-density polynomial.
+
+    Parameters
+    ----------
+    z : float or ndarray
+        Dimensionless redshift.
+    m : float or ndarray
+        Apparent magnitude.
+
+    Returns
+    -------
+    density : float or ndarray
+        Source density per deg^2 per redshift per magnitude.
+    """
     return 2 + z**2 + 0.3 * (m - 20) ** 2 + 0.2 * z * (m - 20)
 
 
 def irregular_fixture(path, shuffle=False):
-    z = np.array([2.0, 2.3, 2.9, 3.7])
-    m = np.array([20.0, 20.5, 21.0, 21.5])
+    """Write source counts on nonuniform redshift cells.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Destination of the generated nonuniform source-count table.
+    shuffle : bool, optional
+        Whether to permute the generated table rows with a fixed random seed.
+        Default is False.
+
+    Returns
+    -------
+    fixture : tuple of ndarray
+        Redshift centers (4,), magnitudes (4,), redshift-cell widths (4,), and
+        table rows (16, 3).
+    """
+    redshift_grid = np.array([2.0, 2.3, 2.9, 3.7])
+    magnitude_grid = np.array([20.0, 20.5, 21.0, 21.5])
     widths = np.array([0.2, 0.4, 0.7, 0.9])
     rows = np.array(
-        [[a, b, poly(a, b) * w * 0.5] for a, w in zip(z, widths) for b in m]
+        [
+            [a, b, poly(a, b) * w * 0.5]
+            for a, w in zip(redshift_grid, widths)
+            for b in magnitude_grid
+        ]
     )
     if shuffle:
         np.random.default_rng(4).shuffle(rows)
     np.savetxt(path, rows)
-    return z, m, widths, rows
+    return redshift_grid, magnitude_grid, widths, rows
 
 
 def density(path, **kwargs):
+    """Read the synthetic count table with explicit cell-width options.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Path of the temporary test artifact to read or write.
+    **kwargs : dict
+        DensityReader options, including explicit redshift cell widths, density normalization, and interpolation settings.
+
+    Returns
+    -------
+    reader : DensityReader
+        Density interpolator with the requested raw-cell semantics.
+    """
     return DensityReader(
         path,
         semantics="cell_count_per_deg2",
@@ -46,64 +94,115 @@ def density(path, **kwargs):
 @pytest.mark.parametrize("target", [None, 100.0])
 @pytest.mark.parametrize("masked", [False, True])
 def test_explicit_density_widths(tmp_path, shuffle, target, masked):
+    """Check explicit density widths.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    shuffle : bool
+        Whether to permute input ordering, supplied by pytest parametrization.
+    target : float or None
+        Target quantity or object under examination, supplied by pytest
+        parametrization.
+    masked : bool
+        Whether the fixture contains masked entries, supplied by pytest
+        parametrization.
+    """
     path = tmp_path / "counts"
-    z, m, widths, rows = irregular_fixture(path, shuffle)
+    redshift_grid, magnitude_grid, widths, rows = irregular_fixture(path, shuffle)
     bounds = (20.5, 21.5) if masked else None
-    d = density(
+    density_reader = density(
         path,
         redshift_widths=widths,
         target_density=target,
-        z_norm_min=z[1],
+        z_norm_min=redshift_grid[1],
         magnitude_bounds=bounds,
     )
     measure = sum(
-        row[2] for row in rows if row[0] > z[1] and (not masked or row[1] >= 20.5)
+        row[2]
+        for row in rows
+        if row[0] > redshift_grid[1] and (not masked or row[1] >= 20.5)
     )
     scale = 1 if target is None else target / measure
     expected = np.array(
-        [[poly(a, b) * scale if not masked or b >= 20.5 else 0 for b in m] for a in z]
+        [
+            [
+                poly(a, b) * scale if not masked or b >= 20.5 else 0
+                for b in magnitude_grid
+            ]
+            for a in redshift_grid
+        ]
     )
-    np.testing.assert_allclose(d.density, expected, rtol=5e-13, atol=0)
+    np.testing.assert_allclose(density_reader.density, expected, rtol=5e-13, atol=0)
     total = sum(
-        d.density[i, j] * widths[i] * 0.5 for i in range(2, 4) for j in range(4)
+        density_reader.density[i, j] * widths[i] * 0.5
+        for i in range(2, 4)
+        for j in range(4)
     )
     np.testing.assert_allclose(
         total, measure if target is None else target, rtol=5e-13, atol=0
     )
     np.testing.assert_allclose(
-        d.provenance["selected_measure"], measure, rtol=5e-13, atol=0
+        density_reader.provenance["selected_measure"], measure, rtol=5e-13, atol=0
     )
     if not masked:
-        for a in [z[0], 2.65, z[-1]]:
+        for a in [redshift_grid[0], 2.65, redshift_grid[-1]]:
             query = np.array([21.3, 20.0, 20.7, 21.5])
             np.testing.assert_allclose(
-                d.query(a, query), poly(a, query) * scale, rtol=5e-12, atol=0
+                density_reader.query(a, query),
+                poly(a, query) * scale,
+                rtol=5e-12,
+                atol=0,
             )
-    np.testing.assert_array_equal(d.provenance["redshift_axis"], z)
-    np.testing.assert_array_equal(d.provenance["redshift_widths"], widths)
-    assert d.provenance["width_policy"] == "explicit"
-    snapshot = d.redshift_widths.copy()
+    np.testing.assert_array_equal(
+        density_reader.provenance["redshift_axis"], redshift_grid
+    )
+    np.testing.assert_array_equal(density_reader.provenance["redshift_widths"], widths)
+    assert density_reader.provenance["width_policy"] == "explicit"
+    snapshot = density_reader.redshift_widths.copy()
     widths[:] = 50
-    np.testing.assert_array_equal(d.redshift_widths, snapshot)
+    np.testing.assert_array_equal(density_reader.redshift_widths, snapshot)
     with pytest.raises(ValueError):
-        d.redshift_widths.flags.writeable = True
+        density_reader.redshift_widths.flags.writeable = True
 
 
 def test_legacy_width_oracle_and_uniform_preservation(tmp_path):
+    """Check legacy width oracle and uniform preservation.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     path = tmp_path / "counts"
-    z, m, widths, rows = irregular_fixture(path)
+    redshift_grid, magnitude_grid, widths, rows = irregular_fixture(path)
     legacy = density(path, width_policy="legacy_first_spacing")
     physical = density(path, redshift_widths=widths)
     expected = np.array(
-        [[c / (z[1] - z[0]) / 0.5 for a, b, c in rows if a == zi] for zi in z]
+        [
+            [
+                c / (redshift_grid[1] - redshift_grid[0]) / 0.5
+                for a, b, c in rows
+                if a == zi
+            ]
+            for zi in redshift_grid
+        ]
     )
     np.testing.assert_allclose(legacy.density, expected, rtol=5e-13, atol=0)
     assert not np.allclose(legacy.density, physical.density)
     assert legacy.provenance["width_policy"] == "legacy_first_spacing"
-    np.testing.assert_array_equal(legacy.redshift_widths, np.full(4, z[1] - z[0]))
+    np.testing.assert_array_equal(
+        legacy.redshift_widths, np.full(4, redshift_grid[1] - redshift_grid[0])
+    )
     # The old uniform path must give exactly the same values as either policy.
-    z = np.arange(2, 4, 0.5)
-    np.savetxt(path, [[a, b, poly(a, b) * 0.5 * 0.5] for a in z for b in m])
+    redshift_grid = np.arange(2, 4, 0.5)
+    np.savetxt(
+        path,
+        [[a, b, poly(a, b) * 0.5 * 0.5] for a in redshift_grid for b in magnitude_grid],
+    )
     uniform = density(path)
     explicit = density(path, redshift_widths=np.full(4, 0.5))
     legacy = density(path, width_policy="legacy_first_spacing")
@@ -129,6 +228,17 @@ def test_legacy_width_oracle_and_uniform_preservation(tmp_path):
     ],
 )
 def test_invalid_widths(tmp_path, widths):
+    """Check invalid widths.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    widths : float or ndarray or list
+        Instrumental, broadening, or table-cell widths, supplied by pytest
+        parametrization.
+    """
     path = tmp_path / "counts"
     irregular_fixture(path)
     with pytest.raises(ValueError):
@@ -146,6 +256,17 @@ def test_invalid_widths(tmp_path, widths):
     ],
 )
 def test_missing_or_conflicting_width_policy(tmp_path, kwargs):
+    """Check missing or conflicting width policy.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    kwargs : dict
+        Keyword arguments selecting the parametrized case, supplied by pytest
+        parametrization.
+    """
     path = tmp_path / "counts"
     irregular_fixture(path)
     with pytest.raises(ValueError):
@@ -165,6 +286,18 @@ def test_missing_or_conflicting_width_policy(tmp_path, kwargs):
     ],
 )
 def test_scientific_dtype_rejection(field, kind, container):
+    """Check scientific dtype rejection.
+
+    Parameters
+    ----------
+    field : str
+        Forest-weight input array whose dtype is perturbed.
+    kind : str
+        Invalid numeric dtype or nonfinite-value case: complex, bool, string,
+        object, nan, or inf.
+    container : str
+        Input representation, either array or list.
+    """
     spec, _ = forest_spec(method="supplied")
     source = spec.forests["f"]
     options = dict(source.weight_options)
@@ -196,6 +329,15 @@ def test_scientific_dtype_rejection(field, kind, container):
 @pytest.mark.parametrize("dtype", [np.int32, np.int64, np.float32, np.float64])
 @pytest.mark.parametrize("container", ["array", "list"])
 def test_valid_scientific_ownership(dtype, container):
+    """Check valid scientific ownership.
+
+    Parameters
+    ----------
+    dtype : type
+        Array dtype under examination, supplied by pytest parametrization.
+    container : str
+        Input container constructor, supplied by pytest parametrization.
+    """
     spec, _ = forest_spec(method="supplied")
     source = spec.forests["f"]
     options = dict(source.weight_options)
@@ -217,15 +359,15 @@ def test_valid_scientific_ownership(dtype, container):
     for value in options.values():
         if isinstance(value, np.ndarray):
             value[:] = 999
-    b = prepare_bin(replace(spec, forests={"f": source}))
+    prepared_bin = prepare_bin(replace(spec, forests={"f": source}))
     for name in values:
-        a = getattr(b.weights["f"], name)
-        np.testing.assert_array_equal(a, getattr(direct, name))
-        assert a.dtype == np.float64
+        weight_array = getattr(prepared_bin.weights["f"], name)
+        np.testing.assert_array_equal(weight_array, getattr(direct, name))
+        assert weight_array.dtype == np.float64
         with pytest.raises(ValueError):
-            a.flags.writeable = True
-    assert b.weights["f"].P_pixel == 0
-    assert np.all(np.isfinite(run_bin(b).result.data_fisher))
+            weight_array.flags.writeable = True
+    assert prepared_bin.weights["f"].P_pixel == 0
+    assert np.all(np.isfinite(run_bin(prepared_bin).result.data_fisher))
 
 
 @pytest.mark.parametrize(
@@ -239,6 +381,13 @@ def test_valid_scientific_ownership(dtype, container):
     ],
 )
 def test_metadata_dtype_ownership(array):
+    """Check metadata dtype ownership.
+
+    Parameters
+    ----------
+    array : ndarray
+        Array test input, supplied by pytest parametrization.
+    """
     expected = array.copy()
     result = freeze({"data": array})["data"]
     assert result.dtype == expected.dtype
@@ -252,13 +401,24 @@ def test_metadata_dtype_ownership(array):
 @pytest.mark.parametrize("gap", [0, 0.15])
 @pytest.mark.parametrize("reverse", [False, True])
 def test_unequal_bins_independent_oracle(batch, gap, reverse):
+    """Check unequal bins independent oracle.
+
+    Parameters
+    ----------
+    batch : int or None
+        Fourier-node batch size, supplied by pytest parametrization.
+    gap : int or float
+        Separation of the two redshift bins, supplied by pytest parametrization.
+    reverse : bool
+        Whether to reverse input ordering, supplied by pytest parametrization.
+    """
     spec = scalar_spec()
     bins = []
     expected = []
     for i, (lo, hi, zeval, area, s) in enumerate(
         [(2, 2.7, 2.2, 10, 1), (2.7 + gap, 2.9 + gap, 2.85 + gap, 30, -1)]
     ):
-        g = prepare_geometry(
+        bin_geometry = prepare_geometry(
             lo,
             hi,
             z_eval=zeval,
@@ -269,7 +429,7 @@ def test_unequal_bins_independent_oracle(batch, gap, reverse):
             transverse_distance=lambda z: 1000 * (1 + z),
         )
         current = scalar_spec(spec.p3d.registry, sign=s, id=str(i))
-        b = prepare_bin(replace(current, geometry=g))
+        prepared_bin = prepare_bin(replace(current, geometry=bin_geometry))
         volume = (
             area
             * (np.pi / 180) ** 2
@@ -282,15 +442,15 @@ def test_unequal_bins_independent_oracle(batch, gap, reverse):
         )
         # Independent analytic k-shell integral, no production q_mode or volume.
         modes = volume * (0.2**3 - 0.02**3) / (6 * np.pi**2)
-        np.testing.assert_allclose(g.volume, volume, rtol=5e-13, atol=0)
+        np.testing.assert_allclose(bin_geometry.volume, volume, rtol=5e-13, atol=0)
         expected.append(modes / 18 * np.array([[1, s], [s, 1]]))
-        bins.append(b)
+        bins.append(prepared_bin)
     if reverse:
         bins.reverse()
         expected.reverse()
     prior = np.diag([0.0, 4.0])
     result = run_forecast(bins, batch_size=batch, prior_fisher=prior)
-    assert result.bin_ids == tuple(b.id for b in bins)
+    assert result.bin_ids == tuple(prepared_bin.id for prepared_bin in bins)
     for run, oracle in zip(result.bins, expected):
         np.testing.assert_allclose(run.result.data_fisher, oracle, rtol=5e-13, atol=0)
         assert run.result.diagnostics.rank == 1
@@ -302,12 +462,40 @@ def test_unequal_bins_independent_oracle(batch, gap, reverse):
 
 
 def test_explicit_evaluation_redshift_spies(monkeypatch):
+    """Check explicit evaluation redshift spies.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that restores patched callables, attributes, and environment
+        variables after the test.
+    """
     import fishhighz.forecast as forecast
 
     response_calls = []
     response = forecast.prepare_response
 
     def response_spy(*args, **kwargs):
+        """Record the velocity conversion passed to response preparation.
+
+        Parameters
+        ----------
+        *args : tuple
+            Positional arguments forwarded to the original callable or accepted by
+            the test callback.
+        **kwargs : dict
+            Keyword options forwarded to the original callable or inspected by the
+            test callback.
+
+        Returns
+        -------
+        response : ndarray
+            Original per-field response amplitude on Fourier nodes.
+
+        Notes
+        -----
+        Appends to the enclosing test call log so provider dispatch can be checked.
+        """
         response_calls.append(kwargs["a_v"])
         return response(*args, **kwargs)
 
@@ -318,10 +506,54 @@ def test_explicit_evaluation_redshift_spies(monkeypatch):
     spec, _ = forest_spec(method="supplied")
 
     def model(t, z, k, mu, p):
+        """Evaluate the synthetic spectrum used by the enclosing regression test.
+
+        Parameters
+        ----------
+        t : ndarray of shape (n_parameters,)
+            Local model parameters in the provider binding order.
+        z : float or ndarray
+            Dimensionless redshift.
+        k : ndarray of shape (n_nodes,)
+            Comoving wavenumbers in h/Mpc.
+        mu : ndarray of shape (n_nodes,)
+            Dimensionless line-of-sight direction cosines.
+        p : ndarray of int, shape (n_pairs, 2)
+            Observed-field indices defining the requested spectra.
+
+        Returns
+        -------
+        power : ndarray of shape (n_nodes, n_pairs)
+            Synthetic intrinsic power in (Mpc/h)^3 before response and noise.
+
+        Notes
+        -----
+        Appends to the enclosing test call log so provider dispatch can be checked.
+        """
         model_calls.append(z)
         return np.full((len(k), len(p)), t[0] * (1 + z))
 
     def p1d(t, z, k):
+        """Evaluate an independent synthetic one-dimensional forest spectrum.
+
+        Parameters
+        ----------
+        t : ndarray of shape (n_parameters,)
+            Local model parameters in the provider binding order.
+        z : float or ndarray
+            Dimensionless redshift.
+        k : ndarray of shape (n_nodes,)
+            Line-of-sight velocity wavenumbers in s/km.
+
+        Returns
+        -------
+        power : ndarray of shape (n_nodes,)
+            Intrinsic one-dimensional power in km/s.
+
+        Notes
+        -----
+        Appends to the enclosing test call log so provider dispatch can be checked.
+        """
         p1d_calls.append(z)
         return np.full_like(k, 1 + z)
 
@@ -332,7 +564,7 @@ def test_explicit_evaluation_redshift_spies(monkeypatch):
         [P3DProvider(owner.label, model, owner.parameters, owner.pairs)],
     )
     for i, (lo, hi, z) in enumerate([(2, 2.7, 2.1), (2.8, 3, 2.97)]):
-        g = prepare_geometry(
+        bin_geometry = prepare_geometry(
             lo,
             hi,
             z_eval=z,
@@ -343,11 +575,13 @@ def test_explicit_evaluation_redshift_spies(monkeypatch):
             transverse_distance=lambda z: 1000 * (1 + z),
         )
         source = replace(spec.forests["f"], p1d_model=p1d)
-        b = prepare_bin(
-            replace(spec, id=str(i), p3d=p3d, geometry=g, forests={"f": source})
+        prepared_bin = prepare_bin(
+            replace(
+                spec, id=str(i), p3d=p3d, geometry=bin_geometry, forests={"f": source}
+            )
         )
-        bins.append(b)
-        np.testing.assert_array_equal(b.power, 2 * (1 + z))
+        bins.append(prepared_bin)
+        np.testing.assert_array_equal(prepared_bin.power, 2 * (1 + z))
         np.testing.assert_allclose(
             response_calls[-1], 200 / ((1 + z) * 0.7), rtol=5e-13, atol=0
         )

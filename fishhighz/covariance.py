@@ -14,6 +14,25 @@ from .kernels.covariance import _gaussian_covariance_kernel, _gaussian_variance_
 
 
 def _power_array(value, name):
+    """Validate and copy a packed observed-power array.
+
+    Parameters
+    ----------
+    value : array_like of shape (n_node, n_required_pair)
+        Real finite powers in (Mpc/h_fid)^3.
+    name : str
+        Quantity name used in errors.
+
+    Returns
+    -------
+    power : ndarray of shape (n_node, n_required_pair)
+        Owned C-contiguous float64 powers.
+
+    Raises
+    ------
+    ValueError
+        If dtype, finiteness, or nonempty two-dimensional shape is invalid.
+    """
     array = real_array(value, name)
     if array.ndim != 2 or 0 in array.shape:
         raise ValueError(f"{name} must have nonempty shape (n_node, n_required)")
@@ -58,6 +77,35 @@ def combine_observed_power(signal, noise):
 
 
 def _validate_field_power_scalar(power, selection, offset=0):
+    """Check physical field-power matrices one Fourier node at a time.
+
+    Parameters
+    ----------
+    power : ndarray of shape (n_node, n_required_pair)
+        Packed observed field power in (Mpc/h_fid)^3.
+    selection : PairSelection
+        Selected spectra and their complete active-field covariance
+        dependencies.
+    offset : int, default=0
+        Global index of the first supplied node, used in errors.
+
+    Returns
+    -------
+    None
+        Validate the supplied array without modifying it.
+
+    Raises
+    ------
+    ValueError
+        If covariance dependencies are incomplete or field power is not positive
+        semidefinite within the normalized tolerance.
+
+    Notes
+    -----
+    Zero auto power requires an exactly zero row. Positive autos define a
+    correlation matrix for the existing 64*eps64 positivity checks.
+    Sequential divisions avoid products of widely separated auto powers.
+    """
     active = np.unique(selection.selected_pairs)
     expected = np.array([(i, j) for i in active for j in active if i <= j])
     if not np.array_equal(selection.required_pairs, expected):
@@ -78,36 +126,39 @@ def _validate_field_power_scalar(power, selection, offset=0):
             raise ValueError(
                 f"node {node}, field {ids[i]!r}: negative auto power {auto[i]:.17g}"
             )
-        zero = auto == 0
-        if np.any(matrix[zero] != 0):
-            i = np.flatnonzero(zero & np.any(matrix != 0, axis=1))[0]
+        zero_mask = auto == 0
+        if np.any(matrix[zero_mask] != 0):
+            i = np.flatnonzero(zero_mask & np.any(matrix != 0, axis=1))[0]
             raise ValueError(
                 f"node {node}, field {ids[i]!r}: zero auto power requires an exactly "
                 f"zero row; max absolute cross power {np.max(np.abs(matrix[i])):.17g}"
             )
-        positive = np.flatnonzero(~zero)
+        positive = np.flatnonzero(~zero_mask)
         if not positive.size:
             continue
-        corr = matrix[np.ix_(positive, positive)]
+        correlation = matrix[np.ix_(positive, positive)]
         scale = np.sqrt(auto[positive])
         with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
-            corr /= scale[:, None]
-            corr /= scale[None, :]
+            correlation /= scale[:, None]
+            correlation /= scale[None, :]
         # Sequential divisions avoid overflow/underflow of products of auto powers.
-        n = len(positive)
-        if not np.all(np.isfinite(corr)) or np.max(np.abs(corr)) > 1 + 64 * eps * n:
+        n_positive = len(positive)
+        if (
+            not np.all(np.isfinite(correlation))
+            or np.max(np.abs(correlation)) > 1 + 64 * eps * n_positive
+        ):
             raise ValueError(
                 f"node {node}, active fields {ids!r}: invalid normalized correlation; "
-                f"max absolute value {np.max(np.abs(corr)):.17g} (expected <= 1 "
+                f"max absolute value {np.max(np.abs(correlation)):.17g} (expected <= 1 "
                 "within roundoff); check cross/auto powers"
             )
         try:
-            eigenvalues = np.linalg.eigvalsh(corr)
+            eigenvalues = np.linalg.eigvalsh(correlation)
         except np.linalg.LinAlgError as error:
             raise ValueError(
                 f"node {node}, active fields {ids!r}: correlation eigensolve failed"
             ) from error
-        tolerance = 64 * eps * n * max(1.0, np.max(np.abs(eigenvalues)))
+        tolerance = 64 * eps * n_positive * max(1.0, np.max(np.abs(eigenvalues)))
         if eigenvalues[0] < -tolerance:
             raise ValueError(
                 f"node {node}, active fields {ids!r}: total field power is not PSD; "
@@ -117,6 +168,32 @@ def _validate_field_power_scalar(power, selection, offset=0):
 
 
 def _validate_field_power(power, selection):
+    """Validate field-power matrices in batches with scalar diagnostic replay.
+
+    Parameters
+    ----------
+    power : ndarray of shape (n_node, n_required_pair)
+        Packed observed field power in (Mpc/h_fid)^3.
+    selection : PairSelection
+        Selected spectra and their complete active-field covariance
+        dependencies.
+
+    Returns
+    -------
+    None
+        Validate the supplied powers without modifying them.
+
+    Raises
+    ------
+    ValueError
+        If complete covariance dependencies or physical field-power validation
+        fails.
+
+    Notes
+    -----
+    Batches contain at most 256 nodes. Zero diagonals and values near the
+    positivity threshold are replayed through the scalar checks.
+    """
     active = np.unique(selection.selected_pairs)
     expected = np.array([(i, j) for i in active for j in active if i <= j])
     if not np.array_equal(selection.required_pairs, expected):
@@ -124,11 +201,11 @@ def _validate_field_power(power, selection):
             "required_pairs must contain every canonical pair of active fields"
         )
     row, column = np.searchsorted(active, selection.required_pairs).T
-    n = len(active)
-    eps_n = 64 * np.finfo(np.float64).eps * n
+    n_active = len(active)
+    eps_n = 64 * np.finfo(np.float64).eps * n_active
     for start in range(0, len(power), 256):
         packed = power[start : start + 256]
-        matrix = np.empty((len(packed), n, n), dtype=np.float64)
+        matrix = np.empty((len(packed), n_active, n_active), dtype=np.float64)
         matrix[:, row, column] = packed
         matrix[:, column, row] = packed
         auto = np.diagonal(matrix, axis1=1, axis2=2)
@@ -137,10 +214,12 @@ def _validate_field_power(power, selection):
                 raise ValueError("scalar zero/negative diagonal diagnostic required")
             scale = np.sqrt(auto)
             with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
-                corr = matrix / scale[:, :, None] / scale[:, None, :]
-            if not np.all(np.isfinite(corr)) or np.any(np.abs(corr) > 1 + eps_n):
+                correlation = matrix / scale[:, :, None] / scale[:, None, :]
+            if not np.all(np.isfinite(correlation)) or np.any(
+                np.abs(correlation) > 1 + eps_n
+            ):
                 raise ValueError("scalar correlation diagnostic required")
-            values = np.linalg.eigvalsh(corr)
+            values = np.linalg.eigvalsh(correlation)
             tolerance = eps_n * np.maximum(1.0, np.max(np.abs(values), axis=1))
             if not np.all(np.isfinite(values)) or np.any(values[:, 0] <= 2 * tolerance):
                 raise ValueError("scalar PSD diagnostic required")
@@ -221,6 +300,29 @@ def gaussian_covariance(total_power, mode_counts, selection):
 def gaussian_variances(total_power, mode_counts, selection):
     """Return the diagonal of gaussian_covariance, shape (n_node, n_selected).
 
+    Parameters
+    ----------
+    total_power : ndarray of shape (n_node, n_required_pair)
+        Packed observed field power in (Mpc/h_fid)^3.
+    mode_counts : array_like of shape (n_node,)
+        Positive dimensionless mode counts including both conjugate hemispheres.
+    selection : PairSelection
+        Selected spectra and their complete active-field covariance
+        dependencies.
+
+    Returns
+    -------
+    variances : ndarray of shape (n_node, n_selected)
+        Positive float64 variances in (Mpc/h_fid)^6.
+
+    Raises
+    ------
+    ValueError
+        If input shape or mode counts are invalid, or output variance is
+        nonfinite or nonpositive.
+
+    Notes
+    -----
     Column a is the variance (T_ii*T_jj + T_ij*T_ji)/mode_counts of selected
     spectrum a=(i,j), computed with the same operation order as the full
     covariance, so it is identical to the one-spectrum covariance of that

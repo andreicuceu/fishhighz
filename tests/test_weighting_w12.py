@@ -17,6 +17,23 @@ from fishhighz.validation.study import study
 
 
 def profile_fixture(monkeypatch):
+    """Construct a two-forest accuracy recipe with fixed inverse-variance weights.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture restoring patched attributes and environment variables after the
+        test.
+
+    Returns
+    -------
+    fixture : tuple
+        Synthetic recipe, captured BinSpec objects, and P3D call log.
+
+    Notes
+    -----
+    Appends to the enclosing test call log so provider dispatch can be checked.
+    """
     fields = (
         ObservedField("lya(qso)", "forest", "lya", "qso"),
         ObservedField("lya(lbg)", "forest", "lya", "lbg"),
@@ -29,6 +46,30 @@ def profile_fixture(monkeypatch):
     p3d_calls = []
 
     def model(theta, z, k, mu, pairs):
+        """Evaluate the synthetic spectrum used by the enclosing regression test.
+
+        Parameters
+        ----------
+        theta : ndarray of shape (n_parameters,)
+            Local model parameters in the provider binding order.
+        z : float or ndarray
+            Dimensionless redshift.
+        k : ndarray of shape (n_nodes,)
+            Comoving wavenumbers in h/Mpc.
+        mu : ndarray of shape (n_nodes,)
+            Dimensionless line-of-sight direction cosines.
+        pairs : ndarray of int, shape (n_pairs, 2)
+            Observed-field indices defining the requested spectra.
+
+        Returns
+        -------
+        power : ndarray of shape (n_nodes, n_pairs)
+            Synthetic intrinsic power in (Mpc/h)^3 before response and noise.
+
+        Notes
+        -----
+        Appends to the enclosing test call log so provider dispatch can be checked.
+        """
         p3d_calls.append(1)
         return np.ones((len(k), len(pairs)))
 
@@ -82,6 +123,14 @@ def profile_fixture(monkeypatch):
 
 
 def test_actual_accuracy_prepare_uses_per_field_fixed_reference(monkeypatch):
+    """Check actual accuracy prepare uses per field fixed reference.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that restores patched callables, attributes, and environment
+        variables after the test.
+    """
     recipe, captured, p3d_calls = profile_fixture(monkeypatch)
     controls = dict(
         k_intervals=1,
@@ -133,9 +182,35 @@ class FixedStudy:
     )
 
     def __init__(self):
+        """Initialize the synthetic FixedStudy fixture.
+
+        Notes
+        -----
+        Sets the instance state used by the enclosing test; no scientific calculation is run.
+        """
         self._prepared = {}
 
     def evaluate(self, task, controls):
+        """Evaluate the synthetic Fisher trial for the supplied numerical controls.
+
+        Parameters
+        ----------
+        task : dict
+            Synthetic forecast request including case, redshift-bin index, profile,
+            and pair selection.
+        controls : dict
+            Numerical quadrature and weighting controls for this synthetic trial.
+
+        Returns
+        -------
+        payload : tuple
+            Synthetic numerical arrays and validation report, including the
+            requested test modification.
+
+        Notes
+        -----
+        Uses small analytic matrices to exercise validation control flow; it does not run a survey forecast.
+        """
         assert "iterations" not in controls
         fisher = np.diag([2.0, 1.0])
         return dict(fisher=fisher, pair_fisher=fisher[None]), dict(
@@ -160,6 +235,26 @@ class LegacyStudy(FixedStudy):
     weight_method = "legacy"
 
     def evaluate(self, task, controls):
+        """Evaluate the synthetic Fisher trial for the supplied numerical controls.
+
+        Parameters
+        ----------
+        task : dict
+            Synthetic forecast request including case, redshift-bin index, profile,
+            and pair selection.
+        controls : dict
+            Numerical quadrature and weighting controls for this synthetic trial.
+
+        Returns
+        -------
+        payload : tuple
+            Synthetic numerical arrays and validation report, including the
+            requested test modification.
+
+        Notes
+        -----
+        Uses small analytic matrices to exercise validation control flow; it does not run a survey forecast.
+        """
         fisher = np.diag([2.0, 1.0])
         return dict(fisher=fisher, pair_fisher=fisher[None]), dict(
             settings=dict(
@@ -180,6 +275,7 @@ class LegacyStudy(FixedStudy):
 
 
 def test_fixed_controller_version2_replay_and_narrow_negative_controls():
+    """Check fixed controller version2 replay and narrow negative controls."""
     arrays, report = study(FixedStudy(), {})
     assert report["metric_names"] == [
         "k",
@@ -211,6 +307,14 @@ def test_fixed_controller_version2_replay_and_narrow_negative_controls():
 
 
 def test_three_weights_is_explicitly_legacy_only(monkeypatch):
+    """Check three weights is explicitly legacy only.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that restores patched callables, attributes, and environment
+        variables after the test.
+    """
     recipe = accuracy.AccuracyRecipe.__new__(accuracy.AccuracyRecipe)
     recipe.weight_method = "inverse_variance"
     with pytest.raises(ValueError, match="legacy cumulative diagnostic"):
@@ -236,6 +340,14 @@ def test_three_weights_is_explicitly_legacy_only(monkeypatch):
 
 
 def test_cached_legacy_primary_cannot_be_relabelled_fixed(tmp_path):
+    """Check cached legacy primary cannot be relabelled fixed.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     from fishhighz.validation.evidence import execute, modern_requests
     from fishhighz.validation.profiles import completed_cache
     from fishhighz.validation.synthetic import convergence_payload
@@ -261,6 +373,20 @@ def test_cached_legacy_primary_cannot_be_relabelled_fixed(tmp_path):
     (tmp_path / "fixture.whl").write_bytes(b"fixture")
 
     def worker(task):
+        """Construct synthetic evidence for the requested forecast task.
+
+        Parameters
+        ----------
+        task : dict
+            Synthetic forecast request including case, redshift-bin index, profile,
+            and pair selection.
+
+        Returns
+        -------
+        payload : tuple
+            Synthetic numerical arrays and validation report, including the
+            requested test modification.
+        """
         arrays, report = convergence_payload(task)
         report["provenance"] = identity
         return arrays, report

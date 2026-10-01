@@ -88,7 +88,14 @@ INI_DEFAULTS = {
 
 
 def accuracy_settings():
-    """Return plain copies of the adopted settings for provenance."""
+    """Return independent copies of the adopted accuracy settings.
+
+    Returns
+    -------
+    settings : dict
+        Recipe revision, weighting controls, reference modes and quadrature
+        settings for provenance.
+    """
 
     return {
         "revision": REVISION,

@@ -16,7 +16,33 @@ except ImportError:  # Direct execution places this examples directory on sys.pa
 
 
 def run(*, reference, output):
-    """Run the six-bin 15x2pt fixed-compatibility forecast."""
+    """Run the six-bin DESI-2 fixed-compatibility forecast.
+
+    Parameters
+    ----------
+    reference : str or pathlib.Path
+        Installed lyaforecast checkout containing the reference inputs.
+    output : str or pathlib.Path
+        New result directory; existing directories are rejected.
+
+    Returns
+    -------
+    settings : dict
+        Forecast prescription, parameter order, and reference identities.
+    records : list of dict
+        Individual and joint constraints by redshift bin; AP errors and
+        correlations are dimensionless.
+
+    Raises
+    ------
+    FileExistsError
+        If the output directory already exists.
+
+    Notes
+    -----
+    Creates the output directory, runs the forecast, saves settings.json and
+    results.npz, and prints the individual and joint constraints.
+    """
     destination = create_output(output)
     settings, records = run_desi2_compatibility(
         reference=reference,

@@ -17,7 +17,22 @@ PROFILES = ("full-compatibility", "fixed-compatibility", "accuracy")
 
 
 def forecast_selection(case, index):
-    """Exclude weak bin-1 tracers before any noise or Fisher preparation."""
+    """Exclude weak bin-1 tracers before any noise or Fisher preparation.
+
+    Parameters
+    ----------
+    case : str
+        Identifier of one of the seven original DESI-2 validation
+        configurations.
+    index : int
+        Zero-based redshift-bin index.
+
+    Returns
+    -------
+    selection : PairSelection
+        Retained observables with original field indices and required covariance
+        pairs.
+    """
     original = selection(case)
     if index != 0:
         return original
@@ -31,7 +46,29 @@ def forecast_selection(case, index):
 
 
 def identity(profile, method=None):
-    """Identity used for new records and cache comparisons."""
+    """Identity used for new records and cache comparisons.
+
+    Parameters
+    ----------
+    profile : str
+        Scientific profile name; compatibility is normalized to full-
+        compatibility.
+    method : str
+        Forest-weight prescription: legacy, inverse_variance, early_lyaforecast
+        or mcdonald, as applicable. Default is ``None``.
+
+    Returns
+    -------
+    identity : dict
+        Revision, profile, weight method, reference coordinates, stopping rules
+        and redshift selection.
+
+    Raises
+    ------
+    ValueError :
+        If inputs, declared identities or numerical validation conditions are
+        inconsistent.
+    """
     profile = "full-compatibility" if profile == "compatibility" else profile
     if profile not in PROFILES:
         raise ValueError("unknown forecast profile")

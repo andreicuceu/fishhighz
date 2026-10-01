@@ -28,15 +28,46 @@ from fishhighz.survey import BinSpec, ForestInput
 
 
 def _geometry():
-    """Use a simple, internally consistent Einstein-de Sitter background."""
+    """Prepare the example bin in an Einstein-de Sitter background.
+
+    Returns
+    -------
+    geometry : BinGeometry
+        Geometry over 2.3 < z < 2.5 with a 1000 deg^2 footprint; comoving
+        lengths are in Mpc/h and volume is in (Mpc/h)^3.
+    """
     hubble_0 = 70.0
     z_min, z_max = 2.3, 2.5
     z_eval = np.sqrt((1 + z_min) * (1 + z_max)) - 1
 
     def hubble(redshift):
+        """Evaluate the Einstein-de Sitter expansion rate.
+
+        Parameters
+        ----------
+        redshift : float or ndarray
+            Dimensionless redshift.
+
+        Returns
+        -------
+        hubble : float or ndarray
+            Hubble parameter in km/s/Mpc, with the input shape.
+        """
         return hubble_0 * (1 + redshift) ** 1.5
 
     def transverse_distance(redshift):
+        """Evaluate the transverse comoving distance in the flat background.
+
+        Parameters
+        ----------
+        redshift : float or ndarray
+            Dimensionless redshift.
+
+        Returns
+        -------
+        distance : float or ndarray
+            Transverse comoving distance in Mpc, with the input shape.
+        """
         return 2 * SPEED_LIGHT_KMS / hubble_0 * (1 - 1 / np.sqrt(1 + redshift))
 
     return prepare_geometry(
@@ -52,12 +83,19 @@ def _geometry():
 
 
 def _template():
-    """Prepare a smooth positive toy spectrum with a damped BAO-like ripple."""
-    k = np.geomspace(0.005, 1.0, 500)
-    smooth = 6000 * (k / 0.1) ** -2.1 / (1 + (k / 0.25) ** 2)
-    wiggle = 0.06 * smooth * np.sin(105 * k) * np.exp(-((k / 0.45) ** 2))
+    """Prepare a positive smooth toy spectrum with a damped BAO-like ripple.
+
+    Returns
+    -------
+    template : PowerTemplate
+        Spline representation of synthetic smooth and oscillatory power in
+        (Mpc/h)^3 on wavenumbers in h/Mpc.
+    """
+    k_grid = np.geomspace(0.005, 1.0, 500)
+    smooth = 6000 * (k_grid / 0.1) ** -2.1 / (1 + (k_grid / 0.25) ** 2)
+    wiggle = 0.06 * smooth * np.sin(105 * k_grid) * np.exp(-((k_grid / 0.45) ** 2))
     return prepare_template(
-        k,
+        k_grid,
         smooth + wiggle,
         smooth,
         z_ref=np.sqrt(3.3 * 3.5) - 1,
@@ -68,6 +106,31 @@ def _template():
 
 
 def _prepare_selection(registry, geometry, template, selected_pairs):
+    """Prepare one observable selection with fixed survey weights and noise.
+
+    Parameters
+    ----------
+    registry : ParameterRegistry
+        Global parallel and transverse BAO dilation parameters.
+    geometry : BinGeometry
+        Common volume and distance conversion for the two observed fields.
+    template : PowerTemplate
+        Synthetic matter power in (Mpc/h)^3, evaluated at k in h/Mpc.
+    selected_pairs : sequence of tuple of str
+        Forest/galaxy spectra included as observables; covariance closure is
+        retained.
+
+    Returns
+    -------
+    prepared : PreparedBin
+        Selected spectra and their fixed fiducial covariance, response, and
+        noise.
+
+    Notes
+    -----
+    The smooth component stays at identity scaling. BAO derivatives act on
+    the complete wiggle component, including Kaiser factors, volume, and damping.
+    """
     fields = (
         ObservedField("forest", "forest", "lya", background="qso"),
         ObservedField("galaxy", "galaxy", "qso"),
@@ -149,7 +212,19 @@ def _prepare_selection(registry, geometry, template, selected_pairs):
 
 
 def run():
-    """Return joint and individual synthetic AP errors plus preparation metadata."""
+    """Compare joint and individual synthetic BAO constraints.
+
+    Returns
+    -------
+    report : dict
+        Dimensionless AP errors and correlation, two-by-two Fisher matrices, and
+        fixed-preparation and weighting metadata.
+
+    Notes
+    -----
+    Each individual spectrum retains the covariance required by its own
+    selection. Their Fisher sum is compared with the full joint covariance.
+    """
     registry = ParameterRegistry(
         [
             Parameter("ap", 1.0, "target", step=0.002),
@@ -165,8 +240,8 @@ def run():
     individual_errors = {}
     individual_fishers = []
     for pair in selected:
-        one = _prepare_selection(registry, geometry, template, [pair])
-        result = run_forecast([one], batch_size=24).combined
+        individual_bin = _prepare_selection(registry, geometry, template, [pair])
+        result = run_forecast([individual_bin], batch_size=24).combined
         individual_fishers.append(result.data_fisher)
         individual_errors[" x ".join(pair)] = result.marginalized_errors(
             ["ap", "at"]

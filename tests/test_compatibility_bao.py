@@ -11,18 +11,20 @@ from fishhighz.validation.compatibility_bao import (
 
 
 def test_plot_cut_masks_both_components_and_ratio_operands():
-    x = np.array([[0.1, 0.21], [0.1, 0.2], [np.nan, 0.1], [0.1, 0.1]])
-    y = np.array([[0.1, 0.1], [0.3, 0.1], [0.1, 0.1], [0.2, 0.2]])
-    masked = plot_errors(x)
+    """Check plot cut masks both components and ratio operands."""
+    first_errors = np.array([[0.1, 0.21], [0.1, 0.2], [np.nan, 0.1], [0.1, 0.1]])
+    second_errors = np.array([[0.1, 0.1], [0.3, 0.1], [0.1, 0.1], [0.2, 0.2]])
+    masked = plot_errors(first_errors)
     assert np.isnan(masked[[0, 2]]).all()
-    np.testing.assert_array_equal(masked[1], x[1])
-    ratio = plot_ratio(x, y)
+    np.testing.assert_array_equal(masked[1], first_errors[1])
+    ratio = plot_ratio(first_errors, second_errors)
     assert np.isnan(ratio[:3]).all()
     np.testing.assert_array_equal(ratio[3], [-0.5, -0.5])
-    np.testing.assert_array_equal(x[0], [0.1, 0.21])
+    np.testing.assert_array_equal(first_errors[0], [0.1, 0.21])
 
 
 def test_unavailable_forest_does_not_remove_galaxy_information():
+    """Check unavailable forest does not remove galaxy information."""
     task = dict(
         fields=[dict(id="f", kind="forest"), dict(id="g", kind="galaxy")],
         required_pairs=[[0, 0], [0, 1], [1, 1]],
@@ -43,6 +45,7 @@ def test_unavailable_forest_does_not_remove_galaxy_information():
 
 
 def test_joint_keeps_inter_spectrum_covariance():
+    """Check joint keeps inter spectrum covariance."""
     task = dict(
         fields=[dict(id="a", kind="galaxy"), dict(id="b", kind="galaxy")],
         required_pairs=[[0, 0], [0, 1], [1, 1]],

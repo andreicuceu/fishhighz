@@ -13,6 +13,7 @@ from fishhighz.survey_config import _build_readers, _resolve_resource
 
 
 def test_native_recipe_identity_and_selection():
+    """Check native recipe identity and selection."""
     config = fishhighz.parse_survey_ini()
     assert config.schema_version == 1
     assert [field.observed.id for field in config.fields] == [
@@ -48,6 +49,7 @@ def test_native_recipe_identity_and_selection():
 
 
 def test_bundled_reader_policies_match_accuracy_example():
+    """Check bundled reader policies match accuracy example."""
     config = fishhighz.parse_survey_ini()
     with ExitStack() as stack:
         readers = _build_readers(config, config.fields, stack)
@@ -69,6 +71,14 @@ def test_bundled_reader_policies_match_accuracy_example():
 
 
 def test_legacy_ini_is_not_translated(tmp_path):
+    """Check legacy ini is not translated.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     legacy = tmp_path / "legacy.ini"
     legacy.write_text("[cosmo]\nfilename = Planck18.ini\n[tracer 1]\ntracer = qso\n")
     with pytest.raises(fishhighz.UnsupportedSchemaError, match="lyaforecast INI"):
@@ -76,6 +86,14 @@ def test_legacy_ini_is_not_translated(tmp_path):
 
 
 def test_schema_rejects_missing_sections_garbage_lists_and_fixed_labels(tmp_path):
+    """Check schema rejects missing sections garbage lists and fixed labels.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     source = Path("tests/data/desi2_accuracy_expanded.ini").read_text()
     missing = tmp_path / "missing.ini"
     missing.write_text(source.replace("\n[numerical]\n", "\n[removed]\n", 1))
@@ -104,6 +122,14 @@ def test_schema_rejects_missing_sections_garbage_lists_and_fixed_labels(tmp_path
 
 
 def test_package_and_ini_relative_resource_resolution(tmp_path):
+    """Check package and ini relative resource resolution.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     config = fishhighz.parse_survey_ini()
     assert _resolve_resource(config.cosmology["camb_ini"], config) == (
         "package",
@@ -121,6 +147,7 @@ def test_package_and_ini_relative_resource_resolution(tmp_path):
 
 
 def test_composite_magnitude_quadrature_is_ordered_and_exact():
+    """Check composite magnitude quadrature is ordered and exact."""
     nodes, weights = composite((0.0, 1.0, 3.0), 4)
     assert np.all(np.diff(nodes) > 0)
     assert np.sum(weights) == pytest.approx(3.0)
@@ -134,17 +161,69 @@ class _Background:
     damping_reference_redshift = 2.3
 
     def sigma8_at(self, redshift):
+        """Return the synthetic sigma8.
+
+        Parameters
+        ----------
+        redshift : float or ndarray
+            Dimensionless evaluation redshift; arrays retain their input shape.
+
+        Returns
+        -------
+        values : float or ndarray
+            Synthetic sigma8 in dimensionless units, matching the query or stored-
+            redshift shape.
+        """
         assert redshift > 0
         return 0.8
 
     def growth_rate_at(self, redshift):
+        """Return the synthetic logarithmic growth rate.
+
+        Parameters
+        ----------
+        redshift : float or ndarray
+            Dimensionless evaluation redshift; arrays retain their input shape.
+
+        Returns
+        -------
+        values : float or ndarray
+            Synthetic logarithmic growth rate in dimensionless units, matching the
+            query or stored-redshift shape.
+        """
         assert redshift > 0
         return 0.8
 
     def hubble_parameter(self, redshift):
+        """Return the synthetic Hubble parameter.
+
+        Parameters
+        ----------
+        redshift : float or ndarray
+            Dimensionless evaluation redshift; arrays retain their input shape.
+
+        Returns
+        -------
+        values : float or ndarray
+            Synthetic Hubble parameter in km/s/Mpc, matching the query or stored-
+            redshift shape.
+        """
         return np.full(np.asarray(redshift).shape, 100.0)
 
     def transverse_comoving_distance(self, redshift):
+        """Return the synthetic transverse comoving distance.
+
+        Parameters
+        ----------
+        redshift : float or ndarray
+            Dimensionless evaluation redshift; arrays retain their input shape.
+
+        Returns
+        -------
+        values : float or ndarray
+            Synthetic transverse comoving distance in Mpc, matching the query or
+            stored-redshift shape.
+        """
         return np.full(np.asarray(redshift).shape, 1000.0)
 
 
@@ -152,6 +231,22 @@ class _Density:
     magnitudes = np.array([16.1, 20.0, 26.75])
 
     def sample(self, redshift, magnitudes):
+        """Return unit differential density at each requested magnitude.
+
+        Parameters
+        ----------
+        redshift : float
+            Dimensionless source redshift; the synthetic density is independent of
+            redshift.
+        magnitudes : array_like of shape (n_magnitudes,)
+            Apparent-magnitude samples.
+
+        Returns
+        -------
+        sample : dict
+            Unit density values of shape (n_magnitudes,) in deg^-2 redshift^-1
+            mag^-1 and synthetic provenance.
+        """
         return {"values": np.ones(len(magnitudes)), "provenance": {"source": "fake"}}
 
 
@@ -159,6 +254,21 @@ class _SNR:
     magnitudes = np.array([16.1, 20.0, 26.75])
 
     def sample(self, **kwargs):
+        """Return unit pixel SNR at each requested magnitude.
+
+        Parameters
+        ----------
+        **kwargs : dict
+            Sampling keywords from SNRReader, including magnitudes of shape
+            (n_magnitudes,), source redshift, wavelength in Angstrom, pixel width in
+            Angstrom, and exposure count.
+
+        Returns
+        -------
+        sample : dict
+            Dimensionless SNR values of shape (n_magnitudes,) and synthetic
+            provenance.
+        """
         return {
             "values": np.ones(len(kwargs["magnitudes"])),
             "provenance": {"source": "fake"},
@@ -168,27 +278,63 @@ class _SNR:
 class _BackgroundMissingTemplateGrowth(_Background):
     @property
     def template_growth_redshift(self):
+        """Represent missing template growth redshift metadata.
+
+        Raises
+        ------
+        AttributeError
+            Deliberately raised to exercise the rejection path in the enclosing
+            test.
+        """
         raise AttributeError("template-growth metadata is absent")
 
 
 class _BackgroundMissingDampingReference(_Background):
     @property
     def damping_reference_redshift(self):
+        """Represent missing damping reference redshift metadata.
+
+        Raises
+        ------
+        AttributeError
+            Deliberately raised to exercise the rejection path in the enclosing
+            test.
+        """
         raise AttributeError("damping-reference metadata is absent")
 
 
 class _BackgroundMissingDampingSigma(_Background):
     @property
     def sigma8_damping_reference(self):
+        """Represent missing sigma8 damping reference metadata.
+
+        Raises
+        ------
+        AttributeError
+            Deliberately raised to exercise the rejection path in the enclosing
+            test.
+        """
         raise AttributeError("damping sigma8 metadata is absent")
 
 
 def _synthetic_template_and_readers(config):
-    k = np.linspace(0.001, 1.0, 20)
+    """Construct a constant template and synthetic readers for configured fields.
+
+    Parameters
+    ----------
+    config : SurveyConfig
+        Parsed survey configuration used to build synthetic input factories.
+
+    Returns
+    -------
+    inputs : tuple
+        PowerTemplate and field-keyed density/SNR reader mapping.
+    """
+    k_grid = np.linspace(0.001, 1.0, 20)
     template = prepare_template(
-        k,
-        np.ones_like(k),
-        np.full_like(k, 0.5),
+        k_grid,
+        np.ones_like(k_grid),
+        np.full_like(k_grid, 0.5),
         z_ref=2.406,
         h_template=0.7,
         h_fid=0.7,
@@ -204,12 +350,13 @@ def _synthetic_template_and_readers(config):
 
 
 def test_small_injected_preparation_preserves_covariance_closure_and_registry():
+    """Check small injected preparation preserves covariance closure and registry."""
     config = fishhighz.parse_survey_ini()
-    k = np.linspace(0.001, 1.0, 20)
+    k_grid = np.linspace(0.001, 1.0, 20)
     template = prepare_template(
-        k,
-        np.ones_like(k),
-        np.full_like(k, 0.5),
+        k_grid,
+        np.ones_like(k_grid),
+        np.full_like(k_grid, 0.5),
         z_ref=2.406,
         h_template=0.7,
         h_fid=0.7,
@@ -250,12 +397,13 @@ def test_small_injected_preparation_preserves_covariance_closure_and_registry():
 
 
 def test_injected_background_and_template_must_match_configured_redshifts():
+    """Check injected background and template must match configured redshifts."""
     config = fishhighz.parse_survey_ini()
-    k = np.linspace(0.001, 1.0, 20)
+    k_grid = np.linspace(0.001, 1.0, 20)
     template = prepare_template(
-        k,
-        np.ones_like(k),
-        np.full_like(k, 0.5),
+        k_grid,
+        np.ones_like(k_grid),
+        np.full_like(k_grid, 0.5),
         z_ref=2.407,
         h_template=0.7,
         h_fid=0.7,
@@ -274,12 +422,13 @@ def test_injected_background_and_template_must_match_configured_redshifts():
 
 
 def test_injected_background_reference_redshifts_are_checked():
+    """Check injected background reference redshifts are checked."""
     config = fishhighz.parse_survey_ini()
-    k = np.linspace(0.001, 1.0, 20)
+    k_grid = np.linspace(0.001, 1.0, 20)
     template = prepare_template(
-        k,
-        np.ones_like(k),
-        np.full_like(k, 0.5),
+        k_grid,
+        np.ones_like(k_grid),
+        np.full_like(k_grid, 0.5),
         z_ref=2.406,
         h_template=0.7,
         h_fid=0.7,
@@ -308,6 +457,16 @@ def test_injected_background_reference_redshifts_are_checked():
     ],
 )
 def test_background_damping_metadata_is_required(background_type, missing):
+    """Check background damping metadata is required.
+
+    Parameters
+    ----------
+    background_type : type
+        Background implementation under examination, supplied by pytest
+        parametrization.
+    missing : str
+        Omitted input or metadata item, supplied by pytest parametrization.
+    """
     config = fishhighz.parse_survey_ini()
     template, readers = _synthetic_template_and_readers(config)
     with pytest.raises(ValueError, match=missing):
@@ -330,6 +489,19 @@ def test_background_damping_metadata_is_required(background_type, missing):
 def test_background_damping_metadata_must_be_finite_and_positive(
     attribute, value, message
 ):
+    """Check background damping metadata must be finite and positive.
+
+    Parameters
+    ----------
+    attribute : str
+        Object attribute to modify or inspect, supplied by pytest
+        parametrization.
+    value : float
+        Value at the tested validation boundary, supplied by pytest
+        parametrization.
+    message : str
+        Expected diagnostic text, supplied by pytest parametrization.
+    """
     config = fishhighz.parse_survey_ini()
     template, readers = _synthetic_template_and_readers(config)
     background = _Background()
@@ -341,6 +513,7 @@ def test_background_damping_metadata_must_be_finite_and_positive(
 
 
 def test_native_modules_do_not_import_validation_or_external_forecast_packages():
+    """Check native modules do not import validation or external forecast packages."""
     source = "\n".join(
         Path(path).read_text()
         for path in (
@@ -356,6 +529,23 @@ def test_native_modules_do_not_import_validation_or_external_forecast_packages()
 
 
 def _write_modified_ini(tmp_path, changes, *, expanded=False):
+    """Apply explicit option edits to a temporary survey INI and parse it.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory supplied by pytest for generated inputs and results.
+    changes : mapping
+        Section-to-option mappings; a None value removes the option.
+    expanded : bool, optional
+        Whether to start from the explicitly expanded survey configuration.
+        Default is False.
+
+    Returns
+    -------
+    config : SurveyConfig
+        Parsed modified configuration; source fixtures are preserved.
+    """
     import configparser
 
     source = (
@@ -380,6 +570,7 @@ def _write_modified_ini(tmp_path, changes, *, expanded=False):
 
 
 def test_named_prescription_matches_original_expanded_ini():
+    """Check named prescription matches original expanded ini."""
     from fishhighz.accuracy import REVISION
 
     compact = fishhighz.parse_survey_ini()
@@ -405,12 +596,33 @@ def test_named_prescription_matches_original_expanded_ini():
     "section,key", [("numerical", "weight_rtol"), ("input policies", "weighting_rtol")]
 )
 def test_single_weight_tolerance_override(tmp_path, section, key):
+    """Check single weight tolerance override.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    section : str
+        INI section under examination, supplied by pytest parametrization.
+    key : str
+        Dictionary or configuration key under examination, supplied by pytest
+        parametrization.
+    """
     config = _write_modified_ini(tmp_path, {section: {key: "2e-5"}})
     assert config.numerical["weight_rtol"] == "2e-5"
     assert config.input_policies["weighting_rtol"] == "2e-5"
 
 
 def test_conflicting_weight_tolerances_rejected(tmp_path):
+    """Check conflicting weight tolerances rejected.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     with pytest.raises(ValueError, match="must match"):
         _write_modified_ini(
             tmp_path,
@@ -431,12 +643,33 @@ def test_conflicting_weight_tolerances_rejected(tmp_path):
     ],
 )
 def test_named_prescription_rejects_unknown_choices(tmp_path, changes):
+    """Check named prescription rejects unknown choices.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    changes : dict
+        Fixture modifications defining this case, supplied by pytest
+        parametrization.
+    """
     with pytest.raises(ValueError):
         _write_modified_ini(tmp_path, changes)
 
 
 @pytest.mark.parametrize("field", ["qso", "lya(qso)"])
 def test_per_field_magnitude_selection_not_silently_ignored(tmp_path, field):
+    """Check per field magnitude selection not silently ignored.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    field : str
+        Observed-field identity or index, supplied by pytest parametrization.
+    """
     with pytest.raises(ValueError, match="unsupported per-field magnitude selection"):
         _write_modified_ini(
             tmp_path, {f"field {field}": {"min_band_mag": "22", "max_band_mag": "23"}}
@@ -448,6 +681,14 @@ def test_per_field_magnitude_selection_not_silently_ignored(tmp_path, field):
 
 
 def test_field_provenance_records_all_scientific_attributes(tmp_path):
+    """Check field provenance records all scientific attributes.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     from dataclasses import fields
 
     config = _write_modified_ini(
@@ -468,6 +709,14 @@ def test_field_provenance_records_all_scientific_attributes(tmp_path):
 
 
 def test_compact_and_expanded_prepare_identical_small_numerical_inputs(tmp_path):
+    """Check compact and expanded prepare identical small numerical inputs.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     changes = {
         "numerical": {
             "k_intervals": "2",
@@ -513,6 +762,23 @@ def test_compact_and_expanded_prepare_identical_small_numerical_inputs(tmp_path)
 def test_expanded_ini_can_specify_weight_tolerance_once(
     tmp_path, omitted_section, omitted_key, override_section, override_key
 ):
+    """Check expanded ini can specify weight tolerance once.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    omitted_section : str
+        INI section omitted from the fixture, supplied by pytest
+        parametrization.
+    omitted_key : str
+        INI option omitted from the fixture, supplied by pytest parametrization.
+    override_section : str
+        INI section receiving an override, supplied by pytest parametrization.
+    override_key : str
+        INI option receiving an override, supplied by pytest parametrization.
+    """
     config = _write_modified_ini(
         tmp_path,
         {
@@ -526,6 +792,14 @@ def test_expanded_ini_can_specify_weight_tolerance_once(
 
 
 def test_omitted_field_magnitude_limits_inherit_survey_normalization(tmp_path):
+    """Check omitted field magnitude limits inherit survey normalization.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     config = _write_modified_ini(
         tmp_path, {"survey": {"min_band_mag": "17", "max_band_mag": "25"}}
     )

@@ -20,6 +20,22 @@ RESPONSE = InstrumentResponse(1, 0)
 
 
 def prepare(field=FIELD, response=RESPONSE, **changes):
+    """Prepare two-sample inverse-variance forest weights.
+
+    Parameters
+    ----------
+    field : ObservedField, optional
+        Observed forest whose weights are prepared. Default is FIELD.
+    response : InstrumentResponse, optional
+        Pixel width and resolution dispersion in km/s. Default is RESPONSE.
+    **changes : dict
+        Overrides to prepare_forest_weights: source magnitudes, quadrature in magnitudes, density in deg^-2 (km/s)^-1 mag^-1, pixel variance, forest length in km/s, and method controls.
+
+    Returns
+    -------
+    weights : ForestWeights
+        Fixed source weights and their noise integrals.
+    """
     options = dict(
         z_source=3,
         magnitudes=[20, 21],
@@ -35,18 +51,35 @@ def prepare(field=FIELD, response=RESPONSE, **changes):
 
 
 def agree(actual, expected):
+    """Check finite values and relative agreement of two independent results.
+
+    Parameters
+    ----------
+    actual : array_like
+        Numerical result being checked.
+    expected : array_like
+        Independent reference result with the same shape and units as actual.
+    """
     assert np.all(np.isfinite(actual)) and np.all(np.isfinite(expected))
     np.testing.assert_allclose(actual, expected, rtol=5e-12, atol=0)
 
 
 def test_rational_coefficients_and_legacy_seed(monkeypatch):
+    """Check rational coefficients and legacy seed.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that restores patched callables, attributes, and environment
+        variables after the test.
+    """
     legacy = prepare(method="legacy", iterations=0, signal=7)
     # Independent exact rational control, including the nonuniform measure once.
-    r = [Fraction(2) * Fraction(1, 2), Fraction(1, 2) * 2]
+    source_masses = [Fraction(2) * Fraction(1, 2), Fraction(1, 2) * 2]
     nu = [Fraction(1, 2), Fraction(1, 5)]
-    i1 = sum(m * w for m, w in zip(r, nu))
-    i2 = sum(m * w**2 for m, w in zip(r, nu))
-    i3 = sum(m * w**2 * v for m, w, v in zip(r, nu, [1, 4]))
+    i1 = sum(m * w for m, w in zip(source_masses, nu))
+    i2 = sum(m * w**2 for m, w in zip(source_masses, nu))
+    i3 = sum(m * w**2 * v for m, w, v in zip(source_masses, nu, [1, 4]))
     assert (i1, i2, i3) == (Fraction(7, 10), Fraction(29, 100), Fraction(41, 100))
     assert i2 / i1**2 == Fraction(29, 49)
     assert i3 / i1**2 == Fraction(41, 49)
@@ -54,6 +87,22 @@ def test_rational_coefficients_and_legacy_seed(monkeypatch):
     import fishhighz.weights as module
 
     def forbidden(*args, **kwargs):
+        """Fail if a supposedly frozen or unused operation is invoked.
+
+        Parameters
+        ----------
+        *args : tuple
+            Positional arguments forwarded to the original callable or accepted by
+            the test callback.
+        **kwargs : dict
+            Keyword options forwarded to the original callable or inspected by the
+            test callback.
+
+        Raises
+        ------
+        pytest.fail.Exception
+            Raised if the forbidden operation is reached.
+        """
         pytest.fail("inverse_variance invoked an iteration or provider")
 
     for name in ["_iterate", "sample_auxiliary", "evaluate_p1d", "evaluate_p3d"]:
@@ -76,6 +125,13 @@ def test_rational_coefficients_and_legacy_seed(monkeypatch):
 
 @pytest.mark.parametrize("background", ["qso", "lbg"])
 def test_support_metadata_immutability_and_context(background):
+    """Check support metadata immutability and context.
+
+    Parameters
+    ----------
+    background : str
+        Background cosmology fixture, supplied by pytest parametrization.
+    """
     field = ObservedField(f"lya({background})", "forest", "lya", background)
     variance = np.array([0.0, 4.0])
     result = prepare(field, variance=variance, rho=[2, 0])
@@ -122,12 +178,28 @@ def test_support_metadata_immutability_and_context(background):
     ],
 )
 def test_conflicting_settings(change):
+    """Check conflicting settings.
+
+    Parameters
+    ----------
+    change : dict
+        Input override exercising the specified validation boundary, supplied by
+        pytest parametrization.
+    """
     with pytest.raises(ValueError, match="inverse_variance requires.*None"):
         prepare(**change)
 
 
 @pytest.mark.parametrize("alias", [None, 0, -1, np.inf, -np.inf, np.nan, [1], True, 1j])
 def test_invalid_alias(alias):
+    """Check invalid alias.
+
+    Parameters
+    ----------
+    alias : bool or int or float or complex or list or None
+        One-dimensional aliasing reference power, supplied by pytest
+        parametrization.
+    """
     with pytest.raises(ValueError):
         prepare(alias=alias)
 
@@ -144,11 +216,20 @@ def test_invalid_alias(alias):
     ],
 )
 def test_unrepresentable_weights_and_mixed_products(change):
+    """Check unrepresentable weights and mixed products.
+
+    Parameters
+    ----------
+    change : dict
+        Input override exercising the specified validation boundary, supplied by
+        pytest parametrization.
+    """
     with pytest.raises(ValueError, match="not representable"):
         prepare(**change)
 
 
 def test_positive_instrumental_power_underflow():
+    """Check positive instrumental power underflow."""
     tiny = np.nextafter(0.0, 1.0)
     # R1 accepted weights=(1,1), A=4, P_pixel=tiny despite losing tiny/2.
     with pytest.raises(ValueError, match="forest:.*not representable.*underflow"):
@@ -162,6 +243,7 @@ def test_positive_instrumental_power_underflow():
 
 
 def test_exact_zero_instrumental_power():
+    """Check exact zero instrumental power."""
     tiny = np.nextafter(0.0, 1.0)
     result = prepare(
         response=InstrumentResponse(tiny, 0),
@@ -176,29 +258,54 @@ def test_exact_zero_instrumental_power():
 
 
 def test_mode_dependent_noise_scalar_response():
+    """Check mode dependent noise scalar response."""
     response = InstrumentResponse(30, 10)
     result = prepare(response=response, alias=2)
     supplied = prepare(
         response=response, method="supplied", alias=None, weights=[2 / 32, 2 / 122]
     )
-    g = geometry()
-    q = np.array([0.003, 0.02])
+    bin_geometry = geometry()
+    velocity_k = np.array([0.003, 0.02])
     p1d = np.array([4.0, 9.0])  # intrinsic values distinct from B_star
-    args = (FIELD, g, response, q * g.a_v, np.ones(2), p1d)
+    args = (
+        FIELD,
+        bin_geometry,
+        response,
+        velocity_k * bin_geometry.a_v,
+        np.ones(2),
+        p1d,
+    )
     noise = forest_noise(result, *args)
     other = forest_noise(supplied, *args)
     expected_alias = []
-    for qi, pi in zip(q, p1d):
-        x = qi * 30 / 2
-        w = sin(x) / x * exp(-((qi * 10) ** 2) / 2)
-        expected_alias.append(result.A * pi * w**2 * g.d_deg**2 / g.a_v)
+    for qi, pi in zip(velocity_k, p1d):
+        pixel_phase = qi * 30 / 2
+        response_amplitude = sin(pixel_phase) / pixel_phase * exp(-((qi * 10) ** 2) / 2)
+        expected_alias.append(
+            result.A
+            * pi
+            * response_amplitude**2
+            * bin_geometry.d_deg**2
+            / bin_geometry.a_v
+        )
     agree(noise.aliasing, expected_alias)
-    agree(noise.pixel, np.full(2, result.P_pixel * g.d_deg**2 / g.a_v))
+    agree(
+        noise.pixel,
+        np.full(2, result.P_pixel * bin_geometry.d_deg**2 / bin_geometry.a_v),
+    )
     agree(noise.total, np.array(expected_alias) + noise.pixel)
     agree(noise.total, other.total)
 
 
 def test_survey_equivalence_and_frozen_provider_counts(monkeypatch):
+    """Check survey equivalence and frozen provider counts.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that restores patched callables, attributes, and environment
+        variables after the test.
+    """
     import fishhighz.forecast as module
 
     spec, p1d_calls = forest_spec("supplied", auxiliary=False)
@@ -210,6 +317,23 @@ def test_survey_equivalence_and_frozen_provider_counts(monkeypatch):
     owner = spec.p3d.routes[0].provider
 
     def model(*args):
+        """Record or perturb the synthetic model evaluation used by this test.
+
+        Parameters
+        ----------
+        *args : tuple
+            Positional arguments forwarded to the original callable or accepted by
+            the test callback.
+
+        Returns
+        -------
+        power : ndarray of shape (n_nodes, n_pairs)
+            Synthetic intrinsic power in (Mpc/h)^3 before response and noise.
+
+        Notes
+        -----
+        Appends to the enclosing test call log so provider dispatch can be checked.
+        """
         p3d_calls.append(1)
         return owner.model(*args)
 
@@ -223,10 +347,10 @@ def test_survey_equivalence_and_frozen_provider_counts(monkeypatch):
         dict(method="supplied", weights=[2 / 32, 2 / 62]),
     ]:
         source_i = replace(source, weight_options=dict(base, **options))
-        b = prepare_bin(replace(spec, forests={"f": source_i}))
-        assert b.diagnostics["p1d_calls"] == {"f": 1}
-        assert b.diagnostics["p3d_calls"] == {"scalar": 1}
-        bins.append(b)
+        prepared_bin = prepare_bin(replace(spec, forests={"f": source_i}))
+        assert prepared_bin.diagnostics["p1d_calls"] == {"f": 1}
+        assert prepared_bin.diagnostics["p3d_calls"] == {"scalar": 1}
+        bins.append(prepared_bin)
     assert len(p1d_calls) == len(p3d_calls) == 2
     for name in ["weights", "I1", "I2", "I3", "A", "P_pixel"]:
         agree(getattr(bins[0].weights["f"], name), getattr(bins[1].weights["f"], name))
@@ -238,6 +362,22 @@ def test_survey_equivalence_and_frozen_provider_counts(monkeypatch):
         replace(inverse_source, auxiliary_coordinates=(24, 0.00035))
 
     def forbidden(*args, **kwargs):
+        """Fail if a supposedly frozen or unused operation is invoked.
+
+        Parameters
+        ----------
+        *args : tuple
+            Positional arguments forwarded to the original callable or accepted by
+            the test callback.
+        **kwargs : dict
+            Keyword options forwarded to the original callable or inspected by the
+            test callback.
+
+        Raises
+        ------
+        pytest.fail.Exception
+            Raised if the forbidden operation is reached.
+        """
         pytest.fail("fixed weights, noise, response or P1D reevaluated")
 
     for name in [
@@ -251,23 +391,23 @@ def test_survey_equivalence_and_frozen_provider_counts(monkeypatch):
         monkeypatch.setattr(module, name, forbidden)
     snapshots = [
         (
-            b.noise.tobytes(),
-            b.weights["f"].weights.tobytes(),
-            b.weights["f"].A,
-            b.weights["f"].P_pixel,
+            prepared_bin.noise.tobytes(),
+            prepared_bin.weights["f"].weights.tobytes(),
+            prepared_bin.weights["f"].A,
+            prepared_bin.weights["f"].P_pixel,
         )
-        for b in bins
+        for prepared_bin in bins
     ]
-    results = [run_bin(b) for b in bins]
+    results = [run_bin(prepared_bin) for prepared_bin in bins]
     agree(results[0].result.data_fisher, results[1].result.data_fisher)
     assert len(p1d_calls) == 2
     assert len(p3d_calls) == 12  # two preparations, then 5 mean calls per bin
     assert snapshots == [
         (
-            b.noise.tobytes(),
-            b.weights["f"].weights.tobytes(),
-            b.weights["f"].A,
-            b.weights["f"].P_pixel,
+            prepared_bin.noise.tobytes(),
+            prepared_bin.weights["f"].weights.tobytes(),
+            prepared_bin.weights["f"].A,
+            prepared_bin.weights["f"].P_pixel,
         )
-        for b in bins
+        for prepared_bin in bins
     ]

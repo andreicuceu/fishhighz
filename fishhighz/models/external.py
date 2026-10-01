@@ -28,6 +28,28 @@ class BoundParameters:
     binding: ParameterBinding
 
     def __init__(self, registry, local_names, bindings):
+        """Retain an explicit equality binding and its exact registry identity.
+
+        Parameters
+        ----------
+        registry : ParameterRegistry
+            Exact global registry shared by the model routes.
+        local_names : sequence of str
+            Unique local parameter names in provider vector order; may be empty.
+        bindings : mapping of str to str
+            Explicit mapping from local names to global IDs; repeated destinations
+            impose equality bindings.
+
+        Returns
+        -------
+        None
+            Store the registry and validated local-to-global binding.
+
+        Raises
+        ------
+        ValueError
+            If the registry or local binding is invalid.
+        """
         if not isinstance(registry, ParameterRegistry):
             raise ValueError("expected ParameterRegistry")
         object.__setattr__(self, "registry", registry)
@@ -67,6 +89,39 @@ class P3DProvider:
     def __init__(
         self, label, model, parameters, pairs, *, jacobian=None, analytic_ids=None
     ):
+        """Declare spectrum ownership, model parameters, and optional derivatives.
+
+        Parameters
+        ----------
+        label : str
+            Unique nonempty provider name for diagnostics.
+        model : callable
+            Intrinsic model(theta_local, z, k, mu, pairs) returning (n_node, n_pair)
+            power in (Mpc/h_fid)^3.
+        parameters : BoundParameters
+            Local parameter mapping tied to the global registry.
+        pairs : sequence of pairs
+            Field-ID or original integer-index pairs owned by this provider.
+        jacobian : callable, optional
+            Same arguments as model; returns (n_node, n_pair, n_local) derivatives
+            in power units per local parameter unit. Default None.
+        analytic_ids : sequence of str, optional
+            Global derivative columns consumed analytically. Default None selects
+            all dependencies if a Jacobian is supplied, otherwise none. Empty
+            selects numerical differentiation.
+
+        Returns
+        -------
+        None
+            Store provider callables, bindings, pair ownership, and analytic
+            selection.
+
+        Raises
+        ------
+        ValueError
+            If callables, parameters, pairs, or analytic derivative selection are
+            invalid.
+        """
         _provider(label, model, parameters)
         if jacobian is not None and not callable(jacobian):
             raise ValueError("jacobian must be callable")
@@ -104,6 +159,27 @@ class P3DProvider:
 
 
 def _provider(name, model, parameters):
+    """Validate the common callable-provider metadata.
+
+    Parameters
+    ----------
+    name : str
+        Nonempty provider label.
+    model : callable
+        Scientific model callable.
+    parameters : BoundParameters
+        Registry-aware local parameter binding.
+
+    Returns
+    -------
+    None
+        Validate the supplied metadata without model evaluation.
+
+    Raises
+    ------
+    ValueError
+        If the name, model, or binding type is invalid.
+    """
     label(name, "provider label")
     if not callable(model) or not isinstance(parameters, BoundParameters):
         raise ValueError("provider requires a callable and BoundParameters")
@@ -130,6 +206,34 @@ class PreparedP3D:
     routes: tuple[_Route, ...]
 
     def __init__(self, registry, selection, providers):
+        """Prepare exclusive model ownership for every covariance-required pair.
+
+        Parameters
+        ----------
+        registry : ParameterRegistry
+            Exact common global parameter registry.
+        selection : PairSelection
+            Observables and required covariance spectra.
+        providers : iterable of P3DProvider
+            Model declarations covering each required pair exactly once.
+
+        Returns
+        -------
+        None
+            Store structural routes with immutable pair and destination-index
+            arrays.
+
+        Raises
+        ------
+        ValueError
+            If provider identities, registries, ownership, or pair coverage
+            disagree.
+
+        Notes
+        -----
+        Providers receive required pairs in their original field-index order.
+        No model value is evaluated or cached during route preparation.
+        """
         if not isinstance(registry, ParameterRegistry) or not isinstance(
             selection, PairSelection
         ):
@@ -172,12 +276,39 @@ class PreparedP3D:
 
 
 def _state(registry, theta, z):
+    """Validate global parameters and redshift before invoking any provider.
+
+    Parameters
+    ----------
+    registry : ParameterRegistry
+        Global metadata and inclusive parameter bounds.
+    theta : array_like of shape (n_global,)
+        Finite global parameter values in registry order and in each parameter's
+        units.
+    z : float
+        Finite nonnegative dimensionless evaluation redshift.
+
+    Returns
+    -------
+    theta : ndarray of shape (n_global,)
+        Read-only float64 parameter snapshot in unchanged units.
+    z : float
+        Validated redshift.
+
+    Raises
+    ------
+    ValueError
+        If the registry, parameter state, coordinates, or provider result
+        violates the declared callable contract.
+    """
     theta = real_array(theta, "global parameters")
     if theta.shape != (len(registry.ids),):
         raise ValueError("global parameter vector has wrong shape")
     for parameter, value in zip(registry.parameters, theta):
-        lo, hi = parameter.bounds or (None, None)
-        if (lo is not None and value < lo) or (hi is not None and value > hi):
+        lower_bound, upper_bound = parameter.bounds or (None, None)
+        if (lower_bound is not None and value < lower_bound) or (
+            upper_bound is not None and value > upper_bound
+        ):
             raise ValueError(f"{parameter.id}: parameter outside inclusive bounds")
     z = scalar(z, "redshift")
     if z < 0:
@@ -187,6 +318,25 @@ def _state(registry, theta, z):
 
 
 def _nodes(value, name):
+    """Prepare a read-only one-dimensional coordinate snapshot.
+
+    Parameters
+    ----------
+    value : array_like of shape (n_node,)
+        Finite real coordinate values in the named coordinate convention.
+    name : str
+        Coordinate name used in diagnostics.
+
+    Returns
+    -------
+    nodes : ndarray of shape (n_node,)
+        Owned read-only float64 values in unchanged units and order.
+
+    Raises
+    ------
+    ValueError
+        If coordinates are nonnumeric, nonfinite, empty, or not one-dimensional.
+    """
     array = real_array(value, name)
     if array.ndim != 1 or not len(array):
         raise ValueError(f"{name}: require nonempty 1D coordinates")
@@ -195,6 +345,38 @@ def _nodes(value, name):
 
 
 def _inputs(prepared, theta, z, k, mu):
+    """Validate a three-dimensional-power query and copy its input state.
+
+    Parameters
+    ----------
+    prepared : PreparedP3D
+        Explicit provider routes, pair ownership, and registry-aware parameter
+        bindings.
+    theta : array_like of shape (n_global,)
+        Finite global parameter values in registry order and in each parameter's
+        units.
+    z : float
+        Finite nonnegative dimensionless evaluation redshift.
+    k : array_like of shape (n_node,)
+        Positive paired wavenumbers in h_fid/Mpc.
+    mu : array_like of shape (n_node,)
+        Paired direction cosines on [0, 1].
+
+    Returns
+    -------
+    theta : ndarray of shape (n_global,)
+        Read-only parameter snapshot in registry order.
+    z : float
+        Validated dimensionless redshift.
+    k, mu : ndarray of shape (n_node,)
+        Read-only wavenumbers in h_fid/Mpc and dimensionless direction cosines.
+
+    Raises
+    ------
+    ValueError
+        If the registry, parameter state, coordinates, or provider result
+        violates the declared callable contract.
+    """
     theta, z = _state(prepared.registry, theta, z)
     k, mu = _nodes(k, "k"), _nodes(mu, "mu")
     if k.shape != mu.shape or np.any(k <= 0) or np.any((mu < 0) | (mu > 1)):
@@ -203,6 +385,43 @@ def _inputs(prepared, theta, z, k, mu):
 
 
 def _invoke(route, theta, z, k, mu, context, *, jacobian=False):
+    """Invoke one power provider with independent read-only input snapshots.
+
+    Parameters
+    ----------
+    route : _Route
+        Prepared provider, original field-index pairs, and destination columns.
+    theta : array_like of shape (n_global,)
+        Finite global parameter values in registry order and in each parameter's
+        units.
+    z : float
+        Finite nonnegative dimensionless evaluation redshift.
+    k : array_like of shape (n_node,)
+        Positive paired wavenumbers in h_fid/Mpc.
+    mu : array_like of shape (n_node,)
+        Paired direction cosines on [0, 1].
+    context : str
+        Description of the fiducial or derivative evaluation used in errors.
+    jacobian : bool, default=False
+        Evaluate the analytic local Jacobian instead of mean power when True.
+
+    Returns
+    -------
+    values : ndarray
+        Owned float64 (n_node, n_pair) power in (Mpc/h_fid)^3, or (n_node,
+        n_pair, n_local) derivatives in power units per parameter unit.
+
+    Raises
+    ------
+    ValueError
+        If the provider fails or returns an invalid shape, dtype, or value;
+        includes provider and local-parameter context.
+
+    Notes
+    -----
+    Per-call snapshots protect caller and prepared state even if external
+    code resets an input array's writeability flag.
+    """
     provider = route.provider
     binding = provider.parameters.binding
     # Per-call snapshots protect caller/prepared state even if external code
@@ -231,6 +450,35 @@ def _invoke(route, theta, z, k, mu, context, *, jacobian=False):
 def evaluate_p3d(prepared, theta, z, k, mu):
     """Evaluate owned float64 intrinsic powers in exact required-pair order.
 
+    Parameters
+    ----------
+    prepared : PreparedP3D
+        Explicit provider routes, pair ownership, and registry-aware parameter
+        bindings.
+    theta : array_like of shape (n_global,)
+        Finite global parameter values in registry order and in each parameter's
+        units.
+    z : float
+        Finite nonnegative dimensionless evaluation redshift.
+    k : array_like of shape (n_node,)
+        Positive paired wavenumbers in h_fid/Mpc.
+    mu : array_like of shape (n_node,)
+        Paired direction cosines on [0, 1].
+
+    Returns
+    -------
+    power : ndarray of shape (n_node, n_required_pair)
+        Owned float64 intrinsic power in (Mpc/h_fid)^3, preserving required-pair
+        order.
+
+    Raises
+    ------
+    ValueError
+        If the registry, parameter state, coordinates, or provider result
+        violates the declared callable contract.
+
+    Notes
+    -----
     Inputs are read-only snapshots. k (h_fid/Mpc) and mu are paired nodes or
     slices; output units are (Mpc/h_fid)^3. Providers own physics and hidden
     cache invalidation. No transformations, covariance or noise are evaluated.
@@ -249,20 +497,52 @@ def evaluate_p3d(prepared, theta, z, k, mu):
 def evaluate_p1d(model, parameters, theta, z, k_parallel_velocity, *, label="p1d"):
     """Explicit independent P1D call: s/km nodes (including zero), km/s power.
 
+    Parameters
+    ----------
+    model : callable
+        Independent model(theta_local, z, k_parallel_velocity) returning
+        intrinsic one-dimensional power.
+    parameters : BoundParameters
+        Explicit P1D local bindings and their own global registry.
+    theta : array_like of shape (n_global,)
+        Finite global parameter values in registry order and in each parameter's
+        units.
+    z : float
+        Finite nonnegative dimensionless evaluation redshift.
+    k_parallel_velocity : array_like of shape (n_node,)
+        Nonnegative velocity wavenumbers in s/km, including zero.
+    label : str, default='p1d'
+        Provider label used in diagnostics.
+
+    Returns
+    -------
+    power : ndarray of shape (n_node,)
+        Owned float64 intrinsic power in km/s.
+
+    Raises
+    ------
+    ValueError
+        If the registry, parameter state, coordinates, or provider result
+        violates the declared callable contract.
+
+    Notes
+    -----
     ``parameters`` is its own BoundParameters; ``theta`` is that registry's
     global vector. No default model, P3D integration or unit conversion exists.
     Callable inputs are read-only owned snapshots; outputs are copied at once.
     """
     _provider(label, model, parameters)
     theta, z = _state(parameters.registry, theta, z)
-    k = _nodes(k_parallel_velocity, "k_parallel_velocity")
-    if np.any(k < 0):
+    velocity_wavenumber = _nodes(k_parallel_velocity, "k_parallel_velocity")
+    if np.any(velocity_wavenumber < 0):
         raise ValueError("velocity wavenumbers must be nonnegative")
     local = readonly(
         gather_local(theta, parameters.binding.local_to_global), np.float64
     )
     try:
-        return validate_p1d(model(local, z, k), len(k))
+        return validate_p1d(
+            model(local, z, velocity_wavenumber), len(velocity_wavenumber)
+        )
     except Exception as error:
         raise ValueError(
             f"provider {label!r}, z={z}, P1D evaluation, theta_local={local.tolist()}: {error}"

@@ -7,6 +7,7 @@ import numpy as np
 
 
 def test_research_bao_example_is_joint_adaptive_and_synthetic():
+    """Check research bao example is joint adaptive and synthetic."""
     namespace = runpy.run_path(
         str(Path(__file__).resolve().parents[1] / "examples/research_bao_forecast.py")
     )

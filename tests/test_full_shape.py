@@ -20,6 +20,13 @@ from fishhighz.results import FisherResult
 
 
 def full_ini(source):
+    """Rewrite the temporary INI to exercise the full-shape parameterization.
+
+    Parameters
+    ----------
+    source : pathlib.Path
+        Path to the synthetic survey configuration.
+    """
     text = source.read_text().replace("[model]", "[model]\nmode = full_shape")
     for before, after in [
         ("parameterization = ap_at", "parameterization = alpha_phi"),
@@ -32,6 +39,14 @@ def full_ini(source):
 
 
 def test_isotropic_basis_native_fisher_jacobian(tmp_path):
+    """Check isotropic basis native fisher jacobian.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     old_source, template, readers = inputs(tmp_path)
     full_ini(old_source)
     old = Forecast(
@@ -81,7 +96,14 @@ def test_isotropic_basis_native_fisher_jacobian(tmp_path):
 
 
 def test_forest_only_isotropic_fisher_jacobian_with_shared_nuisances(tmp_path):
-    """Four dilation targets retain the complete forest nuisance covariance."""
+    """Four dilation targets retain the complete forest nuisance covariance.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     from fishhighz.full_shape import make_model
     from fishhighz.models.templates import prepare_template
 
@@ -97,18 +119,18 @@ def test_forest_only_isotropic_fisher_jacobian_with_shared_nuisances(tmp_path):
     old = parse_survey_ini(path)
     path.write_text(path.read_text() + "parameterization = alpha_iso_phi\n")
     new = parse_survey_ini(path)
-    k = np.linspace(0.001, 1.0, 600)
+    k_grid = np.linspace(0.001, 1.0, 600)
     template = prepare_template(
-        k,
-        100 + np.sin(100 * k),
-        100 * np.ones_like(k),
+        k_grid,
+        100 + np.sin(100 * k_grid),
+        100 * np.ones_like(k_grid),
         z_ref=2.406,
         h_template=0.7,
         h_fid=0.7,
     )
     pairs = [(0, 0), (0, 4), (4, 4)]
     kval = np.array([0.04, 0.08, 0.12])
-    mu = np.array([0.25, 0.55, 0.85])
+    mu_grid = np.array([0.25, 0.55, 0.85])
     covariance = np.eye(3) * 0.7 + np.ones((3, 3)) * 0.1
     fishers = []
     for config in (old, new):
@@ -139,8 +161,8 @@ def test_forest_only_isotropic_fisher_jacobian_with_shared_nuisances(tmp_path):
             minus[slot] -= step
             gradients.append(
                 (
-                    model(plus[indices], config.bins[1].z_eval, kval, mu, pairs)
-                    - model(minus[indices], config.bins[1].z_eval, kval, mu, pairs)
+                    model(plus[indices], config.bins[1].z_eval, kval, mu_grid, pairs)
+                    - model(minus[indices], config.bins[1].z_eval, kval, mu_grid, pairs)
                 )
                 / (2 * step)
             )
@@ -155,6 +177,14 @@ def test_forest_only_isotropic_fisher_jacobian_with_shared_nuisances(tmp_path):
 
 
 def test_registry_selection(tmp_path):
+    """Check registry selection.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     source = tmp_path / "full.ini"
     source.write_text(
         Path("fishhighz/data/desi2_accuracy.ini").read_text()
@@ -171,20 +201,24 @@ def test_registry_selection(tmp_path):
 
 
 def test_dense_marginalization_and_growth_cross_covariance():
+    """Check dense marginalization and growth cross covariance."""
     registry = ParameterRegistry(
         [
             Parameter(name, 1.0, "target" if i < 5 else "nuisance")
             for i, name in enumerate((*TARGETS, "b"))
         ]
     )
-    a = np.random.default_rng(42).normal(size=(16, 6))
-    fisher = a.T @ a
+    design_matrix = np.random.default_rng(42).normal(size=(16, 6))
+    fisher = design_matrix.T @ design_matrix
     status, covariance, errors, correlations = reported_constraint(
         FisherResult(registry, fisher), TARGETS, 0.3
     )
-    j = np.diag([1.0, 1.0, 1.0, 1.0, 0.3])
+    parameter_jacobian = np.diag([1.0, 1.0, 1.0, 1.0, 0.3])
     np.testing.assert_allclose(
-        covariance, j @ np.linalg.inv(fisher)[:5, :5] @ j, rtol=1e-13, atol=1e-15
+        covariance,
+        parameter_jacobian @ np.linalg.inv(fisher)[:5, :5] @ parameter_jacobian,
+        rtol=1e-13,
+        atol=1e-15,
     )
     assert status == "available"
     np.testing.assert_allclose(errors**2, np.diag(covariance))
@@ -201,6 +235,18 @@ def test_dense_marginalization_and_growth_cross_covariance():
 
 @pytest.mark.parametrize("lo,hi", [(0.02, 0.1), (0.01, 0.15), (0.025, 0.2)])
 def test_public_cuts_and_numeric_serialization(tmp_path, lo, hi):
+    """Check public cuts and numeric serialization.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    lo : float
+        Lower test boundary, supplied by pytest parametrization.
+    hi : float
+        Upper test boundary, supplied by pytest parametrization.
+    """
     source, template, readers = inputs(tmp_path)
     full_ini(source)
     source.write_text(
@@ -242,6 +288,18 @@ def test_public_cuts_and_numeric_serialization(tmp_path, lo, hi):
     "lo,hi", [(0, 0.1), (0.1, 0.1), (0.2, 0.1), ("nan", 0.1), (0.01, "inf")]
 )
 def test_invalid_limits(tmp_path, lo, hi):
+    """Check invalid limits.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    lo : int or float or str
+        Lower test boundary, supplied by pytest parametrization.
+    hi : float or str
+        Upper test boundary, supplied by pytest parametrization.
+    """
     source, _, _ = inputs(tmp_path)
     full_ini(source)
     source.write_text(
@@ -254,6 +312,14 @@ def test_invalid_limits(tmp_path, lo, hi):
 
 
 def test_bao_rejects_full_shape_controls(tmp_path):
+    """Check bao rejects full shape controls.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     source, _, _ = inputs(tmp_path)
     source.write_text(
         source.read_text().replace("[model]", "[model]\nbiases = marginalized")
@@ -263,6 +329,14 @@ def test_bao_rejects_full_shape_controls(tmp_path):
 
 
 def test_coverage_is_rejected_at_derivative_stencil(tmp_path):
+    """Check coverage is rejected at derivative stencil.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     source, template, readers = inputs(tmp_path)
     full_ini(source)
     source.write_text(
@@ -279,6 +353,14 @@ def test_coverage_is_rejected_at_derivative_stencil(tmp_path):
 
 
 def test_shared_forest_binding_and_singular_spectra(tmp_path):
+    """Check shared forest binding and singular spectra.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     from fishhighz.full_shape import make_model
     from fishhighz.models.templates import prepare_template
 
@@ -289,11 +371,11 @@ def test_shared_forest_binding_and_singular_spectra(tmp_path):
     )
     config = parse_survey_ini(source)
     registry = make_registry(config, Background())
-    k = np.linspace(0.001, 1.0, 1000)
+    k_grid = np.linspace(0.001, 1.0, 1000)
     template = prepare_template(
-        k,
-        100 + np.sin(100 * k),
-        100 * np.ones_like(k),
+        k_grid,
+        100 + np.sin(100 * k_grid),
+        100 * np.ones_like(k_grid),
         z_ref=2.406,
         h_template=0.7,
         h_fid=0.7,
@@ -327,7 +409,7 @@ def test_shared_forest_binding_and_singular_spectra(tmp_path):
         == "beta_lya_1"
     )
     kval = np.repeat(np.linspace(0.02, 0.2, 30), 12)
-    mu = np.tile(np.linspace(0.02, 0.98, 12), 30)
+    mu_grid = np.tile(np.linspace(0.02, 0.98, 12), 30)
     theta = registry.fiducials.copy()
     for pair, names in [
         ((0, 4), ("lya(qso)", "lya(lbg)")),
@@ -349,14 +431,14 @@ def test_shared_forest_binding_and_singular_spectra(tmp_path):
                             plus[global_indices],
                             config.bins[1].z_eval,
                             kval,
-                            mu,
+                            mu_grid,
                             [pair],
                         )
                         - model(
                             minus[global_indices],
                             config.bins[1].z_eval,
                             kval,
-                            mu,
+                            mu_grid,
                             [pair],
                         )
                     )
@@ -375,16 +457,24 @@ def test_shared_forest_binding_and_singular_spectra(tmp_path):
 
 
 def test_default_steps_halved_on_synthetic_full_shape(tmp_path):
+    """Check default steps halved on synthetic full shape.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     from fishhighz.derivatives import check_convergence
     from fishhighz.models.templates import prepare_template
 
     source, _, readers = inputs(tmp_path)
     full_ini(source)
-    k = np.linspace(0.001, 1.0, 1000)
+    k_grid = np.linspace(0.001, 1.0, 1000)
     template = prepare_template(
-        k,
-        100 + np.sin(100 * k),
-        100 * np.ones_like(k),
+        k_grid,
+        100 + np.sin(100 * k_grid),
+        100 * np.ones_like(k_grid),
         z_ref=2.406,
         h_template=0.7,
         h_fid=0.7,
@@ -406,15 +496,23 @@ def test_default_steps_halved_on_synthetic_full_shape(tmp_path):
 
 
 def test_template_covering_all_nodes_but_not_cuts_is_rejected(tmp_path):
+    """Check template covering all nodes but not cuts is rejected.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     from fishhighz.models.templates import prepare_template
 
     source, _, readers = inputs(tmp_path)
     full_ini(source)
-    k = np.linspace(0.019, 0.091, 200)
+    k_grid = np.linspace(0.019, 0.091, 200)
     template = prepare_template(
-        k,
-        100 + np.sin(30 * k),
-        100 * np.ones_like(k),
+        k_grid,
+        100 + np.sin(30 * k_grid),
+        100 * np.ones_like(k_grid),
         z_ref=2.406,
         h_template=0.7,
         h_fid=0.7,
@@ -430,6 +528,22 @@ def test_template_covering_all_nodes_but_not_cuts_is_rejected(tmp_path):
 def test_perturbed_cut_coverage_uses_actual_schedule(
     tmp_path, component, suffix, one_sided
 ):
+    """Check perturbed cut coverage uses actual schedule.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    component : str
+        Spectrum component under examination, supplied by pytest
+        parametrization.
+    suffix : str
+        Input filename suffix, supplied by pytest parametrization.
+    one_sided : bool
+        Whether to exercise a one-sided derivative stencil, supplied by pytest
+        parametrization.
+    """
     from dataclasses import replace
     from types import SimpleNamespace
 
@@ -438,11 +552,11 @@ def test_perturbed_cut_coverage_uses_actual_schedule(
 
     source, _, readers = inputs(tmp_path)
     full_ini(source)
-    k = np.linspace(0.009999, 0.10001, 200)
+    k_grid = np.linspace(0.009999, 0.10001, 200)
     template = prepare_template(
-        k,
-        100 + np.sin(30 * k),
-        100 * np.ones_like(k),
+        k_grid,
+        100 + np.sin(30 * k_grid),
+        100 * np.ones_like(k_grid),
         z_ref=2.406,
         h_template=0.7,
         h_fid=0.7,
@@ -478,15 +592,23 @@ def test_perturbed_cut_coverage_uses_actual_schedule(
 
 
 def test_public_custom_step_scale_changes_coverage(tmp_path):
+    """Check public custom step scale changes coverage.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     from fishhighz.models.templates import prepare_template
 
     source, _, readers = inputs(tmp_path)
     full_ini(source)
-    k = np.linspace(0.009999, 0.10001, 200)
+    k_grid = np.linspace(0.009999, 0.10001, 200)
     template = prepare_template(
-        k,
-        100 + np.sin(30 * k),
-        100 * np.ones_like(k),
+        k_grid,
+        100 + np.sin(30 * k_grid),
+        100 * np.ones_like(k_grid),
         z_ref=2.406,
         h_template=0.7,
         h_fid=0.7,
@@ -500,6 +622,14 @@ def test_public_custom_step_scale_changes_coverage(tmp_path):
 
 
 def test_new_controls_are_optional_and_empty_bin_is_explicit(tmp_path):
+    """Check new controls are optional and empty bin is explicit.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     source, template, readers = inputs(tmp_path)
     full_ini(source)
     source.write_text(
@@ -527,6 +657,14 @@ def test_new_controls_are_optional_and_empty_bin_is_explicit(tmp_path):
 
 
 def test_native_category_cut_sets_observed_domain_and_is_saved(tmp_path):
+    """Check native category cut sets observed domain and is saved.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     source, template, readers = inputs(tmp_path)
     full_ini(source)
     source.write_text(
@@ -548,6 +686,14 @@ def test_native_category_cut_sets_observed_domain_and_is_saved(tmp_path):
 
 
 def _three_category_bin():
+    """Prepare forest-auto, galaxy-auto, and cross spectra for cutoff tests.
+
+    Returns
+    -------
+    fixture : tuple
+        Prepared bin and dictionaries of amplitude and forest-bias responses by
+        field pair.
+    """
     from fishhighz.fields import ObservedField, PairSelection
     from fishhighz.forecast import prepare_bin
     from fishhighz.geometry import prepare_geometry
@@ -576,6 +722,26 @@ def _three_category_bin():
     forest_responses = {(0, 0): 0.7, (0, 1): 0.2, (1, 1): 0.0}
 
     def power(theta, redshift, k, mu, pairs):
+        """Evaluate the synthetic spectrum used by the enclosing regression test.
+
+        Parameters
+        ----------
+        theta : ndarray of shape (n_parameters,)
+            Local model parameters in the provider binding order.
+        redshift : float or ndarray
+            Dimensionless evaluation redshift; arrays retain their input shape.
+        k : ndarray of shape (n_nodes,)
+            Comoving wavenumbers in h/Mpc.
+        mu : ndarray of shape (n_nodes,)
+            Dimensionless line-of-sight direction cosines.
+        pairs : ndarray of int, shape (n_pairs, 2)
+            Observed-field indices defining the requested spectra.
+
+        Returns
+        -------
+        power : ndarray of shape (n_nodes, n_pairs)
+            Synthetic intrinsic power in (Mpc/h)^3 before response and noise.
+        """
         return np.column_stack(
             [
                 np.full(
@@ -618,6 +784,17 @@ def _three_category_bin():
 
 @pytest.mark.parametrize("forest_cut,cross_cut", [(0.20, 0.15), (0.15, 0.20)])
 def test_category_intervals_match_direct_covariance(forest_cut, cross_cut):
+    """Check category intervals match direct covariance.
+
+    Parameters
+    ----------
+    forest_cut : float
+        Forest auto-spectrum wavenumber cutoff, supplied by pytest
+        parametrization.
+    cross_cut : float
+        Forest–galaxy cross-spectrum wavenumber cutoff, supplied by pytest
+        parametrization.
+    """
     from types import SimpleNamespace
 
     from fishhighz.covariance import gaussian_covariance
@@ -687,7 +864,14 @@ def test_category_intervals_match_direct_covariance(forest_cut, cross_cut):
 
 @pytest.mark.parametrize("first_bin", [True, False])
 def test_five_field_category_covariance_closure_and_first_bin(first_bin):
-    """Retain covariance autos above their observable cuts in five-field fits."""
+    """Retain covariance autos above their observable cuts in five-field fits.
+
+    Parameters
+    ----------
+    first_bin : bool
+        Whether to exercise the first redshift bin, supplied by pytest
+        parametrization.
+    """
     from types import SimpleNamespace
 
     from fishhighz.covariance import gaussian_covariance
@@ -730,10 +914,42 @@ def test_five_field_category_covariance_closure_and_first_bin(first_bin):
     )
 
     def coefficients(pair):
+        """Return independent linear responses for one synthetic field pair.
+
+        Parameters
+        ----------
+        pair : array_like of int, shape (2,)
+            Indices of the two fields in the synthetic spectrum.
+
+        Returns
+        -------
+        coefficients : ndarray of shape (2,)
+            Dimensionless response coefficients in the two-parameter order.
+        """
         i, j = pair
         return np.array([0.01 * (1 + i + j), 0.01 * (1 + i * j)])
 
     def power(theta, redshift, k, mu, pairs):
+        """Evaluate the synthetic spectrum used by the enclosing regression test.
+
+        Parameters
+        ----------
+        theta : ndarray of shape (n_parameters,)
+            Local model parameters in the provider binding order.
+        redshift : float or ndarray
+            Dimensionless evaluation redshift; arrays retain their input shape.
+        k : ndarray of shape (n_nodes,)
+            Comoving wavenumbers in h/Mpc.
+        mu : ndarray of shape (n_nodes,)
+            Dimensionless line-of-sight direction cosines.
+        pairs : ndarray of int, shape (n_pairs, 2)
+            Observed-field indices defining the requested spectra.
+
+        Returns
+        -------
+        power : ndarray of shape (n_nodes, n_pairs)
+            Synthetic intrinsic power in (Mpc/h)^3 before response and noise.
+        """
         return np.column_stack(
             [
                 np.full(
@@ -814,6 +1030,14 @@ def test_five_field_category_covariance_closure_and_first_bin(first_bin):
 
 
 def test_forest_dilation_only_keeps_fiducial_growth_fixed(tmp_path):
+    """Check forest dilation only keeps fiducial growth fixed.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     from fishhighz.full_shape import make_model
     from fishhighz.models.templates import prepare_template
 
@@ -841,11 +1065,11 @@ def test_forest_dilation_only_keeps_fiducial_growth_fixed(tmp_path):
         sum(parameter.role == "target" for parameter in reduced_registry.parameters)
         == 24
     )
-    k = np.linspace(0.001, 1.0, 300)
+    k_grid = np.linspace(0.001, 1.0, 300)
     template = prepare_template(
-        k,
-        100 + np.sin(100 * k),
-        100 * np.ones_like(k),
+        k_grid,
+        100 + np.sin(100 * k_grid),
+        100 * np.ones_like(k_grid),
         z_ref=2.406,
         h_template=0.7,
         h_fid=0.7,
@@ -892,6 +1116,16 @@ def test_forest_dilation_only_keeps_fiducial_growth_fixed(tmp_path):
 
 @pytest.mark.parametrize("amplitude", ["alpha", "alpha_iso"])
 def test_four_target_forest_result_round_trip(tmp_path, amplitude):
+    """Check four target forest result round trip.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    amplitude : str
+        Spectrum or weight amplitude, supplied by pytest parametrization.
+    """
     from types import SimpleNamespace
 
     from fishhighz.public import SpectrumConstraint, SurveyResult

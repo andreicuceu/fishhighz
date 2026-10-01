@@ -34,7 +34,25 @@ POLICIES = (
 
 
 def wheel_identity(path):
-    """Verify actual imported payload against one exact caller-selected wheel."""
+    """Verify actual imported payload against one exact caller-selected wheel.
+
+    Parameters
+    ----------
+    path : str or pathlib.Path
+        Path to the file to inspect.
+
+    Returns
+    -------
+    identity : dict
+        Exact wheel path/hash, imported origin/version and verified module
+        hashes.
+
+    Raises
+    ------
+    ValueError :
+        If inputs, declared identities or numerical validation conditions are
+        inconsistent.
+    """
     import fishhighz
 
     wheel = Path(path).resolve()
@@ -61,14 +79,31 @@ def wheel_identity(path):
 
 
 def provenance(reference, template, wheel):
+    """Bind both forecast implementations and every input resource.
+
+    Parameters
+    ----------
+    reference : str or pathlib.Path
+        Root of the reference checkout or captured bundle.
+    template : str or pathlib.Path
+        Path to the Vega-format K/PK/PKSB FITS template.
+    wheel : str or pathlib.Path
+        Exact installed FishHighz wheel used to bind software provenance.
+
+    Returns
+    -------
+    provenance : dict
+        Installed FishHighz identity, exact wheel, reference dependencies and
+        resource hashes.
+    """
     import configparser
 
     identity = imported_reference(reference)
     resources = {}
     for case in CASE_IDS:
-        c = configparser.ConfigParser()
-        c.read_dict(recipe(case))
-        resources.update(resolved_resources(reference, c))
+        configuration = configparser.ConfigParser()
+        configuration.read_dict(recipe(case))
+        resources.update(resolved_resources(reference, configuration))
     resources[str(Path(template).resolve())] = digest(template)
     installed = wheel_identity(wheel)
     return dict(
@@ -94,17 +129,46 @@ _IO_MODULES = {
 
 
 def completed_cache(root, ident, work, *, accuracy_method=None):
+    """Select reusable records with identical scientific code and physical inputs.
+
+    Parameters
+    ----------
+    root : str or pathlib.Path
+        Root directory of the input checkout or saved evidence bundle.
+    ident : dict
+        Input paths, hashes and software identities retained with the
+        calculation.
+    work : sequence of dict
+        Exact requests eligible for reuse.
+    accuracy_method : str or None
+        Required forest-weight method for cached accuracy records. Default is
+        ``None``.
+
+    Returns
+    -------
+    cache : dict
+        Verified completed entries indexed by canonical request identity.
+    inputs : list of pathlib.Path
+        Manifest, numerical files, producing wheels and external reports used by
+        the cache.
+
+    Raises
+    ------
+    ValueError :
+        If inputs, declared identities or numerical validation conditions are
+        inconsistent.
+    """
     from .schema import validate_payload
 
     root = Path(root).resolve()
     path = root / "manifest.json"
-    m = json.loads(path.read_text())
-    if m.get("schema") not in (2, 3):
+    manifest = json.loads(path.read_text())
+    if manifest.get("schema") not in (2, 3):
         raise ValueError("reuse requires schema-2 numerical inputs")
     requested = {canonical(t) for t in work}
     cache = {}
     inputs = [path]
-    for record in m["records"]:
+    for record in manifest["records"]:
         key = canonical(record["task"])
         if key not in requested or record.get("status") != "completed":
             continue
@@ -147,8 +211,8 @@ def completed_cache(root, ident, work, *, accuracy_method=None):
         ):
             raise ValueError("cached input hash/path mismatch")
         # Validate one record at a time; no model imports or retained node arrays.
-        with np.load(data, allow_pickle=False) as f:
-            arrays = {n: f[n] for n in f.files}
+        with np.load(data, allow_pickle=False) as archive:
+            arrays = {n: archive[n] for n in archive.files}
         validate_payload(record["task"], arrays, report, require_pass=False)
         cache[key] = dict(path=data, record=record, root=root, report=report)
         inputs.extend([data, Path(old["wheel"]["path"])])
@@ -158,22 +222,44 @@ def completed_cache(root, ident, work, *, accuracy_method=None):
 
 
 def reassemble_cached(entry, ident):
+    """Recontract verified saved inputs with the current installed package.
+
+    Parameters
+    ----------
+    entry : dict
+        Verified cache entry containing path, request record and report.
+    ident : dict
+        Input paths, hashes and software identities retained with the
+        calculation.
+
+    Returns
+    -------
+    arrays : dict of str to ndarray
+        Saved powers and derivatives with independently reconstructed covariance
+        and Fisher summaries.
+    report : dict
+        Updated provenance identifying the immutable reused operands.
+
+    Notes
+    -----
+    Updates the cached report in place and prints a reuse diagnostic.
+    """
     from .numerics import contract, summaries, wick
 
     record = entry["record"]
     report = entry["report"]
     task = record["task"]
-    with np.load(entry["path"], allow_pickle=False) as f:
-        arrays = {n: f[n] for n in f.files}
-    c = wick(
+    with np.load(entry["path"], allow_pickle=False) as archive:
+        arrays = {n: archive[n] for n in archive.files}
+    covariance = wick(
         arrays["total"],
         arrays["modes"],
         arrays["required_pairs"],
         arrays["selected_pairs"],
         len(task["fields"]),
     )
-    fisher, pairs = contract(c, arrays["observed_j"])
-    arrays.update(selected_covariance=c, **summaries(fisher, pairs))
+    fisher, pairs = contract(covariance, arrays["observed_j"])
+    arrays.update(selected_covariance=covariance, **summaries(fisher, pairs))
     report["cached_numerical_inputs"] = dict(
         path=str(entry["path"]),
         sha256=record["sha256"],
@@ -210,7 +296,64 @@ def run(
     compatibility_bundle=None,
     recipe_revision=REVISION,
 ):
-    """Serial full is explicit; primary and diagnostic inventories are disjoint."""
+    """Serial full is explicit; primary and diagnostic inventories are disjoint.
+
+    Parameters
+    ----------
+    output : str or pathlib.Path
+        Destination directory for the generated evidence or figures.
+    reference : str or pathlib.Path
+        Root of the reference checkout or captured bundle.
+    template : str or pathlib.Path
+        Path to the Vega-format K/PK/PKSB FITS template.
+    reference_bundle : str or pathlib.Path
+        Fresh upstream reference-capture bundle.
+    wheel : str or pathlib.Path
+        Exact installed FishHighz wheel used to bind software provenance.
+    suite : str
+        Requested quick or explicitly selected full validation inventory.
+        Default is ``'quick'``.
+    cases : sequence of str or None
+        Case identifiers to include; None uses the suite-defined inventory.
+        Default is ``None``.
+    bin_indices : sequence of int or None
+        Zero-based bins to include; None uses the suite-defined bin selection.
+        Default is ``None``.
+    profiles : sequence of str
+        Ordered scientific profiles to include. Default is ``('full-
+        compatibility', 'fixed-compatibility', 'accuracy')``.
+    sensitivities : bool
+        Include the explicitly enumerated input-policy sensitivity diagnostics.
+        Default is ``False``.
+    reuse_completed : str or pathlib.Path or None
+        Earlier bundle whose verified completed numerical inputs may be reused.
+        Default is ``None``.
+    accuracy_method : str
+        Forest-weight prescription used by the accuracy profile. Default is
+        ``'early_lyaforecast'``.
+    compatibility_bundle : str or pathlib.Path or None
+        Captured compatibility bundle required by the revised compatibility
+        profiles. Default is ``None``.
+    recipe_revision : str or None
+        Declared revision of the physical recipe; None retains historical
+        request semantics. Default is ``REVISION``.
+
+    Returns
+    -------
+    manifest : dict
+        Written primary and diagnostic inventory with explicit execution and
+        numerical status.
+
+    Raises
+    ------
+    ValueError :
+        If inputs, declared identities or numerical validation conditions are
+        inconsistent.
+
+    Notes
+    -----
+    Runs the declared requests serially, imports reference-model dependencies as needed, writes a new evidence directory and prints progress.
+    """
     if accuracy_method not in ("inverse_variance", "legacy", *ADAPTIVE):
         raise ValueError(
             "accuracy_method must be legacy, inverse_variance, "
@@ -240,32 +383,49 @@ def run(
     if sensitivities and "accuracy" in profiles:
         diagnostics = [
             request(
-                t["case"],
-                t["bin"],
+                request_task["case"],
+                request_task["bin"],
                 "accuracy",
                 kind="diagnostic",
                 diagnostic_id=p,
                 recipe_revision=recipe_revision,
             )
-            for t in work
-            if t["profile"] == "accuracy"
+            for request_task in work
+            if request_task["profile"] == "accuracy"
             for p in POLICIES
             if accuracy_method == "legacy" or p != "three_weights"
         ]
-    c = t = None
+    cosmology = power_template = None
     active_recipe = None
     active_case = None
     out = Path(output).resolve()
 
     def accuracy_recipe(case):
-        nonlocal c, t, active_recipe, active_case
-        if c is None:
+        """Prepare or reuse the current accuracy recipe.
+
+        Parameters
+        ----------
+        case : str
+            Identifier of one of the seven original DESI-2 validation
+            configurations.
+
+        Returns
+        -------
+        recipe : AccuracyRecipe
+            Active case recipe sharing the prepared CAMB background and template.
+
+        Notes
+        -----
+        Initializes the enclosing shared cosmology once and replaces the active case recipe when necessary.
+        """
+        nonlocal cosmology, power_template, active_recipe, active_case
+        if cosmology is None:
             print(
                 "Preparing shared CAMB background at all actual redshifts", flush=True
             )
-            c, t = background(reference, template)
+            cosmology, power_template = background(reference, template)
         if active_case != case:
-            arguments = (reference, case, c, t, ident)
+            arguments = (reference, case, cosmology, power_template, ident)
             active_recipe = AccuracyRecipe(
                 *arguments,
                 weight_method=accuracy_method,
@@ -275,6 +435,32 @@ def run(
         return active_recipe
 
     def worker(task):
+        """Evaluate one profile request or reconstruct its verified saved operands.
+
+        Parameters
+        ----------
+        task : dict
+            Declared case, bin, selected field pairs, parameter order and validation
+            thresholds.
+
+        Returns
+        -------
+        arrays : dict of str to ndarray
+            Numerical evidence for the exact requested primary or diagnostic.
+        report : dict
+            Physical settings, provenance and execution-specific scientific
+            metadata.
+
+        Raises
+        ------
+        ValueError :
+            If inputs, declared identities or numerical validation conditions are
+            inconsistent.
+
+        Notes
+        -----
+        Updates primary-result references used by diagnostics and releases completed recipe caches.
+        """
         started = time.monotonic()
         print(
             f"{task['kind']} {task['case']} bin {task['bin']} {task['profile']} {task['diagnostic_id'] or ''}",
@@ -299,9 +485,11 @@ def run(
                 raise ValueError(
                     "primary accuracy execution failed; diagnostic unavailable"
                 )
-            r = accuracy_recipe(task["case"])
+            recipe_instance = accuracy_recipe(task["case"])
             policy = task["diagnostic_id"]
-            sampled, _, _ = r.samples(task["bin"], info["controls"]["magnitude_order"])
+            sampled, _, _ = recipe_instance.samples(
+                task["bin"], info["controls"]["magnitude_order"]
+            )
             if policy == "remove_bright":
                 active = any(
                     row.get("snr_diagnostics", {})
@@ -329,12 +517,14 @@ def run(
             else:
                 active = True
             if active:
-                arrays, report = r.sensitivity(task, info["controls"], policy)
+                arrays, report = recipe_instance.sensitivity(
+                    task, info["controls"], policy
+                )
             else:
-                with np.load(out / info["array"], allow_pickle=False) as d:
+                with np.load(out / info["array"], allow_pickle=False) as archive:
                     arrays = {
-                        k: d[k]
-                        for k in d.files
+                        k: archive[k]
+                        for k in archive.files
                         if not k.startswith(("metric_", "study_"))
                     }
                 manifest = json.loads((out / "manifest.json").read_text())
@@ -370,8 +560,8 @@ def run(
         elif task["profile"] == "compatibility":
             arrays, report = compatibility(task, reference_bundle, ident)
         else:
-            r = accuracy_recipe(task["case"])
-            arrays, report = r.study(task)
+            recipe_instance = accuracy_recipe(task["case"])
+            arrays, report = recipe_instance.study(task)
             index = work.index(task)
             primary_rows[(task["case"], task["bin"])] = dict(
                 controls=report["final_controls"],
@@ -381,8 +571,8 @@ def run(
                 index=index,
             )
             # Avoid retaining large sampled metadata for every bin in the controller.
-            r._samples.clear()
-            r._prepared.clear()
+            recipe_instance._samples.clear()
+            recipe_instance._prepared.clear()
         print(
             f"Finished in {time.monotonic() - started:.2f}s; scientific passed={report['passed']}",
             flush=True,

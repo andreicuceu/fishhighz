@@ -62,7 +62,51 @@ def _forest_input(
     policy="primary",
     weight_rtol=1e-4,
 ):
-    """Construct the accuracy-profile forest input and declared weight metadata."""
+    """Construct the accuracy-profile forest input and declared weight metadata.
+
+    Parameters
+    ----------
+    field : ObservedField
+        Observed forest or galaxy field and its physical tracer identity.
+    row : dict
+        Sampled density, pixel variance, source redshift, forest length and
+        input-policy diagnostics.
+    magnitudes : array_like, shape (n_magnitude,)
+        Apparent-magnitude quadrature nodes in mag.
+    quadrature : array_like, shape (n_magnitude,)
+        Magnitude integration weights in mag.
+    response : InstrumentResponse
+        Per-field pixel width and Gaussian resolution in km/s.
+    registry : ParameterRegistry
+        Global parameter definitions, fiducials and local bindings.
+    z_eval : float
+        Dimensionless forest evaluation redshift.
+    method : str
+        Forest-weight prescription: legacy, inverse_variance, early_lyaforecast
+        or mcdonald, as applicable.
+    iterations : int
+        Number of completed nonlinear weight updates. Default is ``None``.
+    policy : str
+        Explicit source-input policy or sensitivity variant. Default is
+        ``'primary'``.
+    weight_rtol : float
+        Dimensionless relative tolerance for adaptive forest-weight convergence.
+        Default is ``0.0001``.
+
+    Returns
+    -------
+    source : ForestInput
+        Frozen per-field forest-weight and independent P1D inputs.
+    weighting : dict
+        Declared weight method, applicable iteration controls and auxiliary-
+        reference metadata.
+
+    Raises
+    ------
+    ValueError :
+        If inputs, declared identities or numerical validation conditions are
+        inconsistent.
+    """
     common = dict(
         z_source=row["z_source"],
         magnitudes=magnitudes,
@@ -71,6 +115,7 @@ def _forest_input(
         variance=row["variance"],
         length_velocity=row["length_velocity"],
     )
+
     reference = None
     if method == "inverse_variance":
         if iterations is not None:
@@ -123,6 +168,7 @@ def _forest_input(
             "accuracy weight method must be legacy, inverse_variance, "
             "early_lyaforecast or mcdonald"
         )
+
     weighting = dict(
         method=method,
         iterations=iteration_status,
@@ -145,19 +191,39 @@ def _forest_input(
 
 
 def background(root, template_path):
-    """One caller-prepared CAMB background at every actual evaluation redshift."""
+    """One caller-prepared CAMB background at every actual evaluation redshift.
+
+    Parameters
+    ----------
+    root : str or pathlib.Path
+        Root directory of the input checkout or saved evidence bundle.
+    template_path : str or pathlib.Path
+        Path to the Vega-format K/PK/PKSB FITS template.
+
+    Returns
+    -------
+    cosmology : CosmoCamb
+        CAMB background prepared at all requested geometric/arithmetic bin
+        redshifts and the template redshift.
+    template : PowerTemplate
+        Prepared Vega wiggle/no-wiggle template in comoving units.
+
+    Notes
+    -----
+    Reads the caller-selected template and verified reference cosmology configuration, then evaluates CAMB once.
+    """
     import camb
     from astropy.io import fits
     from lyaforecast.cosmoCAMB import CosmoCamb
 
     root = Path(root).resolve()
     imported_reference(root)
-    with fits.open(template_path) as f:
-        zt = float(f[1].header["ZREF"])
-    zs = sorted(
+    with fits.open(template_path) as template_file:
+        template_redshift = float(template_file[1].header["ZREF"])
+    evaluation_redshifts = sorted(
         {
             2.3,
-            zt,
+            template_redshift,
             1.8,
             4.5,
             *[
@@ -170,7 +236,7 @@ def background(root, template_path):
     )
     ini = root / "lyaforecast/resources/camb_configs/Planck18.ini"
     parsed = camb.read_ini(str(ini))
-    cosmo = CosmoCamb(str(ini), z_ref=2.3, z_centres=zs)
+    cosmo = CosmoCamb(str(ini), z_ref=2.3, z_centres=evaluation_redshifts)
     template = load_template(template_path, h_fid=parsed.H0 / 100)
     return cosmo, template
 
@@ -189,6 +255,39 @@ class AccuracyRecipe:
         weight_method="early_lyaforecast",
         recipe_revision=REVISION,
     ):
+        """Prepare a verified case, source readers and fixed parameter bindings.
+
+        Parameters
+        ----------
+        root : str or pathlib.Path
+            Root directory of the input checkout or saved evidence bundle.
+        case : str
+            Identifier of one of the seven original DESI-2 validation
+            configurations.
+        cosmo : CosmoCamb
+            Background cosmology already evaluated at all required redshifts.
+        template : PowerTemplate
+            Prepared wiggle and smooth power template in comoving units.
+        provenance : dict
+            Input paths, hashes and software identities retained with the
+            calculation.
+        weight_method : str
+            Forest-weight prescription: legacy, inverse_variance, early_lyaforecast
+            or mcdonald, as applicable. Default is ``'early_lyaforecast'``.
+        recipe_revision : str or None
+            Declared revision of the physical recipe; None retains historical
+            request semantics. Default is ``REVISION``.
+
+        Raises
+        ------
+        ValueError :
+            If inputs, declared identities or numerical validation conditions are
+            inconsistent.
+
+        Notes
+        -----
+        Loads density/SNR readers, configures tracer bias interpolation and initializes bounded preparation caches.
+        """
         from lyaforecast.power_spectrum import PowerSpectrum
         from scipy.interpolate import interp1d
 
@@ -225,27 +324,27 @@ class AccuracyRecipe:
             self.selection.fields,
             [s for s in self.config.sections() if s.startswith("tracer ")],
         ):
-            t = self.config[key]
-            self.tracers[field.id] = dict(t)
-            if "bias z" in t:
+            tracer_settings = self.config[key]
+            self.tracers[field.id] = dict(tracer_settings)
+            if "bias z" in tracer_settings:
                 self.external.bias.set_density_bias_func(
-                    t["tracer"],
+                    tracer_settings["tracer"],
                     interp1d(
-                        np.fromstring(t["bias z"], sep=" "),
-                        np.fromstring(t["bias val"], sep=" "),
+                        np.fromstring(tracer_settings["bias z"], sep=" "),
+                        np.fromstring(tracer_settings["bias val"], sep=" "),
                         bounds_error=False,
                         fill_value="extrapolate",
                     ),
                 )
             forest = field.kind == "forest"
             reader = DensityReader(
-                self.root / "lyaforecast/resources/data" / t["dn dz"],
+                self.root / "lyaforecast/resources/data" / tracer_settings["dn dz"],
                 semantics="cell_count_per_deg2",
-                target_density=t.getfloat("target density"),
+                target_density=tracer_settings.getfloat("target density"),
                 z_norm_min=2.15 if forest or field.id == "qso" else None,
                 magnitude_bounds=(
-                    t.getfloat("min_band_mag"),
-                    t.getfloat("max_band_mag"),
+                    tracer_settings.getfloat("min_band_mag"),
+                    tracer_settings.getfloat("max_band_mag"),
                 )
                 if forest
                 else None,
@@ -255,9 +354,11 @@ class AccuracyRecipe:
             self.densities[field.id] = LegacyDensity(reader, "floor_negative")
             if forest:
                 paths = sorted(
-                    (self.root / "lyaforecast/resources/data" / t["snr-file-dir"]).glob(
-                        "*.dat"
-                    )
+                    (
+                        self.root
+                        / "lyaforecast/resources/data"
+                        / tracer_settings["snr-file-dir"]
+                    ).glob("*.dat")
                 )
                 self.snrs[field.id] = LegacySNR(
                     SNRReader(paths, smoothing="legacy", label=field.id)
@@ -267,10 +368,42 @@ class AccuracyRecipe:
         self._prepared = OrderedDict()
 
     def z(self, index):
+        """Return the forest evaluation redshift for one bin.
+
+        Parameters
+        ----------
+        index : int
+            Zero-based redshift-bin index.
+
+        Returns
+        -------
+        redshift : float
+            Dimensionless geometric mean in 1 + z of the bin edges.
+        """
         lo, hi = bins(self.case)[index]
         return float(np.sqrt((1 + lo) * (1 + hi)) - 1)
 
     def _growth(self, z):
+        """Read sigma8 and growth rate at an exactly prepared CAMB redshift.
+
+        Parameters
+        ----------
+        z : float
+            Dimensionless evaluation redshift.
+
+        Returns
+        -------
+        sigma8 : float
+            Linear matter fluctuation amplitude at the exact redshift.
+        growth_rate : float
+            Dimensionless logarithmic growth rate at the same redshift.
+
+        Raises
+        ------
+        ValueError :
+            If inputs, declared identities or numerical validation conditions are
+            inconsistent.
+        """
         indices = np.flatnonzero(self.cosmo.z_bins == z)
         if len(indices) != 1:
             raise ValueError("CAMB must be prepared at exact requested redshift")
@@ -278,42 +411,85 @@ class AccuracyRecipe:
         return float(self.cosmo.sigma8_zbins[i]), float(self.cosmo.growth_rate_zbins[i])
 
     def model(self, index, *, mean_z=None, growth="camb", reconstruction=True):
+        """Construct the intrinsic wiggle-dilation model with fixed fiducial physics.
+
+        Parameters
+        ----------
+        index : int
+            Zero-based redshift-bin index.
+        mean_z : float or None
+            Alternative model redshift; None uses the geometric forest redshift.
+            Default is ``None``.
+        growth : str
+            Growth prescription; camb uses the prepared sigma8 ratio, while other
+            values use the specified redshift scaling. Default is ``'camb'``.
+        reconstruction : bool
+            Whether to retain the configured galaxy BAO reconstruction factor.
+            Default is ``True``.
+
+        Returns
+        -------
+        power : PreparedP3D
+            Bound BAO model on the bin selection, with fixed per-field damping
+            widths.
+        settings : dict
+            Evaluation redshift, biases, RSD factors, growth normalization and
+            damping lengths.
+
+        Raises
+        ------
+        ValueError :
+            If inputs, declared identities or numerical validation conditions are
+            inconsistent.
+        """
         selected = self.bin_selection(index)
-        z = self.z(index) if mean_z is None else float(mean_z)
-        sigma, f = self._growth(z)
+        model_redshift = self.z(index) if mean_z is None else float(mean_z)
+        sigma8, growth_rate = self._growth(model_redshift)
         sigma_template, _ = self._growth(self.template.z_ref)
-        g = (
-            (sigma / sigma_template) ** 2
+        growth_factor = (
+            (sigma8 / sigma_template) ** 2
             if growth == "camb"
-            else ((1 + self.template.z_ref) / (1 + z)) ** 2
+            else ((1 + self.template.z_ref) / (1 + model_redshift)) ** 2
         )
+
+        # Bias, RSD and damping remain fixed while the BAO dilation varies.
         biases = {}
         betas = {}
         widths = {}
         for field in self.selection.fields:
             name = self.tracers[field.id]["tracer"]
-            biases[field.id] = float(self.external.bias._get_density_bias(z, name))
+            biases[field.id] = float(
+                self.external.bias._get_density_bias(model_redshift, name)
+            )
             if field.kind == "forest":
-                betas[field.id] = float(self.external.bias._get_beta_rsd(z, name))
-            r = (
+                betas[field.id] = float(
+                    self.external.bias._get_beta_rsd(model_redshift, name)
+                )
+            reconstruction_factor = (
                 1
                 if field.kind == "forest" or not reconstruction
                 else self.config["survey"].getfloat("reconstruction factor")
             )
-            st = 3.26 * sigma / self.cosmo.sigma8 / np.sqrt(r)
-            widths[field.id] = ((1 + f) * st, st)
+            sigma_transverse = (
+                3.26 * sigma8 / self.cosmo.sigma8 / np.sqrt(reconstruction_factor)
+            )
+            widths[field.id] = ((1 + growth_rate) * sigma_transverse, sigma_transverse)
+
         model = KaiserModel(
             self.template,
             self.selection.fields,
             biases=biases,
             betas=betas,
             widths=widths,
-            f=f if any(f.kind == "galaxy" for f in self.selection.fields) else None,
+            f=growth_rate
+            if any(field.kind == "galaxy" for field in self.selection.fields)
+            else None,
             local_names=("ap", "at"),
             wiggle=Scaling("ap_at", ap="ap", at="at"),
-            z=z,
-            growth=g,
+            z=model_redshift,
+            growth=growth_factor,
         )
+
         binding = BoundParameters(
             self.registry, ("ap", "at"), {n: f"{n}_{index}" for n in ("ap", "at")}
         )
@@ -322,9 +498,38 @@ class AccuracyRecipe:
             # Supplied-mean diagnostic: keep geometric noise/response coordinates
             # while explicitly evaluating the fixed intrinsic model at mean_z.
             def provider(theta, requested_z, k, mu, pairs):
+                """Evaluate the mean-redshift diagnostic with fixed geometry coordinates.
+
+                Parameters
+                ----------
+                theta : array_like, shape (n_parameter,)
+                    Model parameter values in the declared local parameter order.
+                requested_z : float
+                    Dimensionless geometry redshift expected by the prepared provider.
+                k : array_like
+                    Comoving Fourier wavenumbers in h/Mpc; array shape follows the model or
+                    paired grid.
+                mu : array_like
+                    Dimensionless line-of-sight direction cosines aligned with the Fourier
+                    grid.
+                pairs : array_like, shape (n_pair, 2)
+                    Ordered pairs of integer field indices.
+
+                Returns
+                -------
+                power : ndarray, shape (n_cell, n_pair)
+                    Intrinsic pair spectra in (Mpc/h)^3 at the separately declared model
+                    redshift.
+
+                Raises
+                ------
+                ValueError :
+                    If inputs, declared identities or numerical validation conditions are
+                    inconsistent.
+                """
                 if requested_z != self.z(index):
                     raise ValueError("diagnostic geometry redshift mismatch")
-                return model(theta, z, k, mu, pairs)
+                return model(theta, model_redshift, k, mu, pairs)
 
         p3d = PreparedP3D(
             self.registry,
@@ -332,28 +537,45 @@ class AccuracyRecipe:
             [P3DProvider("accuracy BAO", provider, binding, selected.required_pairs)],
         )
         return p3d, dict(
-            z_eval=z,
+            z_eval=model_redshift,
             biases=biases,
             betas=betas,
-            f=f,
-            G=g,
+            f=growth_rate,
+            G=growth_factor,
             growth=growth,
-            sigma8=sigma,
+            sigma8=sigma8,
             sigma8_template=sigma_template,
             sigma8_damping_reference=float(self.cosmo.sigma8),
             widths=widths,
         )
 
     def responses(self, index, *, resolution="fwhm"):
-        wave = LYA_REST_ANGSTROM * (1 + self.z(index))
+        """Construct each field response at the bin observed wavelength.
+
+        Parameters
+        ----------
+        index : int
+            Zero-based redshift-bin index.
+        resolution : str
+            Instrument-resolution convention; fwhm converts the quoted width to a
+            Gaussian sigma. Default is ``'fwhm'``.
+
+        Returns
+        -------
+        responses : dict of str to InstrumentResponse
+            Velocity-space pixel and Gaussian widths for each observed field; galaxy
+            widths are zero.
+        """
+        observed_wavelength = LYA_REST_ANGSTROM * (1 + self.z(index))
         responses = {}
         divisor = 2 * np.sqrt(2 * np.log(2)) if resolution == "fwhm" else 1
         for f in self.selection.fields:
-            t = self.tracers[f.id]
+            tracer_settings = self.tracers[f.id]
             responses[f.id] = (
                 InstrumentResponse(
                     pixel_width_angstrom_to_velocity(
-                        float(t["pix_width_ang"]), lambda_obs_angstrom=wave
+                        float(tracer_settings["pix_width_ang"]),
+                        lambda_obs_angstrom=observed_wavelength,
                     ),
                     SPEED_LIGHT_KMS
                     / (float(self.config["survey"]["resolution"]) * divisor),
@@ -364,6 +586,19 @@ class AccuracyRecipe:
         return responses
 
     def bin_selection(self, index):
+        """Apply the selection belonging to this recipe revision.
+
+        Parameters
+        ----------
+        index : int
+            Zero-based redshift-bin index.
+
+        Returns
+        -------
+        selection : PairSelection
+            Revised bin-dependent selection, or the explicitly retained historical
+            selection.
+        """
         return (
             forecast_selection(self.case, index)
             if getattr(self, "recipe_revision", None)
@@ -371,20 +606,54 @@ class AccuracyRecipe:
         )
 
     def samples(self, index, order, *, policy="primary", rectangular=False):
+        """Sample source populations on the declared magnitude measure.
+
+        Parameters
+        ----------
+        index : int
+            Zero-based redshift-bin index.
+        order : int
+            Gauss-Legendre quadrature order within each magnitude interval.
+        policy : str
+            Explicit source-input policy or sensitivity variant. Default is
+            ``'primary'``.
+        rectangular : bool
+            Whether to use the legacy uniform magnitude measure instead of composite
+            Gaussian quadrature. Default is ``False``.
+
+        Returns
+        -------
+        samples : dict
+            Per-field density, pixel variance and provenance at each magnitude node.
+        magnitudes : ndarray, shape (n_magnitude,)
+            Source magnitude nodes in mag.
+        quadrature : ndarray, shape (n_magnitude,)
+            Magnitude integration weights in mag.
+
+        Raises
+        ------
+        ValueError :
+            If inputs, declared identities or numerical validation conditions are
+            inconsistent.
+
+        Notes
+        -----
+        Caches partitions and sampled arrays by bin, quadrature order and explicit policy. Returned arrays belong to that cache.
+        """
         key = (index, order, policy, rectangular)
         if key in self._samples:
             return self._samples[key]
-        z = self.z(index)
-        wave = LYA_REST_ANGSTROM * (1 + z)
+        forest_redshift = self.z(index)
+        observed_wavelength = LYA_REST_ANGSTROM * (1 + forest_redshift)
         z_queries = {
-            f.id: wave
+            f.id: observed_wavelength
             / np.sqrt(
                 float(self.tracers[f.id]["min_rest_frame_lya"])
                 * float(self.tracers[f.id]["max_rest_frame_lya"])
             )
             - 1
             if f.kind == "forest"
-            else z
+            else forest_redshift
             for f in self.selection.fields
         }
         lo = float(self.config["survey"]["min_band_mag"])
@@ -393,11 +662,18 @@ class AccuracyRecipe:
             self._partitions[index] = breakpoints(
                 self.densities, self.snrs, z_queries, lo, hi
             )
+
         if rectangular:
-            m = np.linspace(lo, hi, int(self.config["survey"]["num mag bins"]))
-            q = np.full(len(m), m[1] - m[0])
+            magnitude_grid = np.linspace(
+                lo, hi, int(self.config["survey"]["num mag bins"])
+            )
+            magnitude_weights = np.full(
+                len(magnitude_grid), magnitude_grid[1] - magnitude_grid[0]
+            )
         else:
-            m, q = composite(self._partitions[index], order)
+            magnitude_grid, magnitude_weights = composite(
+                self._partitions[index], order
+            )
         result = {}
         floor = {"floor_low": 1e-22, "floor_high": 1e-18}.get(policy, 1e-20)
         width_factor = {"width_minus": 0.9, "width_plus": 1.1}.get(policy, 1.0)
@@ -411,52 +687,61 @@ class AccuracyRecipe:
             "remove_sentinel",
         ):
             raise ValueError("unknown explicit sensitivity policy")
+
+        # Restrict source preparation before constructing noise and covariance.
         active = np.unique(self.bin_selection(index).selected_pairs)
         for i, f in enumerate(self.selection.fields):
             if i not in active:
                 continue
-            d = self.densities[f.id].sample(z_queries[f.id], m)
-            values = d["values"].copy()
-            masks = d["provenance"]["masks"]
+            density_sample = self.densities[f.id].sample(
+                z_queries[f.id], magnitude_grid
+            )
+            values = density_sample["values"].copy()
+            masks = density_sample["provenance"]["masks"]
             values[
                 np.asarray(masks["density_floor"])
                 | np.asarray(masks["negative_density"])
             ] = floor
             values /= width_factor
             row = dict(
-                magnitudes=m,
-                quadrature=q,
+                magnitudes=magnitude_grid,
+                quadrature=magnitude_weights,
                 density=values,
                 z_source=z_queries[f.id],
-                density_diagnostics=plain(d["provenance"]),
+                density_diagnostics=plain(density_sample["provenance"]),
             )
             if f.kind == "forest":
-                t = self.tracers[f.id]
-                s = self.snrs[f.id].sample(
+                tracer_settings = self.tracers[f.id]
+                noise_sample = self.snrs[f.id].sample(
                     z_source=z_queries[f.id],
-                    magnitudes=m,
-                    wavelength=wave,
-                    pixel_width_angstrom=float(t["pix_width_ang"]),
-                    exposure_count=float(t["num exposures"]),
+                    magnitudes=magnitude_grid,
+                    wavelength=observed_wavelength,
+                    pixel_width_angstrom=float(tracer_settings["pix_width_ang"]),
+                    exposure_count=float(tracer_settings["num exposures"]),
                 )
-                remove = np.zeros(len(m), dtype=bool)
+                removal_mask = np.zeros(len(magnitude_grid), dtype=bool)
                 if policy == "remove_bright":
-                    remove = np.asarray(s["provenance"]["masks"]["bright_clamp"])
+                    removal_mask = np.asarray(
+                        noise_sample["provenance"]["masks"]["bright_clamp"]
+                    )
                 if policy == "remove_sentinel":
-                    remove = np.asarray(s["provenance"]["masks"]["out_of_range"])
-                row["density"][remove] = 0
+                    removal_mask = np.asarray(
+                        noise_sample["provenance"]["masks"]["out_of_range"]
+                    )
+                row["density"][removal_mask] = 0
                 row.update(
-                    variance=s["values"],
-                    snr_diagnostics=plain(s["provenance"]),
-                    removed=remove,
+                    variance=noise_sample["values"],
+                    snr_diagnostics=plain(noise_sample["provenance"]),
+                    removed=removal_mask,
                     length_velocity=SPEED_LIGHT_KMS
                     * np.log(
-                        float(t["max_rest_frame_lya"]) / float(t["min_rest_frame_lya"])
+                        float(tracer_settings["max_rest_frame_lya"])
+                        / float(tracer_settings["min_rest_frame_lya"])
                     ),
                 )
             result[f.id] = row
-        self._samples[key] = (result, m, q)
-        return result, m, q
+        self._samples[key] = (result, magnitude_grid, magnitude_weights)
+        return result, magnitude_grid, magnitude_weights
 
     def prepare(
         self,
@@ -470,6 +755,51 @@ class AccuracyRecipe:
         reconstruction=True,
         arithmetic_mean=False,
     ):
+        """Prepare one bin with the selected model, source measure and noise prescription.
+
+        Parameters
+        ----------
+        index : int
+            Zero-based redshift-bin index.
+        controls : dict
+            Quadrature orders, grid subdivisions, derivative step and applicable
+            forest-weight convergence controls.
+        policy : str
+            Explicit source-input policy or sensitivity variant. Default is
+            ``'primary'``.
+        resolution : str
+            Instrument-resolution convention; fwhm converts the quoted width to a
+            Gaussian sigma. Default is ``'fwhm'``.
+        growth : str
+            Growth prescription; camb uses the prepared sigma8 ratio, while other
+            values use the specified redshift scaling. Default is ``'camb'``.
+        rectangular : bool
+            Whether to use the legacy uniform magnitude measure instead of composite
+            Gaussian quadrature. Default is ``False``.
+        reconstruction : bool
+            Whether to retain the configured galaxy BAO reconstruction factor.
+            Default is ``True``.
+        arithmetic_mean : bool
+            Evaluate the intrinsic model at the arithmetic bin centre while
+            retaining the geometric noise coordinates. Default is ``False``.
+
+        Returns
+        -------
+        prepared : PreparedBin
+            Fixed fiducial powers, responses, weights, noise and covariance factors.
+        settings : dict
+            Physical and numerical controls, sampled inputs and weight diagnostics.
+
+        Raises
+        ------
+        ValueError :
+            If inputs, declared identities or numerical validation conditions are
+            inconsistent.
+
+        Notes
+        -----
+        Caches up to three prepared states. Derivative step is excluded from the preparation key because fiducial weights and covariance remain fixed.
+        """
         if self.weight_method == "inverse_variance" and "iterations" in controls:
             raise ValueError("iterations are inapplicable to inverse_variance accuracy")
         if self.weight_method == "legacy" and "iterations" not in controls:
@@ -488,11 +818,11 @@ class AccuracyRecipe:
         if key in self._prepared:
             return self._prepared[key]
         lo, hi = bins(self.case)[index]
-        z = self.z(index)
+        forest_redshift = self.z(index)
         geometry = prepare_geometry(
             lo,
             hi,
-            z_eval=z,
+            z_eval=forest_redshift,
             area_deg2=float(self.config["survey"]["survey_area"]),
             h_fid=self.h,
             z_order=controls["z_order"],
@@ -512,7 +842,7 @@ class AccuracyRecipe:
             mean_z=(lo + hi) / 2 if arithmetic_mean else None,
         )
         responses = self.responses(index, resolution=resolution)
-        sampled, m, q = self.samples(
+        sampled, magnitude_grid, magnitude_weights = self.samples(
             index, controls["magnitude_order"], policy=policy, rectangular=rectangular
         )
         forests = {}
@@ -526,18 +856,21 @@ class AccuracyRecipe:
                 forests[field.id], forest_weighting[field.id] = _forest_input(
                     field,
                     row,
-                    m,
-                    q,
+                    magnitude_grid,
+                    magnitude_weights,
                     responses[field.id],
                     self.registry,
-                    z,
+                    forest_redshift,
                     method=self.weight_method,
                     iterations=controls.get("iterations"),
                     policy=policy,
                     weight_rtol=controls.get("weight_rtol", 1e-4),
                 )
             else:
-                galaxies[field.id] = local_galaxy_density(row["density"], q, geometry)
+                galaxies[field.id] = local_galaxy_density(
+                    row["density"], magnitude_weights, geometry
+                )
+
         prepared = prepare_bin(
             BinSpec(
                 f"{self.case}-{index}",
@@ -564,6 +897,7 @@ class AccuracyRecipe:
                         B=weight.alias,
                     ),
                 )
+
         settings = dict(
             profile="accuracy",
             parameters=[f"ap_{index}", f"at_{index}"],
@@ -585,8 +919,8 @@ class AccuracyRecipe:
             reconstruction=reconstruction,
             arithmetic_mean=arithmetic_mean,
             partition=self._partitions[index].tolist(),
-            magnitude_nodes=m.tolist(),
-            magnitude_weights=q.tolist(),
+            magnitude_nodes=magnitude_grid.tolist(),
+            magnitude_weights=magnitude_weights.tolist(),
             samples=plain(sampled),
             forest_weighting=dict(
                 method=self.weight_method,
@@ -627,6 +961,32 @@ class AccuracyRecipe:
         return result
 
     def evaluate(self, task, controls, **options):
+        """Differentiate the observed BAO mean and verify its Fisher contraction.
+
+        Parameters
+        ----------
+        task : dict
+            Declared case, bin, selected field pairs, parameter order and validation
+            thresholds.
+        controls : dict
+            Quadrature orders, grid subdivisions, derivative step and applicable
+            forest-weight convergence controls.
+        options : dict
+            Keyword options forwarded to prepare for explicit sensitivity variants.
+
+        Returns
+        -------
+        arrays : dict of str to ndarray
+            Bound numerical evidence and independent Fisher comparison operands.
+        report : dict
+            Exact settings, input provenance and numerical metadata.
+
+        Raises
+        ------
+        ValueError :
+            If inputs, declared identities or numerical validation conditions are
+            inconsistent.
+        """
         if task.get("recipe_revision") != getattr(self, "recipe_revision", None):
             raise ValueError("accuracy task and recipe revision differ")
         index = task["bin"]
@@ -641,14 +1001,16 @@ class AccuracyRecipe:
             prepared.mu,
             step_scale=controls["step"] / 0.001,
         )
+
+        # Apply each field response once, then select the requested observables.
         selected = prepared.p3d.selection.selected_to_required
-        j = (prepared.products[:, :, None] * derivatives.jacobian)[:, selected][
-            :, :, active
-        ]
+        observed_jacobian = (prepared.products[:, :, None] * derivatives.jacobian)[
+            :, selected
+        ][:, :, active]
         arrays, report = _assemble(
             task,
             prepared.total,
-            j,
+            observed_jacobian,
             settings,
             factors=prepared.factors,
             extra=dict(
@@ -660,9 +1022,11 @@ class AccuracyRecipe:
         )
         # Independent direct NumPy solve on separately reconstructed Wick C.
         # This never calls production factorization or reuses its contraction.
-        f, single = contract(arrays["selected_covariance"], j, independent=True)
+        independent_fisher, single = contract(
+            arrays["selected_covariance"], observed_jacobian, independent=True
+        )
         if (
-            relative(f, arrays["fisher"]) > 5e-12
+            relative(independent_fisher, arrays["fisher"]) > 5e-12
             or relative(single, arrays["pair_fisher"]) > 5e-12
         ):
             raise ValueError("direct NumPy and evidence Fisher disagree")
@@ -670,13 +1034,52 @@ class AccuracyRecipe:
         return arrays, report
 
     def study(self, task):
-        """Run the bounded controller with this prepared scientific recipe."""
+        """Run the bounded controller with this prepared scientific recipe.
+
+        Parameters
+        ----------
+        task : dict
+            Declared case, bin, selected field pairs, parameter order and validation
+            thresholds.
+
+        Returns
+        -------
+        arrays : dict of str to ndarray
+            Final payload and recorded numerical-refinement operands.
+        report : dict
+            Bounded convergence results, actual trials and unresolved controls.
+        """
         from .study import study
 
         return study(self, task, payload_factory=OrderedDict)
 
     def sensitivity(self, task, controls, policy):
-        """Recompute physical derived inputs for one explicit artificial policy test."""
+        """Recompute physical derived inputs for one explicit artificial policy test.
+
+        Parameters
+        ----------
+        task : dict
+            Declared case, bin, selected field pairs, parameter order and validation
+            thresholds.
+        controls : dict
+            Quadrature orders, grid subdivisions, derivative step and applicable
+            forest-weight convergence controls.
+        policy : str
+            Explicit source-input policy or sensitivity variant.
+
+        Returns
+        -------
+        arrays : dict of str to ndarray
+            Evidence recomputed under the specified artificial policy.
+        report : dict
+            Changed physical settings and explicit sensitivity interpretation.
+
+        Raises
+        ------
+        ValueError :
+            If inputs, declared identities or numerical validation conditions are
+            inconsistent.
+        """
         options = {}
         if policy == "growth_eds":
             options = dict(growth="eds")
@@ -695,7 +1098,7 @@ class AccuracyRecipe:
                     "inapplicable to inverse_variance accuracy"
                 )
             controls = {**controls, "iterations": 3}
-        a, r = self.evaluate(
+        arrays, report = self.evaluate(
             task,
             controls,
             policy="primary"
@@ -711,7 +1114,7 @@ class AccuracyRecipe:
             else policy,
             **options,
         )
-        r.update(
+        report.update(
             sensitivity=dict(
                 policy=policy,
                 weight_method=self.weight_method,
@@ -727,4 +1130,4 @@ class AccuracyRecipe:
                 interpretation="Not a calibrated systematic error or alternative primary survey",
             )
         )
-        return a, r
+        return arrays, report

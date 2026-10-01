@@ -28,12 +28,42 @@ from .resources import bundled_path
 
 
 def _immutable(values):
-    """Return an owned read-only float64 array backed by immutable bytes."""
+    """Copy values into an immutable float64 array.
+
+    Parameters
+    ----------
+    values : array_like
+        Numeric values of arbitrary shape.
+
+    Returns
+    -------
+    array : ndarray
+        Read-only float64 copy with the input shape and units.
+    """
     array = np.asarray(values, dtype=np.float64)
     return np.frombuffer(array.tobytes(), dtype=np.float64).reshape(array.shape)
 
 
 def _redshift(value, name):
+    """Validate a scalar redshift.
+
+    Parameters
+    ----------
+    value : float
+        Candidate dimensionless redshift.
+    name : str
+        Quantity label for validation errors.
+
+    Returns
+    -------
+    redshift : float
+        Finite nonnegative redshift.
+
+    Raises
+    ------
+    ValueError
+        If the value is not a finite nonnegative real scalar.
+    """
     array = np.asarray(value)
     if array.ndim != 0 or array.dtype.kind not in "iuf":
         raise ValueError(f"{name} must be a finite scalar redshift")
@@ -44,6 +74,25 @@ def _redshift(value, name):
 
 
 def _redshift_sequence(values, name):
+    """Validate an explicitly ordered redshift sequence.
+
+    Parameters
+    ----------
+    values : array_like
+        Dimensionless redshifts, shape (n_redshift,).
+    name : str
+        Quantity label for validation errors.
+
+    Returns
+    -------
+    redshifts : tuple of float
+        Unique nonnegative redshifts in input order.
+
+    Raises
+    ------
+    ValueError
+        If the sequence is empty, malformed, nonfinite or duplicated.
+    """
     raw = np.asarray(values)
     if raw.ndim != 1 or not len(raw) or raw.dtype.kind not in "iuf":
         raise ValueError(f"{name} must be a nonempty one-dimensional redshift set")
@@ -54,6 +103,27 @@ def _redshift_sequence(values, name):
 
 
 def _single_result(value, name, redshift):
+    """Extract one finite scalar from a CAMB result.
+
+    Parameters
+    ----------
+    value : array_like
+        CAMB output containing one value.
+    name : str
+        Physical quantity name for diagnostics.
+    redshift : float
+        Dimensionless evaluation redshift.
+
+    Returns
+    -------
+    result : float
+        Scalar in the units of the supplied CAMB quantity.
+
+    Raises
+    ------
+    ValueError
+        If the output does not contain exactly one finite value.
+    """
     array = np.asarray(value, dtype=np.float64)
     if array.size != 1 or not np.all(np.isfinite(array)):
         raise ValueError(f"CAMB {name} at z={redshift:g} must be one finite value")
@@ -61,6 +131,29 @@ def _single_result(value, name, redshift):
 
 
 def _background_value(results, method, redshift, name):
+    """Evaluate one CAMB background quantity.
+
+    Parameters
+    ----------
+    results : object
+        Prepared CAMB results.
+    method : str
+        Name of the background evaluation method.
+    redshift : float
+        Dimensionless evaluation redshift.
+    name : str
+        Physical quantity name for diagnostics.
+
+    Returns
+    -------
+    value : float
+        Finite background value in the CAMB method units.
+
+    Raises
+    ------
+    ValueError
+        If the method is absent or its output is not one finite value.
+    """
     function = getattr(results, method, None)
     if function is None:
         raise ValueError(f"CAMB results do not provide {method} for {name}")
@@ -68,6 +161,27 @@ def _background_value(results, method, redshift, name):
 
 
 def _growth_values(results, method, redshifts):
+    """Read growth values in a validated CAMB redshift order.
+
+    Parameters
+    ----------
+    results : object
+        Prepared CAMB results.
+    method : str
+        Growth accessor, such as get_sigma8 or get_fsigma8.
+    redshifts : sequence of float
+        Previously validated dimensionless redshift order.
+
+    Returns
+    -------
+    values : ndarray
+        Dimensionless growth values, shape (n_redshift,).
+
+    Raises
+    ------
+    ValueError
+        If the accessor is absent or the output shape or values are invalid.
+    """
     function = getattr(results, method, None)
     if function is None:
         raise ValueError(f"CAMB results do not provide {method}")
@@ -81,7 +195,25 @@ def _growth_values(results, method, redshifts):
 
 
 def _set_redshifts(parameters, redshifts):
-    """Set CAMB's transfer request to an explicit ordered redshift set."""
+    """Set CAMB's transfer request to an explicit ordered redshift set.
+
+    Parameters
+    ----------
+    parameters : object
+        CAMB parameters modified in place.
+    redshifts : sequence of float
+        Dimensionless redshifts in the requested transfer order.
+
+    Returns
+    -------
+    None
+        No value is returned.
+
+    Raises
+    ------
+    ValueError
+        If the parameters expose no Transfer settings.
+    """
     transfer = getattr(parameters, "Transfer", None)
     if transfer is None:
         raise ValueError("CAMB parameters do not expose Transfer settings")
@@ -90,7 +222,27 @@ def _set_redshifts(parameters, redshifts):
 
 
 def _returned_redshifts(results, parameters, requested):
-    """Read and validate CAMB's returned transfer-redshift metadata."""
+    """Read and validate CAMB's returned transfer-redshift metadata.
+
+    Parameters
+    ----------
+    results : object
+        CAMB results whose parameter metadata are checked first.
+    parameters : object
+        Requested CAMB parameters used as the final metadata source.
+    requested : sequence of float
+        Exact decreasing dimensionless redshift order.
+
+    Returns
+    -------
+    redshifts : tuple of float
+        Validated order, identical to the request.
+
+    Raises
+    ------
+    ValueError
+        If metadata are absent, malformed or inconsistent with the request.
+    """
     surfaces = [
         getattr(results, "Params", None),
         getattr(results, "params", None),
@@ -123,6 +275,20 @@ _CACHE_DISABLED = ("0", "false", "no", "off")
 def _camb_cache_dir(cache_dir, camb_module):
     """Resolve the growth cache directory, or None when caching is disabled.
 
+    Parameters
+    ----------
+    cache_dir : path-like or None
+        Explicit cache directory, or None for environment defaults.
+    camb_module : module-like or None
+        Injected CAMB module; disables implicit caching when supplied.
+
+    Returns
+    -------
+    directory : pathlib.Path or None
+        Resolved directory, or None when caching is disabled.
+
+    Notes
+    -----
     ``FISHHIGHZ_CAMB_CACHE=0`` disables caching. An explicit ``cache_dir`` wins;
     otherwise ``$FISHHIGHZ_CACHE_DIR/camb``, ``$XDG_CACHE_HOME/fishhighz/camb``
     or ``~/.cache/fishhighz/camb``. Injected CAMB test surfaces are only
@@ -138,12 +304,32 @@ def _camb_cache_dir(cache_dir, camb_module):
     root = os.environ.get("FISHHIGHZ_CACHE_DIR")
     if root:
         return Path(root).expanduser() / "camb"
-    xdg = os.environ.get("XDG_CACHE_HOME")
-    base = Path(xdg).expanduser() if xdg else Path.home() / ".cache"
+    xdg_cache_home = os.environ.get("XDG_CACHE_HOME")
+    base = (
+        Path(xdg_cache_home).expanduser() if xdg_cache_home else Path.home() / ".cache"
+    )
     return base / "fishhighz" / "camb"
 
 
 def _camb_cache_identity(ini_bytes, camb_order, camb):
+    """Hash the CAMB inputs that determine the cached growth arrays.
+
+    Parameters
+    ----------
+    ini_bytes : bytes
+        Exact CAMB configuration contents.
+    camb_order : sequence of float
+        Dimensionless redshifts in CAMB order.
+    camb : module-like
+        CAMB module supplying its version string.
+
+    Returns
+    -------
+    key : str
+        SHA256 digest used as the cache filename.
+    identity : str
+        JSON representation of the cache identity.
+    """
     identity = dict(
         schema=_CAMB_CACHE_SCHEMA,
         ini_sha256=hashlib.sha256(ini_bytes).hexdigest(),
@@ -155,7 +341,23 @@ def _camb_cache_identity(ini_bytes, camb_order, camb):
 
 
 def _read_growth_cache(path, identity, camb_order):
-    """Return cached (sigma8, fsigma8) in CAMB order, or None if unusable."""
+    """Read cached growth arrays only when their identity and order match.
+
+    Parameters
+    ----------
+    path : path-like
+        Existing or candidate NPZ cache file.
+    identity : str
+        Expected serialized cache identity.
+    camb_order : sequence of float
+        Expected dimensionless redshifts in CAMB order.
+
+    Returns
+    -------
+    growth : tuple of ndarray or None
+        Dimensionless sigma8 and f*sigma8 arrays, each shape (n_redshift,), or
+        None for a missing or unusable cache.
+    """
     try:
         with np.load(path, allow_pickle=False) as stored:
             if str(stored["identity"]) != identity:
@@ -178,7 +380,26 @@ def _read_growth_cache(path, identity, camb_order):
 
 
 def _write_growth_cache(path, identity, camb_order, sigma8, fsigma8):
-    """Atomically store growth arrays; return False when the cache is unwritable."""
+    """Atomically store growth arrays when the cache is writable.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        Destination NPZ cache file; parent directories are created.
+    identity : str
+        Serialized cache identity.
+    camb_order : sequence of float
+        Dimensionless redshifts in CAMB order.
+    sigma8 : array_like
+        Dimensionless sigma8 values, shape (n_redshift,).
+    fsigma8 : array_like
+        Dimensionless f*sigma8 values, shape (n_redshift,).
+
+    Returns
+    -------
+    stored : bool
+        True after a successful atomic replacement; False for an I/O failure.
+    """
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
@@ -202,6 +423,23 @@ def _write_growth_cache(path, identity, camb_order, sigma8, fsigma8):
 
 
 def _load_camb(camb_module):
+    """Load the optional CAMB dependency only when needed.
+
+    Parameters
+    ----------
+    camb_module : module-like or None
+        Explicit module to retain, or None to import CAMB.
+
+    Returns
+    -------
+    camb : module-like
+        Injected or imported CAMB module.
+
+    Raises
+    ------
+    ImportError
+        If CAMB is unavailable and no module was supplied.
+    """
     if camb_module is not None:
         return camb_module
     try:
@@ -240,7 +478,19 @@ class CAMBBackground:
     cache: MappingProxyType | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self):
-        n = len(self.redshifts)
+        """Validate common redshift shapes and immutable background arrays.
+
+        Returns
+        -------
+        None
+            No value is returned.
+
+        Raises
+        ------
+        ValueError
+            If arrays differ in shape or allow writes.
+        """
+        n_redshifts = len(self.redshifts)
         arrays = (
             self.redshifts,
             self.hubble_values,
@@ -248,7 +498,7 @@ class CAMBBackground:
             self.sigma8_values,
             self.growth_rate_values,
         )
-        if any(np.asarray(array).shape != (n,) for array in arrays):
+        if any(np.asarray(array).shape != (n_redshifts,) for array in arrays):
             raise ValueError("CAMB background arrays must share one redshift shape")
         for value in arrays:
             if np.asarray(value).flags.writeable:
@@ -256,62 +506,166 @@ class CAMBBackground:
 
     @property
     def z_bins(self):
-        """Compatibility alias for the explicitly ordered redshift array."""
+        """Return the prepared redshift order.
+
+        Returns
+        -------
+        value : ndarray
+            Dimensionless redshifts, shape (n_redshift,).
+        """
         return self.redshifts
 
     @property
     def H(self):
-        """H(z) in km/s/Mpc, in ``redshifts`` order."""
+        """Return the prepared Hubble parameter.
+
+        Returns
+        -------
+        value : ndarray
+            H(z) in km/s/Mpc, shape (n_redshift,).
+        """
         return self.hubble_values
 
     @property
     def D_M(self):
-        """Transverse comoving distance in Mpc, in redshift order."""
+        """Return the prepared transverse comoving distance.
+
+        Returns
+        -------
+        value : ndarray
+            D_M(z) in Mpc, shape (n_redshift,).
+        """
         return self.transverse_distance_values
 
     @property
     def sigma8_zbins(self):
+        """Return the prepared density fluctuation amplitude.
+
+        Returns
+        -------
+        value : ndarray
+            Dimensionless sigma8(z), shape (n_redshift,).
+        """
         return self.sigma8_values
 
     @property
     def growth_rate_zbins(self):
+        """Return the prepared logarithmic growth rate.
+
+        Returns
+        -------
+        value : ndarray
+            Dimensionless f(z), shape (n_redshift,).
+        """
         return self.growth_rate_values
 
     @property
     def f(self):
+        """Return the prepared logarithmic growth rate.
+
+        Returns
+        -------
+        value : ndarray
+            Dimensionless f(z), shape (n_redshift,).
+        """
         return self.growth_rate_values
 
     @property
     def H_values(self):
+        """Return the prepared Hubble parameter.
+
+        Returns
+        -------
+        value : ndarray
+            H(z) in km/s/Mpc, shape (n_redshift,).
+        """
         return self.hubble_values
 
     @property
     def D_M_values(self):
+        """Return the prepared transverse comoving distance.
+
+        Returns
+        -------
+        value : ndarray
+            D_M(z) in Mpc, shape (n_redshift,).
+        """
         return self.transverse_distance_values
 
     @property
     def f_values(self):
+        """Return the prepared logarithmic growth rate.
+
+        Returns
+        -------
+        value : ndarray
+            Dimensionless f(z), shape (n_redshift,).
+        """
         return self.growth_rate_values
 
     @property
     def h_fid(self):
+        """Return the fiducial reduced Hubble constant.
+
+        Returns
+        -------
+        value : float
+            Dimensionless H0/(100 km/s/Mpc).
+        """
         return self.H0 / 100.0
 
     @property
     def sigma8(self):
-        """Damping-reference sigma8 (not the template-growth normalization)."""
+        """Return sigma8 at the damping reference redshift.
+
+        Returns
+        -------
+        value : float
+            Dimensionless damping normalization, independent of template
+            normalization.
+        """
         return self.sigma8_damping_reference
 
     @property
     def results(self):
-        """CAMB result surface retained for geometry quadrature callables."""
+        """Return the CAMB results retained for geometry quadrature.
+
+        Returns
+        -------
+        value : object
+            Prepared CAMB background result object.
+        """
         return self._geometry_results
 
     @property
     def z_to_index(self):
+        """Return the exact prepared-redshift index mapping.
+
+        Returns
+        -------
+        value : mappingproxy
+            Mapping from dimensionless redshift to array index.
+        """
         return self._z_to_index
 
     def index(self, redshift):
+        """Find an exact prepared redshift.
+
+        Parameters
+        ----------
+        redshift : float
+            Dimensionless redshift present in the prepared set.
+
+        Returns
+        -------
+        value : int
+            Index in all prepared background arrays.
+
+        Raises
+        ------
+        ValueError
+            If redshift is invalid or was not prepared exactly.
+        """
         redshift = _redshift(redshift, "redshift")
         try:
             return self._z_to_index[redshift]
@@ -322,22 +676,132 @@ class CAMBBackground:
             ) from error
 
     def sigma8_at(self, redshift):
+        """Read sigma8 at an exact prepared redshift.
+
+        Parameters
+        ----------
+        redshift : float
+            Dimensionless redshift present in the prepared set.
+
+        Returns
+        -------
+        value : float
+            Dimensionless sigma8.
+
+        Raises
+        ------
+        ValueError
+            If redshift is invalid or was not prepared exactly.
+        """
         return float(self.sigma8_values[self.index(redshift)])
 
     def growth_rate_at(self, redshift):
+        """Read the growth rate at an exact prepared redshift.
+
+        Parameters
+        ----------
+        redshift : float
+            Dimensionless redshift present in the prepared set.
+
+        Returns
+        -------
+        value : float
+            Dimensionless logarithmic growth rate f.
+
+        Raises
+        ------
+        ValueError
+            If redshift is invalid or was not prepared exactly.
+        """
         return float(self.growth_rate_values[self.index(redshift)])
 
     def growth_rate(self, redshift):
-        """Evaluate the exact prepared growth rate ``f(z)``."""
+        """Read the growth rate at an exact prepared redshift.
+
+        Parameters
+        ----------
+        redshift : float
+            Dimensionless redshift present in the prepared set.
+
+        Returns
+        -------
+        value : float
+            Dimensionless logarithmic growth rate f.
+
+        Raises
+        ------
+        ValueError
+            If redshift is invalid or was not prepared exactly.
+        """
         return self.growth_rate_at(redshift)
 
     def hubble_at(self, redshift):
+        """Read H(z) at an exact prepared redshift.
+
+        Parameters
+        ----------
+        redshift : float
+            Dimensionless redshift present in the prepared set.
+
+        Returns
+        -------
+        value : float
+            Hubble parameter in km/s/Mpc.
+
+        Raises
+        ------
+        ValueError
+            If redshift is invalid or was not prepared exactly.
+        """
         return float(self.hubble_values[self.index(redshift)])
 
     def transverse_distance_at(self, redshift):
+        """Read D_M(z) at an exact prepared redshift.
+
+        Parameters
+        ----------
+        redshift : float
+            Dimensionless redshift present in the prepared set.
+
+        Returns
+        -------
+        value : float
+            Transverse comoving distance in Mpc.
+
+        Raises
+        ------
+        ValueError
+            If redshift is invalid or was not prepared exactly.
+        """
         return float(self.transverse_distance_values[self.index(redshift)])
 
     def _call_background(self, method, redshift, name):
+        """Evaluate CAMB geometry at scalar or vector redshifts.
+
+        Parameters
+        ----------
+        method : str
+            Name of the CAMB background method.
+        redshift : float or array_like
+            Dimensionless scalar or shape (n_redshift,) evaluation coordinates.
+        name : str
+            Quantity label for diagnostics.
+
+        Returns
+        -------
+        values : float or ndarray
+            Result in the CAMB method units, preserving scalar or vector shape.
+
+        Raises
+        ------
+        ValueError
+            If redshifts, method availability, output shape or finiteness are
+            invalid.
+
+        Notes
+        -----
+        A scalar loop supports result objects that do not accept vector queries.
+        """
         values = np.asarray(redshift)
         if values.ndim == 0:
             values = np.asarray([_redshift(values, "redshift")])
@@ -365,11 +829,43 @@ class CAMBBackground:
         return float(output[0]) if scalar else output
 
     def hubble_parameter(self, redshift):
-        """Evaluate H(z) in km/s/Mpc for geometry quadrature."""
+        """Evaluate the background for geometry quadrature.
+
+        Parameters
+        ----------
+        redshift : float or array_like
+            Dimensionless scalar or shape (n_redshift,) coordinates.
+
+        Returns
+        -------
+        values : float or ndarray
+            H(z) in km/s/Mpc, with the input shape.
+
+        Raises
+        ------
+        ValueError
+            If redshifts or CAMB background results are invalid.
+        """
         return self._call_background("hubble_parameter", redshift, "H")
 
     def comoving_radial_distance(self, redshift):
-        """Evaluate transverse comoving distance for geometry quadrature."""
+        """Evaluate the background for geometry quadrature.
+
+        Parameters
+        ----------
+        redshift : float or array_like
+            Dimensionless scalar or shape (n_redshift,) coordinates.
+
+        Returns
+        -------
+        values : float or ndarray
+            Transverse comoving distance D_M(z) in Mpc, with the input shape.
+
+        Raises
+        ------
+        ValueError
+            If redshifts or CAMB background results are invalid.
+        """
         values = np.asarray(redshift)
         if hasattr(self._geometry_results, "angular_diameter_distance"):
             angular = self._call_background(
@@ -383,6 +879,23 @@ class CAMBBackground:
         raise ValueError("CAMB results provide neither transverse-distance method")
 
     def transverse_comoving_distance(self, redshift):
+        """Evaluate the background for geometry quadrature.
+
+        Parameters
+        ----------
+        redshift : float or array_like
+            Dimensionless scalar or shape (n_redshift,) coordinates.
+
+        Returns
+        -------
+        values : float or ndarray
+            Transverse comoving distance D_M(z) in Mpc, with the input shape.
+
+        Raises
+        ------
+        ValueError
+            If redshifts or CAMB background results are invalid.
+        """
         return self.comoving_radial_distance(redshift)
 
 
@@ -421,6 +934,26 @@ def prepare_camb(
         ``FISHHIGHZ_CAMB_CACHE=0`` disables caching.  A hit skips only the
         transfer-function solve: the ini is read, the redshifts are set and the
         background is recomputed with ``camb.get_background``.
+
+    Returns
+    -------
+    background : CAMBBackground
+        Immutable background and growth arrays in caller redshift order, with
+        missing normalization redshifts appended. H is in km/s/Mpc, distances
+        are in Mpc, and sigma8 and growth rate are dimensionless.
+
+    Raises
+    ------
+    ValueError
+        If redshifts, normalization choices or CAMB results are invalid.
+    ImportError
+        If CAMB is unavailable and no module was injected.
+
+    Notes
+    -----
+    The default damping reference redshift is 2.3. Both template-redshift
+    arguments default to None; exactly one must be specified. Growth caching
+    may create or replace files in the resolved cache directory.
     """
     if template_growth_redshift is not None and template_redshift is not None:
         raise ValueError(
@@ -454,6 +987,28 @@ def prepare_camb(
     directory = _camb_cache_dir(cache_dir, camb_module)
 
     def run_bulk(path):
+        """Prepare CAMB geometry and retrieve growth arrays for one INI.
+
+        Parameters
+        ----------
+        path : path-like
+            CAMB parameter file to read.
+
+        Returns
+        -------
+        parameters : object
+            Parsed CAMB parameters with explicit transfer redshifts.
+        results : object
+            CAMB results retaining background geometry.
+        growth : tuple of ndarray
+            Dimensionless sigma8 and f*sigma8 arrays in CAMB order.
+        record : dict or None
+            Cache identity and hit/write status, or None when disabled.
+
+        Notes
+        -----
+        The enclosing preparation supplies the redshift order and cache directory; a cache miss may write growth arrays.
+        """
         parameters = camb.read_ini(str(path))
         _set_redshifts(parameters, camb_order)
         record = None
@@ -497,9 +1052,9 @@ def prepare_camb(
     }
     values = []
     for redshift in ordered:
-        sigma = float(sigma_by_z[redshift])
+        sigma8_value = float(sigma_by_z[redshift])
         fsigma8 = float(fsigma8_by_z[redshift])
-        if sigma <= 0:
+        if sigma8_value <= 0:
             raise ValueError(f"CAMB sigma8 at z={redshift:g} must be positive")
         hubble = _background_value(results, "hubble_parameter", redshift, "H")
         if hasattr(results, "angular_diameter_distance"):
@@ -531,14 +1086,14 @@ def prepare_camb(
                 f"CAMB transverse distance at z={redshift:g} must be finite and "
                 "nonnegative, and positive at positive redshift"
             )
-        values.append((hubble, distance, sigma, fsigma8 / sigma))
+        values.append((hubble, distance, sigma8_value, fsigma8 / sigma8_value))
 
     # Retain one result surface only for the arbitrary quadrature nodes used by
     # geometry preparation.  Exact growth/background arrays above remain the
     # authoritative redshift-indexed values.
     geometry_results = results
-    h0 = float(getattr(parameters, "H0"))
-    if not np.isfinite(h0) or h0 <= 0:
+    hubble_constant = float(getattr(parameters, "H0"))
+    if not np.isfinite(hubble_constant) or hubble_constant <= 0:
         raise ValueError("CAMB H0 must be positive and finite")
     arrays = np.asarray(values, dtype=np.float64).T
     redshift_array = _immutable(ordered)
@@ -554,7 +1109,7 @@ def prepare_camb(
         sigma8_damping_reference=float(
             arrays[2][ordered.index(damping_reference_redshift)]
         ),
-        H0=h0,
+        H0=hubble_constant,
         _geometry_results=geometry_results,
         _z_to_index=MappingProxyType({z: i for i, z in enumerate(ordered)}),
         cache=None if record is None else MappingProxyType(record),

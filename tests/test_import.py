@@ -6,7 +6,14 @@ import sys
 
 
 def test_import_is_quiet_and_independent(tmp_path):
-    """Import in a fresh process without initializing neighboring packages."""
+    """Import in a fresh process without initializing neighboring packages.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     environment = os.environ.copy()
     environment.pop("PYTHONPATH", None)
     result = subprocess.run(

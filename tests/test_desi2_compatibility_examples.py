@@ -18,6 +18,13 @@ EXAMPLES = ROOT / "examples"
 
 
 def _load_result_helper():
+    """Import the shared result writer from the example directory.
+
+    Returns
+    -------
+    module : module
+        Loaded example result-output helper.
+    """
     spec = importlib.util.spec_from_file_location(
         "desi2_result_helper", EXAMPLES / "_desi2_results.py"
     )
@@ -27,6 +34,14 @@ def _load_result_helper():
 
 
 def _captured_bins():
+    """Build six synthetic captured bins with the historical first-bin selection.
+
+    Returns
+    -------
+    fixture : tuple
+        Captured bin arrays, ordered field names, original selection, version
+        metadata, and synthetic INI path.
+    """
     original = selection(adapter.CASE)
     rows = []
     for index in range(6):
@@ -61,6 +76,17 @@ def _captured_bins():
 
 
 def test_full_profile_selection_and_result_counts(monkeypatch, tmp_path):
+    """Check full profile selection and result counts.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that restores patched callables, attributes, and environment
+        variables after the test.
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     monkeypatch.setattr(adapter, "_capture", lambda *args: _captured_bins())
     settings, records = adapter.run_desi2_compatibility(
         reference=tmp_path,
@@ -75,6 +101,14 @@ def test_full_profile_selection_and_result_counts(monkeypatch, tmp_path):
 
 
 def test_fixed_profile_changes_only_forest_auto_noise(monkeypatch):
+    """Check fixed profile changes only forest auto noise.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that restores patched callables, attributes, and environment
+        variables after the test.
+    """
     fields = selection(adapter.CASE).fields
     required = [(0, 0), (0, 1), (1, 1)]
     row = {
@@ -115,6 +149,14 @@ def test_fixed_profile_changes_only_forest_auto_noise(monkeypatch):
 
 
 def test_result_output_round_trip_and_new_directory(tmp_path):
+    """Check result output round trip and new directory.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     helper = _load_result_helper()
     output = helper.create_output(tmp_path / "result")
     with pytest.raises(FileExistsError):
@@ -148,6 +190,13 @@ def test_result_output_round_trip_and_new_directory(tmp_path):
     "script", ["desi2_full_compatibility.py", "desi2_fixed_compatibility.py"]
 )
 def test_short_script_help(script):
+    """Check short script help.
+
+    Parameters
+    ----------
+    script : str
+        Example script name, supplied by pytest parametrization.
+    """
     result = subprocess.run(
         [sys.executable, str(EXAMPLES / script), "--help"],
         cwd=ROOT,

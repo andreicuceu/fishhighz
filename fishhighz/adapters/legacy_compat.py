@@ -18,7 +18,18 @@ from .legacy_inputs import DensityReader, SNRReader, _scipy
 
 
 def plain(value):
-    """Convert immutable provenance to plain JSON-compatible data."""
+    """Convert immutable provenance into plain serialization values.
+
+    Parameters
+    ----------
+    value : object
+        Nested immutable mappings, arrays, sequences or scalars.
+
+    Returns
+    -------
+    converted : object
+        Plain containers and scalar values preserving metadata.
+    """
     from collections.abc import Mapping
 
     if isinstance(value, Mapping):
@@ -33,13 +44,56 @@ def plain(value):
 
 
 def _mags(value):
-    m = real_array(value, "magnitudes")
-    if m.ndim != 1 or not len(m):
+    """Validate a nonempty magnitude vector.
+
+    Parameters
+    ----------
+    value : array_like
+        Magnitude nodes, shape (n_magnitude,).
+
+    Returns
+    -------
+    magnitudes : ndarray
+        Validated finite magnitude vector.
+
+    Raises
+    ------
+    ValueError
+        If magnitudes are empty, nonfinite or not one dimensional.
+    """
+    magnitudes = real_array(value, "magnitudes")
+    if magnitudes.ndim != 1 or not len(magnitudes):
         raise ValueError("magnitudes must be nonempty 1D")
-    return m
+    return magnitudes
 
 
 def _record(values, raw, original, effective, policies, masks, source):
+    """Freeze sampled values and explicit fallback diagnostics.
+
+    Parameters
+    ----------
+    values : ndarray
+        Final density or variance values, shape (n_magnitude,).
+    raw : ndarray
+        Interpolated density or SNR before fallback/scaling, shape
+        (n_magnitude,).
+    original : mapping
+        Requested coordinates.
+    effective : mapping
+        Coordinates and selections used by interpolation.
+    policies : mapping
+        Named fallback and scaling conventions.
+    masks : mapping of ndarray
+        Boolean fallback selections, each shape (n_magnitude,).
+    source : mapping
+        Original reader provenance.
+
+    Returns
+    -------
+    record : mappingproxy
+        Immutable sampled values and diagnostic metadata, including fallback
+        counts.
+    """
     return freeze(
         dict(
             values=values,
@@ -71,6 +125,22 @@ class LegacyDensity:
     negative_policy: str
 
     def __post_init__(self):
+        """Prepare the explicit legacy density normalization and spline.
+
+        Returns
+        -------
+        None
+            No value is returned.
+
+        Raises
+        ------
+        ValueError
+            If the density reader or negative-density policy is invalid.
+
+        Notes
+        -----
+        Retains the reference reduction order, including the flat zero-masked sum for forest normalization. The source reader is unchanged.
+        """
         if not isinstance(self.reader, DensityReader):
             raise ValueError("require validated DensityReader")
         if self.negative_policy not in ("reject", "floor_negative"):
@@ -78,56 +148,95 @@ class LegacyDensity:
         # Reference forest normalization sums the entire masked flat array,
         # including zeroed redshift rows. Preserve its arithmetic ordering here;
         # the strict reader's accepted selected-row reduction stays unchanged.
-        r = self.reader
-        values = r.raw_counts.copy()
-        bounds = r.provenance["magnitude_bounds"]
+        reader = self.reader
+        values = reader.raw_counts.copy()
+        bounds = reader.provenance["magnitude_bounds"]
         if bounds is not None:
-            lo, hi = bounds
-            if lo is not None:
-                values *= r.magnitudes[None, :] >= lo
-            if hi is not None:
-                values *= r.magnitudes[None, :] <= hi
-        threshold = r.provenance["z_norm_min"]
-        selected = (
-            np.ones(len(r.z), dtype=bool) if threshold is None else r.z > threshold
+            magnitude_min, magnitude_max = bounds
+            if magnitude_min is not None:
+                values *= reader.magnitudes[None, :] >= magnitude_min
+            if magnitude_max is not None:
+                values *= reader.magnitudes[None, :] <= magnitude_max
+        threshold = reader.provenance["z_norm_min"]
+        redshift_mask = (
+            np.ones(len(reader.z), dtype=bool)
+            if threshold is None
+            else reader.z > threshold
         )
-        measure = (
-            np.sum(values * selected[:, None])
+        normalization_count = (
+            np.sum(values * redshift_mask[:, None])
             if bounds is not None
-            else np.sum(values[selected])
+            else np.sum(values[redshift_mask])
         )
-        target = r.provenance["target_density"]
+        target = reader.provenance["target_density"]
         with np.errstate(over="raise", under="raise", invalid="raise", divide="raise"):
             if target is not None:
-                values *= target / measure
-            values /= r.redshift_widths[:, None] * r.provenance["dm"]
+                values *= target / normalization_count
+            values /= reader.redshift_widths[:, None] * reader.provenance["dm"]
         spline, _, _ = _scipy()
-        object.__setattr__(self, "_normalization_measure", float(measure))
+        object.__setattr__(self, "_normalization_measure", float(normalization_count))
         object.__setattr__(
-            self, "_spline", spline(r.z, r.magnitudes, values, kx=2, ky=2, s=0)
+            self,
+            "_spline",
+            spline(reader.z, reader.magnitudes, values, kx=2, ky=2, s=0),
         )
 
     def sample(self, z, magnitudes):
-        """Return values, raw interpolants and immutable per-sample diagnostics."""
-        z, m = scalar(z, "redshift"), _mags(magnitudes)
+        """Evaluate density and retain the selected legacy fallbacks.
+
+        Parameters
+        ----------
+        z : float
+            Nonnegative dimensionless source redshift; spline extension is
+            permitted.
+        magnitudes : array_like
+            Magnitude nodes, shape (n_magnitude,), in requested order.
+
+        Returns
+        -------
+        record : mappingproxy
+            Density values in deg^-2 redshift^-1 mag^-1, shape (n_magnitude,), with
+            raw interpolants and fallback provenance.
+
+        Raises
+        ------
+        ValueError
+            If redshift is invalid or negative density occurs under reject policy.
+
+        Notes
+        -----
+        Out-of-domain magnitudes receive 1e-20. Negative interpolants receive the same value only under the explicitly selected floor_negative policy.
+        """
+        z, magnitude_grid = scalar(z, "redshift"), _mags(magnitudes)
         if z < 0:
             raise ValueError("redshift must be nonnegative")
-        r = self.reader
-        outside = (m < r.magnitudes[0]) | (m > r.magnitudes[-1])
-        raw = real_array(self._spline.ev(np.full(m.shape, z), m), "raw density")
-        negative = (raw < 0) & ~outside
-        if np.any(negative) and self.negative_policy == "reject":
+        reader = self.reader
+
+        # Magnitude boundaries and negative spline overshoot have separate policies.
+        outside_mask = (magnitude_grid < reader.magnitudes[0]) | (
+            magnitude_grid > reader.magnitudes[-1]
+        )
+        raw = real_array(
+            self._spline.ev(np.full(magnitude_grid.shape, z), magnitude_grid),
+            "raw density",
+        )
+        negative_mask = (raw < 0) & ~outside_mask
+        if np.any(negative_mask) and self.negative_policy == "reject":
             raise ValueError("negative interpolated density; floor_negative is opt-in")
         values = raw.copy()
-        values[outside | negative] = 1e-20
-        extended = np.full(m.shape, z < r.z[0] or z > r.z[-1])
+        values[outside_mask | negative_mask] = 1e-20
+        redshift_extension_mask = np.full(
+            magnitude_grid.shape, z < reader.z[0] or z > reader.z[-1]
+        )
         return _record(
             values,
             raw,
-            dict(z=z, magnitudes=m),
+            dict(z=z, magnitudes=magnitude_grid),
             dict(
-                z=float(np.clip(z, r.z[0], r.z[-1])),
-                magnitudes=np.clip(m, r.magnitudes[0], r.magnitudes[-1]),
+                z=float(np.clip(z, reader.z[0], reader.z[-1])),
+                magnitudes=np.clip(
+                    magnitude_grid, reader.magnitudes[0], reader.magnitudes[-1]
+                ),
             ),
             dict(
                 magnitude_domain="legacy_floor",
@@ -140,11 +249,11 @@ class LegacyDensity:
                 normalization_reduction="legacy flat zero-masked forest sum; selected-row galaxy sum",
             ),
             dict(
-                density_floor=outside,
-                negative_density=negative,
-                redshift_extension=extended,
+                density_floor=outside_mask,
+                negative_density=negative_mask,
+                redshift_extension=redshift_extension_mask,
             ),
-            r.provenance,
+            reader.provenance,
         )
 
 
@@ -155,16 +264,28 @@ class LegacySNR:
     reader: SNRReader
 
     def __post_init__(self):
+        """Prepare linear interpolation of the validated SNR table.
+
+        Returns
+        -------
+        None
+            No value is returned.
+
+        Raises
+        ------
+        ValueError
+            If the supplied object is not a validated SNRReader.
+        """
         if not isinstance(self.reader, SNRReader):
             raise ValueError("require validated SNRReader")
         _, interpolator, _ = _scipy()
-        r = self.reader
+        reader = self.reader
         object.__setattr__(
             self,
             "_interpolator",
             interpolator(
-                (r.magnitudes, r.z, r.wavelength),
-                r.smoothed_snr.copy(),
+                (reader.magnitudes, reader.z, reader.wavelength),
+                reader.smoothed_snr.copy(),
                 method="linear",
                 bounds_error=True,
             ),
@@ -180,78 +301,135 @@ class LegacySNR:
         exposure_count,
         exposure_time=None,
     ):
-        """Return variance; sentinel branches equal 1e20 independent of exposure."""
-        r = self.reader
-        z, wave = scalar(z_source, "z_source"), _positive(wavelength, "wavelength")
-        m = _mags(magnitudes)
-        if z < 0:
+        """Evaluate pixel variance with explicit legacy SNR fallbacks.
+
+        Parameters
+        ----------
+        z_source : float
+            Dimensionless redshift of the background source.
+        magnitudes : array_like
+            Magnitude nodes, shape (n_magnitude,), in requested order.
+        wavelength : float
+            Observed wavelength in angstrom.
+        pixel_width_angstrom : float
+            Positive observed pixel width in angstrom.
+        exposure_count : float
+            Positive number of exposures.
+        exposure_time : float or None, optional
+            Per-exposure duration in seconds; None uses the table duration, and an
+            explicit value must match it.
+
+        Returns
+        -------
+        record : mappingproxy
+            Dimensionless variance and raw SNR, shape (n_magnitude,), with fallback
+            and exposure provenance.
+
+        Raises
+        ------
+        ValueError
+            If coordinates or exposure settings are invalid, or scaled variance is
+            not representable.
+
+        Notes
+        -----
+        Bright magnitudes clamp to the brightest node. Other out-of-range coordinates use variance 1e20 independently of exposure. In-domain SNR is scaled before the 1e-10 floor.
+        """
+        reader = self.reader
+        source_redshift, observed_wavelength = (
+            scalar(z_source, "z_source"),
+            _positive(wavelength, "wavelength"),
+        )
+        magnitude_grid = _mags(magnitudes)
+        if source_redshift < 0:
             raise ValueError("source redshift must be nonnegative")
-        pixel = _positive(pixel_width_angstrom, "pixel_width_angstrom")
-        count = _positive(exposure_count, "exposure_count")
+        pixel_width = _positive(pixel_width_angstrom, "pixel_width_angstrom")
+        n_exposures = _positive(exposure_count, "exposure_count")
         if (
             exposure_time is not None
             and _positive(exposure_time, "exposure_time")
-            != r.provenance["exposure_time"]
+            != reader.provenance["exposure_time"]
         ):
             raise ValueError("incompatible per-exposure EXPTIME")
-        outside = (
-            (m > r.magnitudes[-1])
-            | (z < r.z[0])
-            | (z > r.z[-1])
-            | (wave < r.wavelength[0])
-            | (wave > r.wavelength[-1])
+
+        # Out-of-domain samples retain the exposure-independent sentinel variance.
+        outside_mask = (
+            (magnitude_grid > reader.magnitudes[-1])
+            | (source_redshift < reader.z[0])
+            | (source_redshift > reader.z[-1])
+            | (observed_wavelength < reader.wavelength[0])
+            | (observed_wavelength > reader.wavelength[-1])
         )
-        bright = (m < r.magnitudes[0]) & ~outside
-        effective = np.maximum(m, r.magnitudes[0])
-        raw, scaled = np.zeros(m.shape), np.zeros(m.shape)
-        values = np.full(m.shape, 1e20)
-        inside = ~outside
-        if np.any(inside):
-            raw[inside] = real_array(
+        bright_mask = (magnitude_grid < reader.magnitudes[0]) & ~outside_mask
+        effective_magnitudes = np.maximum(magnitude_grid, reader.magnitudes[0])
+        raw_snr, scaled_snr = (
+            np.zeros(magnitude_grid.shape),
+            np.zeros(magnitude_grid.shape),
+        )
+        values = np.full(magnitude_grid.shape, 1e20)
+
+        inside_mask = ~outside_mask
+        if np.any(inside_mask):
+            raw_snr[inside_mask] = real_array(
                 self._interpolator(
                     np.column_stack(
                         (
-                            effective[inside],
-                            np.full(np.count_nonzero(inside), z),
-                            np.full(np.count_nonzero(inside), wave),
+                            effective_magnitudes[inside_mask],
+                            np.full(np.count_nonzero(inside_mask), source_redshift),
+                            np.full(np.count_nonzero(inside_mask), observed_wavelength),
                         )
                     )
                 ),
                 "interpolated SNR",
             )
-            if np.any(raw < 0):
+            if np.any(raw_snr < 0):
                 raise ValueError("negative interpolated SNR")
             try:
                 with np.errstate(
                     over="raise", under="raise", invalid="raise", divide="raise"
                 ):
-                    scaled[inside] = (
-                        raw[inside]
-                        * np.sqrt(pixel)
-                        * np.sqrt(np.float64(count) / r.provenance["exposure_count"])
+                    # Apply pixel/exposure scaling before the reference SNR floor.
+                    scaled_snr[inside_mask] = (
+                        raw_snr[inside_mask]
+                        * np.sqrt(pixel_width)
+                        * np.sqrt(
+                            np.float64(n_exposures)
+                            / reader.provenance["exposure_count"]
+                        )
                     )
-                    values[inside] = 1 / np.maximum(scaled[inside], 1e-10) ** 2
+                    values[inside_mask] = (
+                        1 / np.maximum(scaled_snr[inside_mask], 1e-10) ** 2
+                    )
             except FloatingPointError as error:
                 raise ValueError("scaled SNR/variance not representable") from error
         result = _record(
             values,
-            raw,
-            dict(z_source=z, wavelength=wave, magnitudes=m),
-            dict(z_source=z, wavelength=wave, magnitudes=effective, evaluated=inside),
+            raw_snr,
+            dict(
+                z_source=source_redshift,
+                wavelength=observed_wavelength,
+                magnitudes=magnitude_grid,
+            ),
+            dict(
+                z_source=source_redshift,
+                wavelength=observed_wavelength,
+                magnitudes=effective_magnitudes,
+                evaluated=inside_mask,
+            ),
             dict(
                 snr="legacy_floor_clamp",
                 snr_floor=1e-10,
                 sentinel_variance=1e20,
-                pixel_width_angstrom=pixel,
-                exposure_count=count,
-                scaled_snr=scaled,
+                pixel_width_angstrom=pixel_width,
+                exposure_count=n_exposures,
+                scaled_snr=scaled_snr,
             ),
             dict(
-                bright_clamp=bright,
-                out_of_range=outside,
-                snr_floor=inside & (scaled < 1e-10),
+                bright_clamp=bright_mask,
+                out_of_range=outside_mask,
+                snr_floor=inside_mask & (scaled_snr < 1e-10),
             ),
-            r.provenance,
+            reader.provenance,
         )
         return result
 
@@ -268,30 +446,75 @@ def sample_legacy_forest(
     exposure_count,
     exposure_time=None,
 ):
-    """Sample once into plain provenance suitable for ForestInput."""
+    """Sample source density and pixel variance with legacy provenance.
+
+    Parameters
+    ----------
+    density : object
+        Prepared source-density adapter.
+    snr : object
+        Prepared signal-to-noise adapter.
+    geometry : BinGeometry
+        Foreground geometry and evaluation redshift.
+    response : InstrumentResponse
+        Response with the independently specified velocity pixel width.
+    z_source : float
+        Dimensionless redshift of the background source.
+    magnitudes : array_like
+        Magnitude nodes, shape (n_magnitude,), in requested order.
+    pixel_width_angstrom : float
+        Positive observed pixel width in angstrom.
+    exposure_count : float
+        Positive number of exposures.
+    exposure_time : float or None, optional
+        Per-exposure duration in seconds; None uses the table duration, and an
+        explicit value must match it.
+
+    Returns
+    -------
+    sample : dict
+        rho in deg^-2 (km/s)^-1 mag^-1 and dimensionless variance arrays, shape
+        (n_magnitude,), plus plain reader/fallback provenance.
+
+    Raises
+    ------
+    ValueError
+        If source/foreground order or wavelength/velocity pixel widths disagree.
+
+    Notes
+    -----
+    Density and SNR use source redshift; observed wavelength uses the foreground evaluation redshift.
+    """
     if scalar(z_source, "z_source") <= geometry.z_eval:
         raise ValueError("z_source must exceed z_eval")
-    wave = LYA_REST_ANGSTROM * (1 + geometry.z_eval)
-    pixel = pixel_width_angstrom_to_velocity(
-        pixel_width_angstrom, lambda_obs_angstrom=wave
+    observed_wavelength = LYA_REST_ANGSTROM * (1 + geometry.z_eval)
+    pixel_width_velocity = pixel_width_angstrom_to_velocity(
+        pixel_width_angstrom, lambda_obs_angstrom=observed_wavelength
     )
     if not np.isclose(
-        pixel, response.pixel_width_velocity, rtol=8 * np.finfo(float).eps, atol=0
+        pixel_width_velocity,
+        response.pixel_width_velocity,
+        rtol=8 * np.finfo(float).eps,
+        atol=0,
     ):
         raise ValueError("inconsistent pixel widths")
-    d = density.sample(z_source, magnitudes)
-    s = snr.sample(
+    density_sample = density.sample(z_source, magnitudes)
+    snr_sample = snr.sample(
         z_source=z_source,
         magnitudes=magnitudes,
-        wavelength=wave,
+        wavelength=observed_wavelength,
         pixel_width_angstrom=pixel_width_angstrom,
         exposure_count=exposure_count,
         exposure_time=exposure_time,
     )
     return dict(
-        rho=density_per_velocity(d["values"], z_source=z_source),
-        variance=s["values"],
+        rho=density_per_velocity(density_sample["values"], z_source=z_source),
+        variance=snr_sample["values"],
         provenance=plain(
-            dict(compatibility=True, density=d["provenance"], snr=s["provenance"])
+            dict(
+                compatibility=True,
+                density=density_sample["provenance"],
+                snr=snr_sample["provenance"],
+            )
         ),
     )

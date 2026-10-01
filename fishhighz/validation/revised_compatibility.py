@@ -14,7 +14,34 @@ from .schema import assemble
 
 
 def run(task, bundle, provenance):
-    """Keep the literal 107-node measure; replace only required forest auto noise."""
+    """Keep the literal 107-node measure; replace only required forest auto noise.
+
+    Parameters
+    ----------
+    task : dict
+        Declared case, bin, selected field pairs, parameter order and validation
+        thresholds.
+    bundle : str or pathlib.Path
+        Immutable bundle containing captured compatibility powers and
+        derivatives.
+    provenance : dict
+        Input paths, hashes and software identities retained with the
+        calculation.
+
+    Returns
+    -------
+    arrays : dict of str to ndarray
+        Selected spectra with recomputed forest noise, Wick covariance and
+        information.
+    report : dict
+        Weight states, source identities and excluded original pairs.
+
+    Raises
+    ------
+    ValueError :
+        If inputs, declared identities or numerical validation conditions are
+        inconsistent.
+    """
     root = Path(bundle)
     manifest = json.loads((root / "manifest.json").read_text())
     record = next(
@@ -65,10 +92,12 @@ def run(task, bundle, provenance):
             state = solve(inputs, METHODS["early_lyaforecast"], **STOPPING)
             states[field["id"]] = plain(state)
             parallel = 0.00035 * row["_distance_to_velocity"]
-            k = float(np.hypot(parallel, 2.4 / row["_angle_to_distance"]))
+            auxiliary_wavenumber = float(
+                np.hypot(parallel, 2.4 / row["_angle_to_distance"])
+            )
             states[field["id"]]["auxiliary"] = dict(
-                k=k,
-                mu=parallel / k,
+                k=auxiliary_wavenumber,
+                mu=parallel / auxiliary_wavenumber,
                 P=inputs.signal,
                 B=inputs.p1d,
                 k_t_deg=2.4,

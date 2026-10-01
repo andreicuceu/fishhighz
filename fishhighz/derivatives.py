@@ -57,8 +57,39 @@ class DerivativeResult:
 
 
 def _stencil(parameter, x, h):
-    lo, hi = parameter.bounds or (None, None)
-    lower, upper = (-np.inf if lo is None else lo), (np.inf if hi is None else hi)
+    """Choose a representable second-order stencil within parameter bounds.
+
+    Parameters
+    ----------
+    parameter : Parameter
+        Parameter metadata, including inclusive bounds in the parameter's units.
+    x : float
+        Fiducial parameter value in the same units.
+    h : float
+        Positive requested absolute step in parameter units.
+
+    Returns
+    -------
+    stencil : Stencil
+        Actual float64 points and offsets, requested offsets, dimensionless
+        coefficients, and displacement scale.
+
+    Raises
+    ------
+    ValueError
+        If no supported stencil fits the bounds with distinct correctly ordered
+        points and finite coefficients.
+
+    Notes
+    -----
+    Try central, then forward, then backward stencils without clipping or
+    shrinking h. Coefficients use the actual representable offsets.
+    """
+    lower_bound, upper_bound = parameter.bounds or (None, None)
+    lower, upper = (
+        (-np.inf if lower_bound is None else lower_bound),
+        (np.inf if upper_bound is None else upper_bound),
+    )
     for method, multiples in (
         ("central", (-1, 1)),
         ("forward", (1, 2)),
@@ -84,9 +115,14 @@ def _stencil(parameter, x, h):
         ):
             break
         scale = float(np.max(np.abs(offsets)))
-        u, v = offsets / scale
+        first_scaled_offset, second_scaled_offset = offsets / scale
         with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
-            weights = (-v / (u * (u - v)), -u / (v * (v - u)))
+            weights = (
+                -second_scaled_offset
+                / (first_scaled_offset * (first_scaled_offset - second_scaled_offset)),
+                -first_scaled_offset
+                / (second_scaled_offset * (second_scaled_offset - first_scaled_offset)),
+            )
         if not np.all(np.isfinite(weights)):
             break
         return Stencil(
@@ -105,6 +141,32 @@ def _stencil(parameter, x, h):
 
 
 def _schedule(prepared, theta, steps, step_scale, numerical):
+    """Validate derivative strategies and stencils before calling any model.
+
+    Parameters
+    ----------
+    prepared : PreparedP3D
+        Provider routes and their analytic/numerical derivative declarations.
+    theta : ndarray of shape (n_global,)
+        Validated global parameter values in registry units.
+    steps : mapping or None
+        Explicit step overrides by global ID, or None for registry steps.
+    step_scale : float
+        Positive dimensionless step multiplier.
+    numerical : bool
+        Whether to force numerical columns regardless of analytic declarations.
+
+    Returns
+    -------
+    schedules : tuple of tuple
+        One ordered (global_index, stencil) sequence per route; stencil=None
+        marks analytic columns.
+
+    Raises
+    ------
+    ValueError
+        If controls, dependency steps, or resolved stencils are invalid.
+    """
     scale = scalar(step_scale, "step_scale")
     if scale <= 0:
         raise ValueError("step_scale must be positive")
@@ -133,12 +195,12 @@ def _schedule(prepared, theta, steps, step_scale, numerical):
                         f"{parameter.id}: explicit numerical step required"
                     )
                 with np.errstate(over="ignore", under="ignore"):
-                    h = float(np.float64(step) * scale)
-                if not np.isfinite(h) or h <= 0:
+                    absolute_step = float(np.float64(step) * scale)
+                if not np.isfinite(absolute_step) or absolute_step <= 0:
                     raise ValueError(
                         f"{parameter.id}: scaled step must be positive finite"
                     )
-                stencil = _stencil(parameter, theta[index], h)
+                stencil = _stencil(parameter, theta[index], absolute_step)
             columns.append((int(index), stencil))
         schedules.append(tuple(columns))
     return tuple(schedules)
@@ -147,31 +209,42 @@ def _schedule(prepared, theta, steps, step_scale, numerical):
 def evaluate_derivatives(
     prepared, theta, z, k, mu, *, steps=None, step_scale=1.0, numerical=False
 ):
-    """Evaluate mean and global derivatives without changing survey inputs.
+    """Evaluate the intrinsic mean and global derivatives at fixed coordinates.
 
     Parameters
     ----------
     prepared : PreparedP3D
-        Explicit provider routes with registry-aware bindings.
-    theta : array_like
-        Global evaluation point, within inclusive bounds.
+        Explicit provider routes, pair ownership, and global parameter bindings.
+    theta : array_like of shape (n_global,)
+        Global evaluation point in each parameter's units and within inclusive
+        bounds.
     z : float
-        Fixed nonnegative redshift.
-    k, mu : array_like
-        Paired nodes, including arbitrary nonempty consecutive grid slices.
-    steps : mapping, optional
-        Positive finite absolute step overrides keyed by global ID.
-    step_scale : float
-        Positive finite multiplier, never an implicit guessed step.
-    numerical : bool
-        Explicitly force all dependent columns numerical, including columns
-        normally analytic. Useful for analytic-versus-FD verification.
+        Fixed nonnegative dimensionless evaluation redshift.
+    k : array_like of shape (n_node,)
+        Positive observed wavenumbers in h_fid/Mpc.
+    mu : array_like of shape (n_node,)
+        Paired direction cosines on [0, 1].
+    steps : mapping of str to float, optional
+        Positive absolute step overrides by global parameter ID, in the
+        corresponding parameter units. Default None uses registry steps.
+    step_scale : float, default=1.0
+        Positive dimensionless multiplier of every numerical step.
+    numerical : bool, default=False
+        Force numerical differentiation of all dependent columns, including
+        those with analytic Jacobians.
 
     Returns
     -------
-    DerivativeResult
-        Powers (node,required), Jacobian (node,required,global), methods, actual
-        stencils and call counts. Unused global columns are exactly zero.
+    result : DerivativeResult
+        Float64 power (n_node, n_required_pair) in (Mpc/h_fid)^3, Jacobian
+        (n_node, n_required_pair, n_global) in power units per parameter unit,
+        and method/stencil/call diagnostics. Unused columns are exactly zero.
+
+    Raises
+    ------
+    ValueError
+        If input state or derivative schedules are invalid, a provider fails, or
+        derivative arithmetic is nonfinite.
 
     Notes
     -----
@@ -276,6 +349,49 @@ def check_convergence(
 ):
     """Compare h,h/2 (and optionally further halvings), retaining two results.
 
+    Parameters
+    ----------
+    prepared : PreparedP3D
+        Explicit provider routes, pair ownership, and global parameter bindings.
+    theta : array_like of shape (n_global,)
+        Global evaluation point in each parameter's units and within inclusive
+        bounds.
+    z : float
+        Fixed nonnegative dimensionless evaluation redshift.
+    k : array_like of shape (n_node,)
+        Positive observed wavenumbers in h_fid/Mpc.
+    mu : array_like of shape (n_node,)
+        Paired direction cosines on [0, 1].
+    atol : float
+        Nonnegative absolute derivative tolerance, in the derivative units of
+        each assessed column.
+    rtol : float
+        Nonnegative dimensionless relative tolerance.
+    refinements : int, default=1
+        Positive number of successive step halvings.
+    steps : mapping of str to float, optional
+        Positive absolute step overrides by global parameter ID, in the
+        corresponding parameter units. Default None uses registry steps.
+    step_scale : float, default=1.0
+        Positive dimensionless multiplier of every numerical step.
+    numerical : bool, default=False
+        Force numerical differentiation of all dependent columns, including
+        those with analytic Jacobians.
+
+    Returns
+    -------
+    result : ConvergenceResult
+        Per-provider/global-column absolute and relative changes, actual
+        coarse/fine stencils, method changes, and the joint pass flag.
+
+    Raises
+    ------
+    ValueError
+        If tolerances, state, or schedules are invalid; no numerical columns
+        exist; actual stencil points repeat; or comparisons are nonfinite.
+
+    Notes
+    -----
     Only numerical columns are assessed; fail if there are none. Set numerical
     explicitly to verify normally analytic columns. Use infinity norm across
     owned pairs and nodes: change <= atol + rtol*max(norm(coarse),norm(fine)).
@@ -332,10 +448,18 @@ def check_convergence(
                 continue
             index = prepared.registry.ids.index(old.parameter)
             columns = routes[old.provider].columns
-            a, b = coarse.jacobian[:, columns, index], fine.jacobian[:, columns, index]
+            coarse_derivative, fine_derivative = (
+                coarse.jacobian[:, columns, index],
+                fine.jacobian[:, columns, index],
+            )
             with np.errstate(over="ignore", invalid="ignore"):
-                change = float(np.max(np.abs(a - b)))
-                reference = float(max(np.max(np.abs(a)), np.max(np.abs(b))))
+                change = float(np.max(np.abs(coarse_derivative - fine_derivative)))
+                reference = float(
+                    max(
+                        np.max(np.abs(coarse_derivative)),
+                        np.max(np.abs(fine_derivative)),
+                    )
+                )
                 threshold = atol + rtol * reference
             if not np.isfinite(change) or not np.isfinite(threshold):
                 raise ValueError("nonfinite convergence arithmetic")

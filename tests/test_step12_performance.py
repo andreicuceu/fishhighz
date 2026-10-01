@@ -26,6 +26,21 @@ from fishhighz.validation.synthetic import evidence_payload
 
 @pytest.fixture(params=["numpy", "numba"])
 def backend(request, monkeypatch):
+    """Select a Fisher-contraction backend for the parametrized test.
+
+    Parameters
+    ----------
+    request : pytest.FixtureRequest
+        Pytest request containing the selected fixture parameter.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture restoring patched attributes and environment variables after the
+        test.
+
+    Returns
+    -------
+    backend : str
+        Selected numpy or numba backend; unavailable numba is skipped.
+    """
     if request.param == "numba" and importlib.util.find_spec("numba") is None:
         pytest.skip("optional compiler unavailable")
     monkeypatch.setenv("FISHHIGHZ_FISHER_BACKEND", request.param)
@@ -36,6 +51,19 @@ def backend(request, monkeypatch):
 @pytest.mark.parametrize("columns", [2, 12])
 @pytest.mark.parametrize("selected", [None, [(4, 2), (1, 1), (0, 3)]])
 def test_spd_oracles(backend, nodes, columns, selected):
+    """Check spd oracles.
+
+    Parameters
+    ----------
+    backend : str
+        Fisher-contraction implementation, supplied by pytest parametrization.
+    nodes : int
+        Evaluation nodes, supplied by pytest parametrization.
+    columns : int
+        Selected Jacobian or table columns, supplied by pytest parametrization.
+    selected : list or None
+        Selected spectrum definitions, supplied by pytest parametrization.
+    """
     rng = np.random.default_rng(1204)
     sel = PairSelection(
         [ObservedField(str(i), "galaxy", "m") for i in range(5)], selected
@@ -44,7 +72,7 @@ def test_spd_oracles(backend, nodes, columns, selected):
     total = raw @ raw.swapaxes(1, 2) + 5 * np.eye(5)
     i, j = sel.required_pairs.T
     modes = rng.uniform(0.2, 4, nodes)
-    c = gaussian_covariance(total[:, i, j], modes, sel)
+    covariance = gaussian_covariance(total[:, i, j], modes, sel)
     pairs = sel.selected_pairs
     oracle_c = np.stack(
         [
@@ -60,33 +88,48 @@ def test_spd_oracles(backend, nodes, columns, selected):
         ],
         axis=1,
     )
-    assert relative(c, oracle_c) <= 5e-12
+    assert relative(covariance, oracle_c) <= 5e-12
     jac = rng.normal(size=(nodes, len(pairs), columns))
     if columns == 12:
         jac[:, :, 2:] = 0
-    saved = c.copy(), jac.copy()
+    saved = covariance.copy(), jac.copy()
     scales = np.geomspace(1e-50, 1e50, len(pairs))
-    factors = factor_covariance(c)
-    reference = _factor_covariance_scalar(c)
+    factors = factor_covariance(covariance)
+    reference = _factor_covariance_scalar(covariance)
     assert relative(factors, reference) <= 5e-12
     actual = fisher_from_factors(jac, factors)
-    direct = np.einsum("nsi,nsj->ij", jac, np.linalg.solve(c, jac))
+    direct = np.einsum("nsi,nsj->ij", jac, np.linalg.solve(covariance, jac))
     assert relative(actual, direct) <= 5e-12
     scaled = fisher_from_factors(
         jac * scales[None, :, None],
-        factor_covariance(c * scales[None, :, None] * scales[None, None, :]),
+        factor_covariance(covariance * scales[None, :, None] * scales[None, None, :]),
     )
     assert relative(scaled, direct) <= 5e-12
     errors = np.sqrt(np.diag(np.linalg.inv(actual[:2, :2])))
     assert relative(errors, np.sqrt(np.diag(np.linalg.inv(direct[:2, :2])))) <= 5e-12
     if columns == 12:
         assert np.count_nonzero(actual[2:]) == 0
-    np.testing.assert_array_equal(c, saved[0])
+    np.testing.assert_array_equal(covariance, saved[0])
     np.testing.assert_array_equal(jac, saved[1])
     assert actual.flags.owndata
 
 
 def outcome(function, *args):
+    """Return a calculation result or its ValueError diagnostic.
+
+    Parameters
+    ----------
+    function : callable
+        Synthetic model or operation evaluated by the helper.
+    *args : tuple
+        Positional arguments forwarded to the original callable or accepted by
+        the test callback.
+
+    Returns
+    -------
+    outcome : object or str
+        Function result on success, or the ValueError message on rejection.
+    """
     try:
         return function(*args)
     except ValueError as error:
@@ -111,10 +154,22 @@ def outcome(function, *args):
     ],
 )
 def test_factor_boundary_diagnostics(node, bad):
-    c = np.tile(np.eye(2), (513, 1, 1))
-    c[node] = bad
-    c[512, 0, 0] = -1  # first error must still be in the original cell order
-    assert outcome(factor_covariance, c) == outcome(_factor_covariance_scalar, c)
+    """Check factor boundary diagnostics.
+
+    Parameters
+    ----------
+    node : int
+        Fourier-node index, supplied by pytest parametrization.
+    bad : list
+        Invalid input exercising the specified rejection path, supplied by
+        pytest parametrization.
+    """
+    covariance = np.tile(np.eye(2), (513, 1, 1))
+    covariance[node] = bad
+    covariance[512, 0, 0] = -1  # first error must still be in the original cell order
+    assert outcome(factor_covariance, covariance) == outcome(
+        _factor_covariance_scalar, covariance
+    )
 
 
 @pytest.mark.parametrize("node", [255, 256, 257])
@@ -122,17 +177,40 @@ def test_factor_boundary_diagnostics(node, bad):
     "bad", [[-1, 0, 1], [0, 0.1, 1], [0, 0, 1], [1, 1, 1], [1, 1 + 1e-12, 1], [1, 2, 1]]
 )
 def test_field_boundary_diagnostics(node, bad):
+    """Check field boundary diagnostics.
+
+    Parameters
+    ----------
+    node : int
+        Fourier-node index, supplied by pytest parametrization.
+    bad : list
+        Invalid input exercising the specified rejection path, supplied by
+        pytest parametrization.
+    """
     sel = PairSelection([ObservedField(str(i), "galaxy", "m") for i in range(2)])
-    p = np.tile([1.0, -0.2, 1.0], (513, 1))
-    p[node] = bad
-    p[512, 0] = -1
-    assert outcome(_validate_field_power, p, sel) == outcome(
-        _validate_field_power_scalar, p, sel
+    packed_power = np.tile([1.0, -0.2, 1.0], (513, 1))
+    packed_power[node] = bad
+    packed_power[512, 0] = -1
+    assert outcome(_validate_field_power, packed_power, sel) == outcome(
+        _validate_field_power_scalar, packed_power, sel
     )
 
 
 @pytest.mark.parametrize("kind", ["triangle", "factor_nan", "jac_nan", "solve", "sum"])
 def test_compiled_error_order_and_overflow(backend, monkeypatch, kind):
+    """Check compiled error order and overflow.
+
+    Parameters
+    ----------
+    backend : str
+        Fisher-contraction implementation, supplied by pytest parametrization.
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that restores patched callables, attributes, and environment
+        variables after the test.
+    kind : str
+        Tracer, input, or calculation classification for this case, supplied by
+        pytest parametrization.
+    """
     lower = np.tile(np.eye(2), (258, 1, 1))
     j = np.ones((258, 2, 2))
     if kind == "triangle":
@@ -152,48 +230,95 @@ def test_compiled_error_order_and_overflow(backend, monkeypatch, kind):
 
 @pytest.mark.parametrize("side", ["production", "oracle"])
 def test_independent_accuracy_check(monkeypatch, side):
+    """Check independent accuracy check.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that restores patched callables, attributes, and environment
+        variables after the test.
+    side : str
+        Implementation whose response is perturbed, supplied by pytest
+        parametrization.
+    """
     import fishhighz.validation.accuracy as accuracy
 
     task = request("lya_qso_lbg_lae_15x2pt", 0, "accuracy", kind="synthetic_bao")
-    a, r = evidence_payload(task)
-    factors = factor_covariance(a["selected_covariance"])
+    evidence_arrays, evidence_report = evidence_payload(task)
+    factors = factor_covariance(evidence_arrays["selected_covariance"])
     prepared = SimpleNamespace(
         p3d=None,
         theta=None,
-        k=a["k"],
-        mu=a["mu"],
-        products=np.ones_like(a["total"]),
-        total=a["total"],
+        k=evidence_arrays["k"],
+        mu=evidence_arrays["mu"],
+        products=np.ones_like(evidence_arrays["total"]),
+        total=evidence_arrays["total"],
         factors=factors,
-        power=a["total"],
-        response=np.ones((len(a["k"]), 5)),
-        noise=np.zeros_like(a["total"]),
+        power=evidence_arrays["total"],
+        response=np.ones((len(evidence_arrays["k"]), 5)),
+        noise=np.zeros_like(evidence_arrays["total"]),
     )
     recipe = AccuracyRecipe.__new__(AccuracyRecipe)
     recipe.registry = SimpleNamespace(ids=task["parameters"])
     recipe.selection = SimpleNamespace(selected_to_required=np.arange(15))
-    recipe.prepare = lambda *args, **kwargs: (prepared, r["settings"])
+    recipe.prepare = lambda *args, **kwargs: (prepared, evidence_report["settings"])
     recipe.z = lambda index: 2.5
     recipe.provenance = {}
     calls = []
 
     def derivative(*args, **kwargs):
+        """Record derivative step sizes and return the fixed synthetic Jacobian.
+
+        Parameters
+        ----------
+        *args : tuple
+            Positional arguments forwarded to the original callable or accepted by
+            the test callback.
+        **kwargs : dict
+            Keyword options forwarded to the original callable or inspected by the
+            test callback.
+
+        Returns
+        -------
+        result : types.SimpleNamespace
+            Object containing observed_j as its jacobian attribute.
+
+        Notes
+        -----
+        Appends to the enclosing test call log so provider dispatch can be checked.
+        """
         calls.append(kwargs["step_scale"])
-        return SimpleNamespace(jacobian=a["observed_j"])
+        return SimpleNamespace(jacobian=evidence_arrays["observed_j"])
 
     monkeypatch.setattr(accuracy, "evaluate_derivatives", derivative)
     actual, _ = recipe.evaluate(task, DEFAULT)
-    assert relative(actual["fisher"], a["fisher"]) < 5e-12
+    assert relative(actual["fisher"], evidence_arrays["fisher"]) < 5e-12
     assert calls == [DEFAULT["step"] / 0.001]
     original = accuracy._assemble if side == "production" else accuracy.contract
 
     def perturb(*args, **kwargs):
-        x, y = original(*args, **kwargs)
+        """Perturb the selected side of an independent Fisher comparison.
+
+        Parameters
+        ----------
+        *args : tuple
+            Positional arguments forwarded to the original callable or accepted by
+            the test callback.
+        **kwargs : dict
+            Keyword options forwarded to the original callable or inspected by the
+            test callback.
+
+        Returns
+        -------
+        result : tuple
+            Original calculation output with a one-percent Fisher perturbation.
+        """
+        perturbed_result, unmodified_result = original(*args, **kwargs)
         if side == "production":
-            x["fisher"] *= 1.01
+            perturbed_result["fisher"] *= 1.01
         else:
-            x *= 1.01
-        return x, y
+            perturbed_result *= 1.01
+        return perturbed_result, unmodified_result
 
     monkeypatch.setattr(
         accuracy, "_assemble" if side == "production" else "contract", perturb
@@ -203,22 +328,61 @@ def test_independent_accuracy_check(monkeypatch, side):
 
 
 def test_study_reuse_controls_failures_and_order(monkeypatch):
+    """Check study reuse controls failures and order.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that restores patched callables, attributes, and environment
+        variables after the test.
+    """
     import fishhighz.validation.accuracy as accuracy
 
     caches = []
 
     class TrackedPayloads(OrderedDict):
         def __init__(self):
+            """Initialize the synthetic TrackedPayloads fixture.
+
+            Notes
+            -----
+            Sets the instance state used by the enclosing test; no scientific calculation is run.
+            """
             super().__init__()
             self.evictions = 0
             self.hits = 0
             caches.append(self)
 
         def __getitem__(self, key):
+            """Record a cache hit and retrieve the original value.
+
+            Parameters
+            ----------
+            key : object
+                Cache key whose access is recorded.
+
+            Returns
+            -------
+            value : object
+                Cached payload at the requested key.
+            """
             self.hits += 1
             return super().__getitem__(key)
 
         def popitem(self, last=True):
+            """Record eviction and enforce the synthetic three-entry cache bound.
+
+            Parameters
+            ----------
+            last : bool, optional
+                Whether to evict the most recently inserted cache entry. Default is
+                True.
+
+            Returns
+            -------
+            item : tuple
+                Evicted key and cached value.
+            """
             self.evictions += 1
             value = super().popitem(last=last)
             assert len(self) <= 3
@@ -228,6 +392,12 @@ def test_study_reuse_controls_failures_and_order(monkeypatch):
 
     class SyntheticStudy(AccuracyRecipe):
         def __init__(self):
+            """Initialize the synthetic SyntheticStudy fixture.
+
+            Notes
+            -----
+            Sets the instance state used by the enclosing test; no scientific calculation is run.
+            """
             self.selection = SimpleNamespace(
                 fields=[SimpleNamespace(kind="forest")],
                 selected_pairs=np.array([[0, 0]]),
@@ -236,14 +406,43 @@ def test_study_reuse_controls_failures_and_order(monkeypatch):
             self._prepared = OrderedDict()
 
         def evaluate(self, task, controls, **options):
+            """Evaluate the synthetic Fisher trial for the supplied numerical controls.
+
+            Parameters
+            ----------
+            task : dict
+                Synthetic forecast request including case, redshift-bin index, profile,
+                and pair selection.
+            controls : dict
+                Numerical quadrature and weighting controls for this synthetic trial.
+            **options : dict
+                Keyword options forwarded to the original callable or inspected by the
+                test callback.
+
+            Returns
+            -------
+            payload : tuple
+                Synthetic numerical arrays and validation report, including the
+                requested test modification.
+
+            Raises
+            ------
+            ValueError
+                Deliberately raised to exercise the rejection path in the enclosing
+                test.
+
+            Notes
+            -----
+            Uses small analytic matrices to exercise validation control flow; it does not run a survey forecast.
+            """
             key = tuple(sorted(controls.items()))
             self.calls[key] += 1
             if controls["iterations"] == 3:
                 raise ValueError("synthetic failed weight trial")
             # All supported controls influence independently computed information.
             amplitude = 1 + sum(float(v) * 1e-12 for v in controls.values())
-            f = amplitude * np.eye(2)
-            return dict(fisher=f, pair_fisher=f[None]), dict(
+            fisher = amplitude * np.eye(2)
+            return dict(fisher=fisher, pair_fisher=fisher[None]), dict(
                 settings=dict(grid=dict(volume=1.0))
             )
 
@@ -253,9 +452,9 @@ def test_study_reuse_controls_failures_and_order(monkeypatch):
     assert len(keys) == len(set(keys))
     assert set(keys) <= set(recipe.calls)
     assert all(dict(k)["iterations"] != 3 for k in keys)
-    for c, f in zip(report["study_controls"], arrays["study_fisher"]):
+    for c, fisher in zip(report["study_controls"], arrays["study_fisher"]):
         np.testing.assert_array_equal(
-            f, (1 + sum(float(v) * 1e-12 for v in c.values())) * np.eye(2)
+            fisher, (1 + sum(float(v) * 1e-12 for v in c.values())) * np.eye(2)
         )
     assert report["unresolved_controls"] and not report["passed"]
     before = recipe.calls.copy()
@@ -270,6 +469,14 @@ def test_study_reuse_controls_failures_and_order(monkeypatch):
 
 
 def test_numpy_only_import_and_requested_compiler_fallback(tmp_path):
+    """Check numpy only import and requested compiler fallback.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    """
     import os
     import subprocess
     import sys
@@ -296,6 +503,17 @@ assert not {'numba', 'scipy', 'astropy'} & set(sys.modules)
 
 @pytest.mark.parametrize("policy", ["raise", "warn"])
 def test_explicit_underflow_policy_is_preserved(monkeypatch, policy):
+    """Check explicit underflow policy is preserved.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that restores patched callables, attributes, and environment
+        variables after the test.
+    policy : str
+        Input normalization or interpolation policy, supplied by pytest
+        parametrization.
+    """
     import warnings
 
     lower = np.ones((1, 1, 1))
@@ -315,6 +533,14 @@ def test_explicit_underflow_policy_is_preserved(monkeypatch, policy):
 
 
 def test_unset_backend_selects_compiled_contraction_when_available(monkeypatch):
+    """Check unset backend selects compiled contraction when available.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Fixture that restores patched callables, attributes, and environment
+        variables after the test.
+    """
     if importlib.util.find_spec("numba") is None:
         pytest.skip("optional compiler unavailable")
     import fishhighz.kernels._compiled_fisher as compiled
@@ -327,6 +553,23 @@ def test_unset_backend_selects_compiled_contraction_when_available(monkeypatch):
     original = compiled.contract
 
     def spy(*args):
+        """Record compiled-kernel dispatch before invoking the original kernel.
+
+        Parameters
+        ----------
+        *args : tuple
+            Positional arguments forwarded to the original callable or accepted by
+            the test callback.
+
+        Returns
+        -------
+        result : object
+            Original contraction result.
+
+        Notes
+        -----
+        Appends to the enclosing test call log so provider dispatch can be checked.
+        """
         calls.append(args)
         return original(*args)
 

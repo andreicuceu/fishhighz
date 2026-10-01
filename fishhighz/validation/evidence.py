@@ -12,11 +12,43 @@ from .cases import CASE_IDS, bins, recipe, selection
 
 
 def digest(path):
+    """Hash a saved input or evidence file.
+
+    Parameters
+    ----------
+    path : str or pathlib.Path
+        Path to the file to inspect.
+
+    Returns
+    -------
+    digest : str
+        SHA-256 hexadecimal digest of the file bytes.
+    """
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 def record_report(root, record):
-    """Read one bounded, hash-bound report; inline schema-2 fixtures stay valid."""
+    """Read one bounded, hash-bound report; inline schema-2 fixtures stay valid.
+
+    Parameters
+    ----------
+    root : str or pathlib.Path
+        Root directory of the input checkout or saved evidence bundle.
+    record : dict
+        Manifest entry containing the inline report or its relative path and
+        hashes.
+
+    Returns
+    -------
+    report : dict
+        Verified external report or the retained inline historical report.
+
+    Raises
+    ------
+    ValueError :
+        If inputs, declared identities or numerical validation conditions are
+        inconsistent.
+    """
     if "report_file" not in record:
         return record["report"]
     if "report" in record:
@@ -34,13 +66,49 @@ def record_report(root, record):
 
 
 def canonical(value):
+    """Hash a deterministic JSON representation of scientific metadata.
+
+    Parameters
+    ----------
+    value : object
+        JSON-compatible metadata, allowing NumPy values through plain
+        conversion.
+
+    Returns
+    -------
+    digest : str
+        SHA-256 hexadecimal digest of the sorted finite JSON representation.
+    """
     return hashlib.sha256(
         json.dumps(plain(value), sort_keys=True, allow_nan=False).encode()
     ).hexdigest()
 
 
 def requests(suite, cases=None, bin_indices=None):
-    """Explicit quick/full work inventory; full execution requires caller opt-in."""
+    """Explicit quick/full work inventory; full execution requires caller opt-in.
+
+    Parameters
+    ----------
+    suite : str
+        Requested quick or explicitly selected full validation inventory.
+    cases : sequence of str or None
+        Case identifiers to include; None uses the suite-defined inventory.
+        Default is ``None``.
+    bin_indices : sequence of int or None
+        Zero-based bins to include; None uses the suite-defined bin selection.
+        Default is ``None``.
+
+    Returns
+    -------
+    requests : list of dict
+        Ordered case/bin requests with bounds and original selected pairs.
+
+    Raises
+    ------
+    ValueError :
+        If inputs, declared identities or numerical validation conditions are
+        inconsistent.
+    """
     if suite not in ("quick", "full"):
         raise ValueError("suite must be quick or full")
     cases = (
@@ -89,7 +157,39 @@ def modern_requests(
     kind="real_bao",
     recipe_revision=None,
 ):
-    """Exact primary inventory; full two-profile coverage is 78 records."""
+    """Exact primary inventory; full two-profile coverage is 78 records.
+
+    Parameters
+    ----------
+    suite : str
+        Requested quick or explicitly selected full validation inventory.
+    cases : sequence of str or None
+        Case identifiers to include; None uses the suite-defined inventory.
+        Default is ``None``.
+    bin_indices : sequence of int or None
+        Zero-based bins to include; None uses the suite-defined bin selection.
+        Default is ``None``.
+    profiles : sequence of str
+        Ordered scientific profiles to include. Default is ``('accuracy',)``.
+    kind : str
+        Scientific record type used to distinguish primary and diagnostic
+        evidence. Default is ``'real_bao'``.
+    recipe_revision : str or None
+        Declared revision of the physical recipe; None retains historical
+        request semantics. Default is ``None``.
+
+    Returns
+    -------
+    requests : list of dict
+        Ordered case/bin/profile requests with fixed physical and numerical
+        identities.
+
+    Raises
+    ------
+    ValueError :
+        If inputs, declared identities or numerical validation conditions are
+        inconsistent.
+    """
     from .schema import PROFILES, request
 
     profiles = tuple(profiles)
@@ -123,9 +223,54 @@ def execute(
 ):
     """Write schema-2 semantic evidence, retaining execution/science failures.
 
+    Parameters
+    ----------
+    output : str or pathlib.Path
+        Destination directory for the generated evidence or figures.
+    suite : str
+        Requested quick or explicitly selected full validation inventory.
+    worker : callable
+        Function taking one request and returning its numerical arrays and
+        report.
+    cases : sequence of str or None
+        Case identifiers to include; None uses the suite-defined inventory.
+        Default is ``None``.
+    bin_indices : sequence of int or None
+        Zero-based bins to include; None uses the suite-defined bin selection.
+        Default is ``None``.
+    inputs : sequence of str or pathlib.Path or None
+        Source paths whose hashes are recorded in the manifest. Default is
+        ``None``.
+    profiles : sequence of str
+        Ordered scientific profiles to include. Default is ``('accuracy',)``.
+    kind : str
+        Scientific record type used to distinguish primary and diagnostic
+        evidence. Default is ``'real_bao'``.
+    diagnostic_requests : sequence of dict
+        Separately declared diagnostic requests. Default is ``()``.
+    recipe_revision : str or None
+        Declared revision of the physical recipe; None retains historical
+        request semantics. Default is ``None``.
+
+    Returns
+    -------
+    manifest : dict
+        Written inventory with every attempted outcome and separate
+        execution/scientific status.
+
+    Raises
+    ------
+    ValueError :
+        If inputs, declared identities or numerical validation conditions are
+        inconsistent.
+
+    Notes
+    -----
     Each worker returns a payload built for its exact request. A worker that
     merely returns Fisher/errors is invalid. Diagnostics have a separately
     predeclared exact inventory; failed tasks never disappear from the manifest.
+
+    Creates a new output directory and writes compressed arrays, JSON reports and a progressively updated manifest. Existing output directories are rejected.
     """
     from .schema import validate_payload, validate_request
 
@@ -166,6 +311,12 @@ def execute(
     )
 
     def save():
+        """Atomically replace the manifest with the current execution inventory.
+
+        Notes
+        -----
+        Writes manifest.next.json and replaces manifest.json in the enclosing output directory.
+        """
         pending = out / "manifest.next.json"
         pending.write_text(
             json.dumps(plain(manifest), indent=2, allow_nan=False) + "\n"
@@ -240,43 +391,84 @@ def execute(
 
 
 def inspect_legacy(output):
-    """Explicit limited inspection; schema 1 can never pass schema-2 acceptance."""
+    """Explicit limited inspection; schema 1 can never pass schema-2 acceptance.
+
+    Parameters
+    ----------
+    output : str or pathlib.Path
+        Destination directory for the generated evidence or figures.
+
+    Returns
+    -------
+    inspection : dict
+        Explicitly limited historical status; scientific completeness remains
+        false.
+
+    Raises
+    ------
+    ValueError :
+        If inputs, declared identities or numerical validation conditions are
+        inconsistent.
+    """
     out = Path(output)
-    m = json.loads((out / "manifest.json").read_text())
-    if m.get("schema") != 1:
+    manifest = json.loads((out / "manifest.json").read_text())
+    if manifest.get("schema") != 1:
         raise ValueError("not historical schema 1")
     return dict(
         schema=1,
         limited=True,
         complete=False,
-        execution_finished=m.get("complete") is True,
+        execution_finished=manifest.get("complete") is True,
         limitation="Historical hash/shape checks do not establish scientific payload consistency",
     )
 
 
 def check(output, *, verify_sources=True):
-    """Independent offline semantic validation with exact primary/diagnostic inventories."""
+    """Independent offline semantic validation with exact primary/diagnostic inventories.
+
+    Parameters
+    ----------
+    output : str or pathlib.Path
+        Destination directory for the generated evidence or figures.
+    verify_sources : bool
+        Whether to rehash the original source files as well as saved evidence.
+        Default is ``True``.
+
+    Returns
+    -------
+    manifest : dict
+        Checked inventory; schema-2 evidence remains explicitly limited.
+
+    Raises
+    ------
+    ValueError :
+        If inputs, declared identities or numerical validation conditions are
+        inconsistent.
+    """
     from .schema import validate_payload, validate_request
 
     out = Path(output).resolve()
-    m = json.loads((out / "manifest.json").read_text())
-    if m.get("schema") not in (2, 3) or m.get("kind") != "fishhighz-validation":
+    manifest = json.loads((out / "manifest.json").read_text())
+    if (
+        manifest.get("schema") not in (2, 3)
+        or manifest.get("kind") != "fishhighz-validation"
+    ):
         raise ValueError(
             "schema 2 required; inspect_legacy exposes historical limitations"
         )
     expected = plain(
         modern_requests(
-            m["suite"],
-            m["cases"],
-            m["bin_indices"],
-            profiles=m["profiles"],
-            kind=m["payload_kind"],
-            recipe_revision=m.get("recipe_revision"),
+            manifest["suite"],
+            manifest["cases"],
+            manifest["bin_indices"],
+            profiles=manifest["profiles"],
+            kind=manifest["payload_kind"],
+            recipe_revision=manifest.get("recipe_revision"),
         )
     )
-    if m["requested"] != expected:
+    if manifest["requested"] != expected:
         raise ValueError("wrong requested case/profile/bin inventory")
-    diagnostics = m["diagnostics_requested"]
+    diagnostics = manifest["diagnostics_requested"]
     if len({canonical(t) for t in diagnostics}) != len(diagnostics):
         raise ValueError("duplicate diagnostic inventory")
     for task in diagnostics:
@@ -284,20 +476,23 @@ def check(output, *, verify_sources=True):
         if task["kind"] != "diagnostic":
             raise ValueError("incorrect diagnostic kind")
     for group, tasks in (("records", expected), ("diagnostics", diagnostics)):
-        if [r["task"] for r in m[group]] != tasks:
+        if [r["task"] for r in manifest[group]] != tasks:
             raise ValueError("missing/extra/swapped case/profile/bin/diagnostic")
-    if m["not_run_cases"] != [
+    if manifest["not_run_cases"] != [
         c for c in CASE_IDS if c not in {w["case"] for w in expected}
     ]:
         raise ValueError("incorrect not-run inventory")
-    if m.get("execution_finished") is not True or m.get("complete") is not True:
+    if (
+        manifest.get("execution_finished") is not True
+        or manifest.get("complete") is not True
+    ):
         raise ValueError("partial or scientifically failed validation")
     if verify_sources:
-        for path, sha in m["inputs"].items():
+        for path, sha in manifest["inputs"].items():
             if digest(path) != sha:
                 raise ValueError("stale source hash")
     for group in ("records", "diagnostics"):
-        for record in m[group]:
+        for record in manifest[group]:
             if (
                 record.get("status") != "completed"
                 or record.get("scientific_passed") is not True
@@ -320,12 +515,12 @@ def check(output, *, verify_sources=True):
             for name, a in arrays.items():
                 if list(a.shape) != record["inventory"][name]:
                     raise ValueError("wrong recorded shape")
-            validate_payload(record["task"], arrays, report, schema=m["schema"])
-    if m["schema"] == 2:
-        m = {
-            **m,
+            validate_payload(record["task"], arrays, report, schema=manifest["schema"])
+    if manifest["schema"] == 2:
+        manifest = {
+            **manifest,
             "limited": True,
             "complete": False,
             "limitation": "Historical schema 2 does not bind convergence operands to actual trials",
         }
-    return m
+    return manifest

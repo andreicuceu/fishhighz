@@ -17,27 +17,67 @@ from .weights import ForestWeights, _nonnegative, density_per_velocity
 
 
 def local_galaxy_density(dndzdm, quadrature, geometry):
-    """Local n_bar in (h_fid/Mpc)^3 from normalized dN/(dz dm deg²) at z_eval.
+    """Convert a local surface-density distribution to comoving number density.
 
-    This is a local-density approximation, not a bin-integrated count/volume.
-    No area or forest length is used. Supply n_bar directly for other conventions.
+    Parameters
+    ----------
+    dndzdm : array_like of shape (n_magnitude,)
+        Source density dN/(dz dm deg^2) at geometry.z_eval.
+    quadrature : array_like of shape (n_magnitude,)
+        Positive magnitude integration weights, in magnitudes.
+    geometry : BinGeometry
+        Fixed background conversions at the bin evaluation redshift.
+
+    Returns
+    -------
+    n_bar : float
+        Positive comoving density in (h_fid/Mpc)^3.
+
+    Raises
+    ------
+    ValueError
+        If geometry, density, quadrature, or the converted density is invalid.
+
+    Notes
+    -----
+    This local approximation uses neither bin-integrated counts nor survey
+    area. Supply n_bar directly when another density convention is required.
     """
     if not isinstance(geometry, BinGeometry):
         raise ValueError("require BinGeometry")
     rho = density_per_velocity(dndzdm, z_source=geometry.z_eval)
-    q = _nonnegative(quadrature, "quadrature")
-    if q.shape != rho.shape or np.any(q <= 0):
+    magnitude_weights = _nonnegative(quadrature, "quadrature")
+    if magnitude_weights.shape != rho.shape or np.any(magnitude_weights <= 0):
         raise ValueError("quadrature must match density with positive weights")
     with np.errstate(over="ignore", invalid="ignore", under="ignore"):
-        n = np.sum(q * rho) * geometry.a_v / geometry.d_deg**2
-    return _positive(n, "local galaxy density")
+        number_density = (
+            np.sum(magnitude_weights * rho) * geometry.a_v / geometry.d_deg**2
+        )
+    return _positive(number_density, "local galaxy density")
 
 
 def galaxy_noise(n_bar):
-    """Poisson auto-noise 1/n_bar, no smoothing, volume or area rescaling."""
-    n = _positive(n_bar, "n_bar")
+    """Return unsmoothed Poisson auto-noise for a discrete tracer.
+
+    Parameters
+    ----------
+    n_bar : float
+        Positive comoving number density in (h_fid/Mpc)^3.
+
+    Returns
+    -------
+    power : float
+        Positive shot-noise power 1/n_bar in (Mpc/h_fid)^3, without area or
+        volume rescaling.
+
+    Raises
+    ------
+    ValueError
+        If the density or its reciprocal is not positive and representable.
+    """
+    number_density = _positive(n_bar, "n_bar")
     with np.errstate(over="ignore", under="ignore"):
-        return _positive(np.float64(1) / n, "galaxy noise")
+        return _positive(np.float64(1) / number_density, "galaxy noise")
 
 
 @dataclass(frozen=True, init=False, eq=False)
@@ -50,11 +90,42 @@ class ForestNoise:
 
 
 def forest_noise(prepared, field, geometry, response, k, mu, p1d):
-    """Evaluate noise at paired observed k (h_fid/Mpc), mu; intrinsic P1D is km/s.
+    """Evaluate forest aliasing and pixel-noise power at observed Fourier nodes.
 
-    Supply P1D at q=k*mu/a_v, e.g. via evaluate_p1d with its independent binding.
-    Both coefficients get d_deg²/a_v once; only aliasing gets W(q)². Zero P1D
-    and sinc-null aliasing are valid. Preparation context must match exactly.
+    Parameters
+    ----------
+    prepared : ForestWeights
+        Fixed magnitude weights and integrated noise coefficients.
+    field : ObservedField
+        Forest identity matching the weight preparation.
+    geometry : BinGeometry
+        Geometry matching the preparation context.
+    response : InstrumentResponse
+        Pixel and Gaussian widths matching the preparation context.
+    k : array_like of shape (n_node,)
+        Nonnegative observed wavenumbers in h_fid/Mpc.
+    mu : array_like of shape (n_node,)
+        Paired direction cosines on [0, 1].
+    p1d : array_like of shape (n_node,)
+        Intrinsic one-dimensional power in km/s at k*mu/a_v.
+
+    Returns
+    -------
+    noise : ForestNoise
+        Immutable aliasing, pixel, and total arrays, each of shape (n_node,) in
+        (Mpc/h_fid)^3.
+
+    Raises
+    ------
+    ValueError
+        If contexts or arrays disagree, or coordinate/noise conversion is not
+        representable.
+
+    Notes
+    -----
+    Both coefficients receive d_deg**2/a_v once. Only aliasing receives the
+    squared instrumental response; supplied pixel noise is not smoothed.
+    Zero P1D and sinc-null aliasing are valid.
     """
     if not isinstance(prepared, ForestWeights):
         raise ValueError("require ForestWeights")
@@ -70,22 +141,22 @@ def forest_noise(prepared, field, geometry, response, k, mu, p1d):
     ):
         raise ValueError("require matching nonempty 1D k, mu in [0,1], P1D")
     with np.errstate(over="ignore", invalid="ignore", under="ignore"):
-        q = k * mu / geometry.a_v
-    if np.any((k > 0) & (mu > 0) & (q == 0)):
+        velocity_wavenumber = k * mu / geometry.a_v
+    if np.any((k > 0) & (mu > 0) & (velocity_wavenumber == 0)):
         raise ValueError("noise coordinates are not representable")
-    w = velocity_response(
-        q,
+    amplitude_response = velocity_response(
+        velocity_wavenumber,
         pixel_width_velocity=response.pixel_width_velocity,
         gaussian_sigma_velocity=response.gaussian_sigma_velocity,
     )
     with np.errstate(over="ignore", invalid="ignore", under="ignore"):
         conversion = geometry.d_deg**2 / geometry.a_v
-        aliasing = prepared.A * p1d * w**2 * conversion
+        aliasing = prepared.A * p1d * amplitude_response**2 * conversion
         pixel = np.full(k.shape, prepared.P_pixel * conversion)
         total = aliasing + pixel
     if (
         not all(np.all(np.isfinite(x)) for x in (aliasing, pixel, total))
-        or np.any((p1d > 0) & (w != 0) & (aliasing == 0))
+        or np.any((p1d > 0) & (amplitude_response != 0) & (aliasing == 0))
         or (prepared.P_pixel > 0 and np.any(pixel == 0))
     ):
         raise ValueError(f"{field.id}: noise conversion is not representable")
@@ -98,13 +169,39 @@ def forest_noise(prepared, field, geometry, response, k, mu, p1d):
 def prepare_noise(
     selection, n_node, *, diagonal=None, independent_sampling=None, full=None
 ):
-    """Return immutable known noise (node, required_pair) in required-pair order.
+    """Prepare the complete known-noise contribution in required-pair order.
 
-    Generated path: diagonal maps exactly active field IDs to nonnegative (node,)
-    arrays, and independent_sampling=True must be explicit. Full path: full is
-    the entire packed replacement, with neither diagonal nor independence set.
-    Signed cross terms, singular and zero PSD matrices are allowed. Validation
-    uses the covariance normalized 64*eps64 convention without jitter.
+    Parameters
+    ----------
+    selection : PairSelection
+        Selected observables and their covariance dependencies.
+    n_node : int
+        Positive number of Fourier nodes.
+    diagonal : mapping, optional
+        Auto-noise arrays of shape (n_node,) in (Mpc/h_fid)^3 for exactly the
+        active field IDs. Default None.
+    independent_sampling : bool, optional
+        Must explicitly be True for generated diagonal noise; default None.
+    full : array_like of shape (n_node, n_required_pair), optional
+        Complete replacement noise in (Mpc/h_fid)^3. Default None selects
+        generated noise.
+
+    Returns
+    -------
+    noise : ndarray of shape (n_node, n_required_pair)
+        Immutable float64 noise, including covariance-required spectra.
+
+    Raises
+    ------
+    ValueError
+        If noise inputs conflict, have invalid shape, or violate the positive-
+        semidefinite field-noise contract.
+
+    Notes
+    -----
+    Full replacement noise excludes diagonal and independence arguments.
+    Signed cross noise, singular positive-semidefinite matrices, and zero noise
+    are accepted without jitter under the normalized 64*eps64 convention.
     """
     if not isinstance(selection, PairSelection):
         raise ValueError("require PairSelection")
