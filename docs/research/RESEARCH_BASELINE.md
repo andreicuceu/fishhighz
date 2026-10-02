@@ -1,17 +1,38 @@
 # FishHighz research baseline
 
 This guide defines the recommended research prescription selected on 2026-09-21
-from the S2--S4 calculation. Its recipe identity is
+from the S2--S4 calculation. Its S2--S4 recipe identity is
 `early-lyaforecast-2026-09-18`, profile `accuracy`, method
 `early_lyaforecast`, representative mode `(2.4 deg^-1, 0.00035 s/km)`, and
 selection `bin1-qso-only; bins2-6-all`. Record this full identity with derived
 results. Changing one of these choices creates a different recipe.
 
-Since 2026-10-01 the default source-density interpolation is
-`piecewise_constant_cells` (see *Source densities* below); the S2--S4 evidence
-used `RectBivariateSpline_kx2_ky2_s0`. The revision string was deliberately kept,
-so record `density_interpolation` and `magnitude_partition` with the recipe
-identity (they are part of the saved `input_policies`).
+Since 2026-10-01 the native-INI prescription carries its own revision,
+`early-lyaforecast-2026-10-01` (`fishhighz.accuracy.NATIVE_REVISION`), which is
+the default `[prescription] revision` and is recorded in the saved provenance.
+It has the same weighting, response, quadrature and reconstruction recipe; its
+only prescription change is the default source-density interpolation,
+`piecewise_constant_cells`, where the S2--S4 evidence used
+`RectBivariateSpline_kx2_ky2_s0` (see *Source densities* below).
+
+The bundled survey inputs changed on the same date, independently of the
+revision: the bundled LBG and LAE tables and redshift edges are now the
+regular-grid DESI-2 SRD v2 versions (edges `2.0, 2.26, 2.52, 2.73, 2.93, 3.15,
+3.41`), whereas the S2--S4 inputs used the earlier rounded lyaforecast tables and
+the edges `2.0, 2.235, ..., 3.41`.
+
+The native-INI revision `early-lyaforecast-2026-09-18` remains accepted. It
+defaults to the spline pair (`RectBivariateSpline_kx2_ky2_s0`,
+`density_knots_support_snr_nodes_negative_roots`), so an INI that states it
+reproduces the density *treatment* of the S2--S4 recipe. It does not restore
+the old bundled tables or redshift edges, which are survey inputs; supply those
+explicitly to recover the historical inputs. The validation profiles
+(`full-compatibility`, `fixed-compatibility`, `accuracy`) and the saved S2--S4
+evidence keep the historical identity `early-lyaforecast-2026-09-18` and read
+their LBG/LAE tables from a lyaforecast checkout, not from the bundled package
+data. Explicit `[input policies]` entries override the revision default and
+are recorded in the saved `input_policies`; record `density_interpolation` and
+`magnitude_partition` together with the revision.
 
 The prescription is a selected, numerically qualified set of forecast
 assumptions. S4 found that the mixed forest--galaxy damping prescription is the
@@ -172,10 +193,34 @@ Scientific consequences:
   changes involve Ly-alpha(LBG), for example +21% in bin 2 of the
   `lya_lbg_lae_3x2pt` case.
 - **Redshift support.** A source density now vanishes outside the table's
-  redshift support instead of following spline extrapolation. In bin 6 of the
-  SRD v2 inputs, the Ly-alpha(LBG) source redshift (3.65) lies above the top
-  LBG cell edge (3.41). That forest therefore carries no information there, as
-  in the updated lyaforecast. Tables must cover every required `z_source`.
+  redshift support instead of following spline extrapolation. The bundled
+  (SRD v2) LBG/LAE tables cover source redshifts 2.26--3.41, in five cells of
+  width 0.23. A forest bin is evaluated at one representative source
+  redshift, `z_source` (see above), with `z_eval = sqrt[(1+z_min)(1+z_max)] - 1`.
+  For the bundled edges the Ly-alpha(LBG) forest has `z_eval` = 2.127, 2.388,
+  2.624, 2.829, 3.039 and 3.278, and `z_source` = 2.396, 2.679, 2.935, 3.158,
+  3.386 and 3.646 in bins 1--6. In bin 6, `z_source` = 3.646 lies above the top
+  LBG edge (3.41), so the source density there is the 1e-20 floor and that
+  forest contributes no information to the forecast. This zero is an artifact of the
+  single-`z_source` approximation, which FishHighz shares with lyaforecast, and
+  not a property of the source population: bin-6 forest pixels
+  (`z_abs` = 3.15--3.41) are back-lit by sources from `z_s` of about 3.19
+  (`lambda_rest` = 1205 A) upward, and the table covers sources up to 3.41.
+  Bin 5 (`z_source` = 3.386) lies just inside the last cell
+  (3.18--3.41), 0.024 below the edge. Because `n(z)` is a step function, the
+  forest contribution switches on or off, and changes discontinuously, when
+  `z_source` crosses a cell edge (for example when the bin edges, the rest-frame
+  forest limits or `lya_rest_angstrom` move). Tables should cover every
+  required `z_source`, and results near an edge should be read with this
+  sensitivity in mind.
+- **Cell tiling.** Under piecewise-constant interpolation the cells must tile
+  each table axis: the maximum gap or overlap between `centre + Delta/2` and the
+  next lower edge may not exceed `64 eps64 max(1, max|axis|)`. Otherwise
+  FishHighz raises `ValueError`; supply contiguous explicit `redshift_widths`
+  (nonuniform contiguous widths are accepted) or use the spline. The earlier
+  rounded lyaforecast tables (centres 2.38, 2.60, 2.83, 3.07, 3.29; residual
+  0.02 under the first-spacing width 0.22) are rejected for this reason. The
+  QSO table passes with residuals of order 1e-15.
 - **Numerical qualification.** The S2 magnitude-refinement qualification was
   established on the spline partition. It has not been repeated for the
   piecewise-constant partition.
@@ -280,8 +325,12 @@ methods. Install `fishhighz[templates]`, run it as a script, or import and call
 
 ## Profiles and numerical evidence
 
-The three current validation profiles share recipe revision
-`early-lyaforecast-2026-09-18` and the stated bin selection:
+The three current validation profiles share the historical recipe revision
+`early-lyaforecast-2026-09-18` (`fishhighz.accuracy.REVISION`) and the stated bin
+selection. This identity keys the saved S2--S4 evidence and is unchanged; it is
+distinct from the native-INI revision `early-lyaforecast-2026-10-01`, whose
+defaults are described above and which the validation profiles do
+not use:
 
 | Profile | Method | Scientific role |
 | --- | --- | --- |

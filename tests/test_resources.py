@@ -15,12 +15,12 @@ from fishhighz.resources import (
 
 EXPECTED = {
     "desi2_accuracy.ini": (
-        2054,
-        "c2053fdfe3b9c89fb62bdf527fb9f053b24ee17416a6350629f80db8c6eb94e6",
+        2051,
+        "5126276a2d0306a5015892ebe6a49f771646ce2fa4ffe7d58ce758ceb3c9645f",
     ),
     "README.md": (
-        6586,
-        "d97bb80fa2574c975e97243ffa2dce2f0dae49eda1ad5b345615e9f8c41fa8bc",
+        8989,
+        "28cbd578f531639912ce2744df93425651248c4a04b664688a94a03f2f1b4492",
     ),
     "DESI-2-LBG/snr-r19.25-t4000-nexp4.dat": (
         809811,
@@ -128,11 +128,11 @@ EXPECTED = {
     ),
     "lae_matched_dndzdr.txt": (
         19125,
-        "f56f7d3ba3144ae0fdfaaeba93c557d337e74f8de993110133aaaba3d7f1302e",
+        "45a691768ec56ed2740385145a80440e4330f419965cb72732f767791201445d",
     ),
     "lbg_matched_dndzdr.txt": (
         19125,
-        "995e1b06e09735e4babdcdfb6f0d253371c9d108b06c5826eb92a9774defcdef",
+        "5c955c62ad2f57c8728bb6f578bb89d6e99ef1db1ad8efb9781f5e61c5a4d420",
     ),
     "templates/Planck18_z_2.406.fits": (
         28800,

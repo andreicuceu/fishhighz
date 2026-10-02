@@ -36,10 +36,13 @@ scientific decision is pending before implementation within that scope. The
 legacy weighting reference remains in use, with a 1% BAO-error attribution
 trigger and 0.1% numerical-refinement target.
 
-For every future forecast, exclude bin-1 correlations involving LBG, LAE or
-lya(lbg). Retain only lya(qso) auto, QSO auto and their cross in bin 1, including
-its joint covariance. Bins 2–6 retain all 15 spectra. This is a forecast selection,
-not a plot cut; preserve historical files and their original selection.
+For every future forecast, exclude bin-1 correlations involving LBG or LAE
+galaxies. Bin-1 correlations involving lya(lbg) are permitted (updated
+2026-10-01); the six lya(qso), QSO and lya(lbg) auto- and cross-spectra may be
+retained in bin 1, including their joint covariance. Bins 2–6 retain all 15
+spectra. This is a forecast selection, not a plot cut; preserve historical files
+and their original selection, including the historical three-spectrum bin-1
+selection.
 
 The completed validation study implements five fixed-count variants and opt-in
 full-sum forest-auto adaptive stopping. Its trajectory, BAO and magnitude-grid

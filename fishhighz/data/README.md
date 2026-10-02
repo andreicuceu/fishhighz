@@ -7,16 +7,48 @@ distribution includes this directory through `MANIFEST.in`.
 
 ## Origins and provenance
 
-The density tables and SNR tables were copied from the read-only `lyaforecast`
-checkout at commit `5abe8bcf8d12cc31d1f5ecd89c87e739c6a14b81` (density tables)
-and `46f5515283542c0ffb698fbb7e458aefe7bbf6a3` (DESI-2 SNR tables).  The
-upstream data notes are preserved verbatim in
-`licenses/LYAFORECAST-DATA-README.md`.  Those notes identify the density-table
-DESI-2 SRD origins, but do not provide generation settings beyond the dataset
-provenance.  The SNR headers identify the files as Lyman-alpha forest S/N per
-Angstrom tables and record the band, magnitude, exposure time, number of
-exposures, source-redshift nodes, and wavelength nodes; no independent
-copyright or redistribution statement was supplied.
+The QSO density table `dn_dzdr_qso_desi_2.dat` and the DESI-2 SNR tables were
+copied from the read-only `lyaforecast` checkout at commit
+`5abe8bcf8d12cc31d1f5ecd89c87e739c6a14b81` (density table) and
+`46f5515283542c0ffb698fbb7e458aefe7bbf6a3` (DESI-2 SNR tables).  The upstream
+data notes are preserved verbatim in `licenses/LYAFORECAST-DATA-README.md`.
+Those notes identify the density-table DESI-2 SRD origins, but do not provide
+generation settings beyond the dataset provenance.  The SNR headers identify the
+files as Lyman-alpha forest S/N per Angstrom tables and record the band,
+magnitude, exposure time, number of exposures, source-redshift nodes, and
+wavelength nodes; no independent copyright or redistribution statement was
+supplied.
+
+**LBG and LAE density tables (replaced 2026-10-01).**  The bundled
+`lbg_matched_dndzdr.txt` and `lae_matched_dndzdr.txt` were originally copied from
+the same `lyaforecast` commit (`5abe8bcf...`).  Those tables had rounded redshift
+centres (2.38, 2.60, 2.83, 3.07, 3.29), which do not tile under the 0.22
+first-spacing width and are incompatible with piecewise-constant density cells.
+They were replaced on 2026-10-01 by the regular-grid DESI-2 SRD v2 tables, copied
+byte for byte from the read-only `desi-2-srd` checkout
+(`/global/cfs/cdirs/desicollab/users/acuceu/vega_dev/lib/desi-2-srd/data/output_fishhighz_v2/{lbg,lae}_matched_dndzdr.txt`).
+The replaced files had SHA-256
+`995e1b06e09735e4babdcdfb6f0d253371c9d108b06c5826eb92a9774defcdef` (LBG) and
+`f56f7d3ba3144ae0fdfaaeba93c557d337e74f8de993110133aaaba3d7f1302e` (LAE), 19125
+bytes each.  The replacements have redshift centres 2.375 + 0.23 k (k = 0..4),
+i.e. cell edges 2.26 to 3.41 with zero tiling residual, and the same magnitude
+grid and file format.
+
+Provenance of the replacement files: the `desi-2-srd` checkout was at commit
+`04f5a716267306f8dbd76787c7497ffadaa283a4`; the last commit touching these two
+files is `0470a1f` ("Fix z-bin edges").  The copied files are the **uncommitted
+working-tree versions** (modification time 2026-10-01 20:14), which differ from
+the committed blobs at that HEAD (committed SHA-256 `d80665f7...` for LBG and
+`a5b11d5f...` for LAE).  The copied files are 19125 bytes each with SHA-256
+`5c955c62ad2f57c8728bb6f578bb89d6e99ef1db1ad8efb9781f5e61c5a4d420` (LBG) and
+`45a691768ec56ed2740385145a80440e4330f419965cb72732f767791201445d` (LAE).  Copied
+on 2026-10-01.  Because no commit identifies them, they should be re-pinned to a
+`desi-2-srd` commit once the SRD v2 inputs are committed there.  The QSO table
+is byte-identical to `desi-2-srd/data/qso_target_selection/dn_dzdr_qso_desi_2.dat`.
+The bundled `desi2_accuracy.ini` `[survey] z_edges` was changed in the same
+update to the SRD v2 edges `2.0, 2.26, 2.52, 2.73, 2.93, 3.15, 3.41`.  The
+historical validation code reads the LBG/LAE tables from a `lyaforecast`
+checkout, not from this directory, so saved S2--S4 evidence is unaffected.
 
 `camb_configs/Planck18.ini` is copied from `lyaforecast` commit
 `40f31bb101e80c7f0354584a2d0cccea3f5b325f` (the file was introduced in the
@@ -52,7 +84,9 @@ fact has been inferred.
   `lae_matched_dndzdr.txt` are three-column `(z, r-band magnitude, count)`
   tables.  The count is per redshift/magnitude cell per square degree, as
   stated by the upstream notes; the density adapter applies the explicit cell
-  widths and any caller-requested normalization.
+  widths and any caller-requested normalization.  The LBG/LAE tables have
+  contiguous redshift cells of width 0.23 (centres 2.375 to 3.295); piecewise-
+  constant interpolation rejects tables whose cells do not tile the axis.
 * `DESI-2-QSO/*.dat` and `DESI-2-LBG/*.dat` are header-driven S/N tables.  The
   row axis is wavelength in Angstrom, the column axis is source redshift, and
   the values are S/N per Angstrom for the stated r-band magnitude, exposure
@@ -70,8 +104,8 @@ The sizes and SHA-256 values below refer to the files in this directory.
 | Relative path | Bytes | SHA-256 |
 | --- | ---: | --- |
 | `dn_dzdr_qso_desi_2.dat` | 162000 | `78914d3a9ad0307ad94072d1b39a54b41d4043ebca5a0e4d1d4d202a3d489c8d` |
-| `lbg_matched_dndzdr.txt` | 19125 | `995e1b06e09735e4babdcdfb6f0d253371c9d108b06c5826eb92a9774defcdef` |
-| `lae_matched_dndzdr.txt` | 19125 | `f56f7d3ba3144ae0fdfaaeba93c557d337e74f8de993110133aaaba3d7f1302e` |
+| `lbg_matched_dndzdr.txt` | 19125 | `5c955c62ad2f57c8728bb6f578bb89d6e99ef1db1ad8efb9781f5e61c5a4d420` |
+| `lae_matched_dndzdr.txt` | 19125 | `45a691768ec56ed2740385145a80440e4330f419965cb72732f767791201445d` |
 | `camb_configs/Planck18.ini` | 2422 | `45a04472fb946a2306b0c9668081922e6b0bddd11dfe28f7634aac34d6db9199` |
 | `templates/Planck18_z_2.406.fits` | 28800 | `b4a73103e1105b7f9cdb59bbe8133ff0f752b05bc27580dd526f80b9c2fdc26a` |
 

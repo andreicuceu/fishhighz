@@ -63,7 +63,15 @@ reproduce the normalized table counts, and queries outside the outer cell edges
 return 1e-20. Set `density_interpolation = RectBivariateSpline_kx2_ky2_s0` in
 `[input policies]` to recover the legacy quadratic spline; in Python, use
 `DensityReader(..., interpolation="spline")`. The historical validation code
-and saved evidence use the spline explicitly.
+and saved evidence use the spline explicitly. Piecewise-constant cells must tile
+each table axis (regular tables and contiguous explicit widths pass; tables with
+rounded centres are rejected). The bundled LBG/LAE tables and redshift edges are
+the regular-grid DESI-2 SRD v2 versions (edges 2.26 to 3.41).
+
+The native INI prescription revision is `early-lyaforecast-2026-10-01` by
+default (piecewise-constant cells). Stating the historical
+`[prescription] revision = early-lyaforecast-2026-09-18` selects the spline pair
+by default instead; the validation profiles keep the historical identity.
 
 ## Minimal forecast
 

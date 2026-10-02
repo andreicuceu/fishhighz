@@ -22,7 +22,8 @@ from .accuracy import (
     CONTROLS,
     DENSITY_INTERPOLATION_POLICIES,
     INI_DEFAULTS,
-    REVISION,
+    NATIVE_REVISION,
+    REVISION_DENSITY_INTERPOLATION,
 )
 from .fields import ObservedField, PairSelection
 from .geometry import SPEED_LIGHT_KMS, prepare_geometry
@@ -346,6 +347,32 @@ def _read_parser(source):
     )
 
 
+def _density_partition(density_interpolation):
+    """Return the magnitude partition paired with a density interpolation.
+
+    Parameters
+    ----------
+    density_interpolation : str
+        Value of ``[input policies] density_interpolation``.
+
+    Returns
+    -------
+    partition : str
+        Magnitude-partition policy that must accompany the interpolation.
+
+    Raises
+    ------
+    ValueError
+        If the interpolation is not one of ``DENSITY_INTERPOLATION_POLICIES``.
+    """
+    if density_interpolation not in DENSITY_INTERPOLATION_POLICIES:
+        raise ValueError(
+            f"[input policies] density_interpolation={density_interpolation!r} is "
+            f"unsupported; choose from {tuple(DENSITY_INTERPOLATION_POLICIES)}"
+        )
+    return DENSITY_INTERPOLATION_POLICIES[density_interpolation][1]
+
+
 def parse_survey_ini(source=None):
     """Parse and strictly validate a native FishHighz survey INI.
 
@@ -371,7 +398,7 @@ def parse_survey_ini(source=None):
 
     Notes
     -----
-    The parser expands the selected accuracy prescription and checks supported model, input and numerical conventions. It reads no survey tables and invokes no CAMB calculation.
+    The parser expands the selected accuracy prescription and checks supported model, input and numerical conventions. The ``[prescription] revision`` (default ``early-lyaforecast-2026-10-01``; the historical ``early-lyaforecast-2026-09-18`` is also accepted) sets the default source-density interpolation: piecewise-constant cells for the native revision, the quadratic ``RectBivariateSpline_kx2_ky2_s0`` for the historical one. An explicit ``[input policies] density_interpolation`` overrides it, and the revision and effective policies are recorded in the provenance. It reads no survey tables and invokes no CAMB calculation.
     """
 
     parser, path, source_identity = _read_parser(source)
@@ -454,11 +481,13 @@ def parse_survey_ini(source=None):
         _section_options(parser, "prescription", ("name", "revision"), ("name",))
         if parser["prescription"]["name"] != "accuracy":
             raise ValueError("[prescription] name must be accuracy")
-        if parser["prescription"].get("revision", REVISION) != REVISION:
+        revision = parser["prescription"].get("revision", NATIVE_REVISION)
+        if revision not in REVISION_DENSITY_INTERPOLATION:
             raise ValueError(
-                f"[prescription] unsupported revision; expected {REVISION}"
+                f"[prescription] unsupported revision {revision!r}; "
+                f"supported revisions: {tuple(REVISION_DENSITY_INTERPOLATION)}"
             )
-        prescription = _plain_mapping({"name": "accuracy", "revision": REVISION})
+        prescription = _plain_mapping({"name": "accuracy", "revision": revision})
         for section, defaults in INI_DEFAULTS.items():
             if section not in parser:
                 parser.add_section(section)
@@ -466,16 +495,18 @@ def parse_survey_ini(source=None):
                 if key not in parser[section]:
                     parser[section][key] = value
         policies = parser["input policies"]
-        if policies["density_interpolation"] not in DENSITY_INTERPOLATION_POLICIES:
-            raise ValueError(
-                f"[input policies] density_interpolation="
-                f"{policies['density_interpolation']!r} is unsupported; choose from "
-                f"{tuple(DENSITY_INTERPOLATION_POLICIES)}"
-            )
+
+        # The revision fixes the default source-density treatment: the native
+        # revision uses piecewise-constant cells, the historical revision the
+        # quadratic spline. An explicit [input policies] entry overrides it and
+        # is recorded with the other effective policies. Unknown values are
+        # rejected here and mismatched interpolation/partition pairs below,
+        # which also covers INIs without a [prescription] section.
+        if "density_interpolation" not in policies:
+            policies["density_interpolation"] = REVISION_DENSITY_INTERPOLATION[revision]
+        partition = _density_partition(policies["density_interpolation"])
         if "magnitude_partition" not in policies:
-            policies["magnitude_partition"] = DENSITY_INTERPOLATION_POLICIES[
-                policies["density_interpolation"]
-            ][1]
+            policies["magnitude_partition"] = partition
         if "num_z_bins" not in parser["survey"] and "z_edges" in parser["survey"]:
             parser["survey"]["num_z_bins"] = str(
                 len(_float_list(parser["survey"]["z_edges"], "[survey] z_edges", 2)) - 1
@@ -770,12 +801,7 @@ def parse_survey_ini(source=None):
                 f"[input policies] {key}={parser['input policies'][key]!r} is unsupported"
             )
     density_interpolation = parser["input policies"]["density_interpolation"]
-    if density_interpolation not in DENSITY_INTERPOLATION_POLICIES:
-        raise ValueError(
-            f"[input policies] density_interpolation={density_interpolation!r} is "
-            f"unsupported; choose from {tuple(DENSITY_INTERPOLATION_POLICIES)}"
-        )
-    partition = DENSITY_INTERPOLATION_POLICIES[density_interpolation][1]
+    partition = _density_partition(density_interpolation)
     if parser["input policies"]["magnitude_partition"] != partition:
         raise ValueError(
             f"[input policies] magnitude_partition="
@@ -1157,7 +1183,7 @@ def parse_ini(source=None):
 
     Notes
     -----
-    The parser expands the selected accuracy prescription and checks supported model, input and numerical conventions. It reads no survey tables and invokes no CAMB calculation.
+    The parser expands the selected accuracy prescription and checks supported model, input and numerical conventions. The ``[prescription] revision`` (default ``early-lyaforecast-2026-10-01``; the historical ``early-lyaforecast-2026-09-18`` is also accepted) sets the default source-density interpolation: piecewise-constant cells for the native revision, the quadratic ``RectBivariateSpline_kx2_ky2_s0`` for the historical one. An explicit ``[input policies] density_interpolation`` overrides it, and the revision and effective policies are recorded in the provenance. It reads no survey tables and invokes no CAMB calculation.
     """
 
     return parse_survey_ini(source)

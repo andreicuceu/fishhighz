@@ -4,7 +4,11 @@ import numpy as np
 import pytest
 from test_survey_config import _write_modified_ini
 
-from fishhighz.accuracy import DENSITY_INTERPOLATION_POLICIES, INI_DEFAULTS
+from fishhighz.accuracy import (
+    DENSITY_INTERPOLATION_POLICIES,
+    NATIVE_REVISION,
+    REVISION_DENSITY_INTERPOLATION,
+)
 from fishhighz.adapters.legacy_compat import LegacyDensity
 from fishhighz.adapters.legacy_inputs import CellHistogram2D, DensityReader
 from fishhighz.magnitude import breakpoints, composite
@@ -213,7 +217,16 @@ def test_spline_option_preserves_legacy_interpolant(tmp_path):
 
 
 def test_explicit_and_rounded_widths_follow_lyaforecast_edges(tmp_path):
-    """Cells span consecutive lower edges centre - width/2, as in lyaforecast."""
+    """Cells span consecutive lower edges centre - width/2, as in lyaforecast.
+
+    Notes
+    -----
+    Explicit nonuniform widths that make the cells contiguous are accepted. A
+    tiling residual above the float64 roundoff tolerance (rounded centres under
+    the first-spacing width, or explicit widths that leave gaps) would stretch
+    the cells and change their integrated density, so it is rejected under
+    piecewise-constant interpolation; the spline has no tiling requirement.
+    """
     redshifts = np.array([2.1, 2.35, 2.6, 2.8])
     path = write_table(tmp_path / "d.txt", redshifts=redshifts)
     widths = np.array([0.2, 0.3, 0.2, 0.2])
@@ -223,22 +236,38 @@ def test_explicit_and_rounded_widths_follow_lyaforecast_edges(tmp_path):
     np.testing.assert_allclose(
         reader.query(2.45, MAGNITUDES), cell_density(reader)[1], rtol=1e-14
     )
-    # Rounded centres: the first spacing sets every width; cells extend to the
-    # next lower edge and keep their tabulated density.
-    rounded = read(path, width_policy="legacy_first_spacing")
-    np.testing.assert_allclose(
-        rounded.z_edges, [1.975, 2.225, 2.475, 2.675, 2.925], atol=1e-14
-    )
-    np.testing.assert_allclose(rounded.provenance["z_cell_tiling_residual"], 0.05)
-    np.testing.assert_allclose(
-        rounded.query(2.65, MAGNITUDES), cell_density(rounded)[2], rtol=1e-14
-    )
+
+    # Rounded centres: the first spacing sets every width and leaves a residual
+    # of 0.05 (gap or overlap between neighbouring cells).
+    with pytest.raises(ValueError, match=r"redshift cells do not tile.*0\.05"):
+        read(path, width_policy="legacy_first_spacing")
+
+    # Contiguous in the first two cells but with a gap after the second.
+    with pytest.raises(ValueError, match="contiguous explicit redshift_widths"):
+        read(path, redshift_widths=np.array([0.2, 0.3, 0.1, 0.2]), width_policy=None)
     with pytest.raises(ValueError, match="strictly increasing"):
         read(path, redshift_widths=np.array([0.2, 0.9, 0.2, 0.2]), width_policy=None)
+
+    # The spline path is unchanged and accepts the same irregular table.
     assert (
         read(path, width_policy="legacy_first_spacing", interpolation="spline").z_edges
         is None
     )
+
+
+def test_tiling_tolerance_accepts_roundoff_and_rejects_percent_gaps(tmp_path):
+    """Roundoff-sized residuals pass; a regular grid with one displaced node fails."""
+    redshifts = REDSHIFTS.copy()
+    roundoff = np.array([0.0, 1e-15, -1e-15, 1e-15])
+    path = write_table(tmp_path / "d.txt", redshifts=redshifts + roundoff)
+    reader = read(path, width_policy="legacy_first_spacing")
+    assert 0 < reader.provenance["z_cell_tiling_residual"] < 1e-13
+
+    displaced = redshifts.copy()
+    displaced[-1] += 0.02 * DZ
+    path = write_table(tmp_path / "e.txt", redshifts=displaced)
+    with pytest.raises(ValueError, match="do not tile"):
+        read(path, width_policy="legacy_first_spacing")
 
 
 def test_histogram_matches_lyaforecast_convention():
@@ -265,10 +294,7 @@ def test_histogram_matches_lyaforecast_convention():
 
 def test_ini_default_selects_piecewise_constant_cells(tmp_path):
     """Compact INIs default to cells; explicit spline restores the legacy pair."""
-    assert (
-        INI_DEFAULTS["input policies"]["density_interpolation"]
-        == "piecewise_constant_cells"
-    )
+    assert REVISION_DENSITY_INTERPOLATION[NATIVE_REVISION] == "piecewise_constant_cells"
     default = _write_modified_ini(tmp_path, {})
     assert default.input_policies["density_interpolation"] == "piecewise_constant_cells"
     assert (

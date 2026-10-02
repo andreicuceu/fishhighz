@@ -38,7 +38,12 @@ uses `1e-4`; it is not the default for this native INI interface.
 
 Overrides are recorded in saved effective settings. The prescription revision
 identifies its starting defaults and does not establish independent numerical
-qualification of altered inputs.
+qualification of altered inputs. Two revisions are accepted:
+`early-lyaforecast-2026-10-01` (default; piecewise-constant source-density
+cells) and the historical `early-lyaforecast-2026-09-18` (quadratic spline,
+`RectBivariateSpline_kx2_ky2_s0`). They differ only in the default
+`density_interpolation` and its paired `magnitude_partition`; neither changes the
+bundled density tables or redshift edges. Other revision strings are rejected.
 
 ## `[schema]`
 
@@ -51,70 +56,70 @@ qualification of altered inputs.
 
 ```{literalinclude} ../../examples/desi2_accuracy_annotated.ini
 :language: ini
-:lines: 46-51
+:lines: 46-57
 ```
 
 ## `[cosmology]`
 
 ```{literalinclude} ../../examples/desi2_accuracy_annotated.ini
 :language: ini
-:lines: 52-72
+:lines: 58-78
 ```
 
 ## `[survey]`
 
 ```{literalinclude} ../../examples/desi2_accuracy_annotated.ini
 :language: ini
-:lines: 73-102
+:lines: 79-108
 ```
 
 ## `[fields]`
 
 ```{literalinclude} ../../examples/desi2_accuracy_annotated.ini
 :language: ini
-:lines: 103-110
+:lines: 109-116
 ```
 
 ## `[field lya(qso)]`
 
 ```{literalinclude} ../../examples/desi2_accuracy_annotated.ini
 :language: ini
-:lines: 111-181
+:lines: 117-187
 ```
 
 ## `[field qso]`
 
 ```{literalinclude} ../../examples/desi2_accuracy_annotated.ini
 :language: ini
-:lines: 182-193
+:lines: 188-199
 ```
 
 ## `[field lbg]`
 
 ```{literalinclude} ../../examples/desi2_accuracy_annotated.ini
 :language: ini
-:lines: 194-205
+:lines: 200-211
 ```
 
 ## `[field lae]`
 
 ```{literalinclude} ../../examples/desi2_accuracy_annotated.ini
 :language: ini
-:lines: 206-217
+:lines: 212-223
 ```
 
 ## `[field lya(lbg)]`
 
 ```{literalinclude} ../../examples/desi2_accuracy_annotated.ini
 :language: ini
-:lines: 218-233
+:lines: 224-239
 ```
 
 ## `[model]`
 
 ```{literalinclude} ../../examples/desi2_accuracy_annotated.ini
 :language: ini
-:lines: 234-265
+:lines: 240-271
 ```
 
 ## BAO with marginalized tracer nuisances
@@ -224,56 +229,56 @@ requested limits and effective quadrature; see the [results guide](results.md).
 
 ```{literalinclude} ../../examples/desi2_accuracy_annotated.ini
 :language: ini
-:lines: 266-330
+:lines: 272-347
 ```
 
 ## `[numerical]`
 
 ```{literalinclude} ../../examples/desi2_accuracy_annotated.ini
 :language: ini
-:lines: 331-359
+:lines: 348-376
 ```
 
 ## `[pairs bin 1]`
 
 ```{literalinclude} ../../examples/desi2_accuracy_annotated.ini
 :language: ini
-:lines: 360-372
+:lines: 377-389
 ```
 
 ## `[pairs bin 2]`
 
 ```{literalinclude} ../../examples/desi2_accuracy_annotated.ini
 :language: ini
-:lines: 373-375
+:lines: 390-392
 ```
 
 ## `[pairs bin 3]`
 
 ```{literalinclude} ../../examples/desi2_accuracy_annotated.ini
 :language: ini
-:lines: 376-378
+:lines: 393-395
 ```
 
 ## `[pairs bin 4]`
 
 ```{literalinclude} ../../examples/desi2_accuracy_annotated.ini
 :language: ini
-:lines: 379-381
+:lines: 396-398
 ```
 
 ## `[pairs bin 5]`
 
 ```{literalinclude} ../../examples/desi2_accuracy_annotated.ini
 :language: ini
-:lines: 382-384
+:lines: 399-401
 ```
 
 ## `[pairs bin 6]`
 
 ```{literalinclude} ../../examples/desi2_accuracy_annotated.ini
 :language: ini
-:lines: 385-386
+:lines: 402-403
 ```
 
 ## Compact installed recipe

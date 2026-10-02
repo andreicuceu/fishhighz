@@ -5,7 +5,16 @@ are kept outside ``fishhighz.validation`` so a native survey preparation can
 record the exact S2--S4 recipe without importing historical evidence code.
 """
 
+# Historical recipe identity. It keys the saved S2--S4 validation evidence
+# (profiles, trials, schemas) and must not change; the spline density treatment
+# of that evidence is selected by this revision in the native INI path as well.
 REVISION = "early-lyaforecast-2026-09-18"
+
+# Native-INI prescription identity from 2026-10-01: same weighting, response and
+# quadrature recipe, but piecewise-constant source-density cells by default. The
+# density tables and redshift edges are survey inputs set by the INI, not by the
+# revision (the bundled INI switched to the SRD v2 inputs on the same date).
+NATIVE_REVISION = "early-lyaforecast-2026-10-01"
 ADAPTIVE = ("early_lyaforecast", "mcdonald")
 STOPPING = {"rtol": 1e-4, "min_updates": 3, "stable_steps": 3, "max_updates": 96}
 REFERENCE = {
@@ -31,8 +40,9 @@ FIXED_REFERENCE = {
 }
 
 
-# Paired density interpolation and magnitude-partition policies. The first pair
-# is the default; the quadratic spline is retained as the legacy alternative.
+# Paired density interpolation and magnitude-partition policies. Which member is
+# the default depends on the prescription revision (REVISION_DENSITY_INTERPOLATION);
+# the other remains selectable through [input policies] density_interpolation.
 DENSITY_INTERPOLATION_POLICIES = {
     "piecewise_constant_cells": (
         "piecewise_constant",
@@ -44,10 +54,19 @@ DENSITY_INTERPOLATION_POLICIES = {
     ),
 }
 
+# Default density interpolation of each supported [prescription] revision. The
+# historical revision reproduces the pre-2026-10-01 quadratic-spline treatment of
+# the source densities; the native revision uses piecewise-constant cells.
+REVISION_DENSITY_INTERPOLATION = {
+    NATIVE_REVISION: "piecewise_constant_cells",
+    REVISION: "RectBivariateSpline_kx2_ky2_s0",
+}
+
 # Native INI defaults expand the qualified prescription without changing its
 # scientific inputs. Strings preserve the explicit native-schema representation.
-# magnitude_partition is absent here: it follows density_interpolation unless
-# stated explicitly.
+# density_interpolation is absent here: it follows the prescription revision
+# (REVISION_DENSITY_INTERPOLATION). magnitude_partition is absent too: it follows
+# density_interpolation unless stated explicitly.
 INI_DEFAULTS = {
     "model": {
         "parameterization": "ap_at",
@@ -66,7 +85,6 @@ INI_DEFAULTS = {
         "density_width_policy": "legacy_first_spacing",
         "density_redshift_normalization": "target_density",
         "density_negative_policy": "floor_negative",
-        "density_interpolation": "piecewise_constant_cells",
         "snr_smoothing": "legacy",
         "snr_interpolation": "linear_RegularGridInterpolator",
         "snr_bright_policy": "clamp_to_brightest_tabulated_magnitude",
@@ -107,8 +125,10 @@ def accuracy_settings():
     Returns
     -------
     settings : dict
-        Recipe revision, weighting controls, reference modes and quadrature
-        settings for provenance.
+        Historical validation recipe revision (``REVISION``), weighting
+        controls, reference modes and quadrature settings for provenance. The
+        native-INI prescription revision is ``NATIVE_REVISION`` and is recorded
+        by ``parse_survey_ini``, not here.
     """
 
     return {
@@ -125,8 +145,10 @@ __all__ = [
     "ADAPTIVE",
     "CONTROLS",
     "FIXED_REFERENCE",
+    "NATIVE_REVISION",
     "REFERENCE",
     "REVISION",
+    "REVISION_DENSITY_INTERPOLATION",
     "STOPPING",
     "accuracy_settings",
 ]

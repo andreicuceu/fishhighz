@@ -95,7 +95,11 @@ SNR grids and unrepresentable arithmetic. Uniform-axis checks allow only
 64*eps64*max(1,max(abs(axis))) absolute coordinate roundoff. There are no floors,
 bright caps, population averaging or automatic resource lookup. Nonuniform raw
 redshifts without explicit widths or legacy_first_spacing fail with an actionable
-error. Normalization remains a raw count sum before cell-width division; its
+error. With the default `interpolation='piecewise_constant'` the cells must also
+tile each axis: a gap or overlap between `centre + width/2` and the next lower
+edge larger than the same roundoff tolerance (for example rounded centres under
+`legacy_first_spacing`) raises `ValueError`; contiguous explicit nonuniform
+widths and the spline are accepted. Normalization remains a raw count sum before cell-width division; its
 measure is distinct from the later magnitude integral.
 Live readers never enter the prepared forecast or derivative loops. Adapted
 interpolation conventions retain lyaforecast GPLv3/source provenance in the module.

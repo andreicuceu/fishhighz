@@ -168,19 +168,28 @@ def _cell_edges(centres, widths, name, context):
         Immutable cell edges, shape (n_cell + 1,).
     tiling_residual : float
         Maximum absolute gap or overlap between the nominal upper edge
-        centre + width/2 of each cell and the lower edge of the next cell.
+        centre + width/2 of each cell and the lower edge of the next cell, in
+        centre units. It does not exceed the roundoff tolerance
+        64*eps64*max(1, max|centres|).
 
     Raises
     ------
     ValueError
-        If the edges are not strictly increasing.
+        If the edges are not strictly increasing, or if the cells do not tile
+        the axis, i.e. the tiling residual exceeds the roundoff tolerance.
 
     Notes
     -----
     As in lyaforecast/tracer.py, edges are the lower edges centre - width/2 and
     the upper edge of the last cell; each cell extends to the next lower edge.
-    Tables whose centres were rounded therefore keep the tabulated density value
-    per cell, with a nonzero tiling residual recorded in provenance.
+    Cells whose nominal upper edges do not meet the next lower edge (for
+    example centres rounded to two decimals, or widths that differ from the
+    centre spacing) would be silently stretched or shrunk by this construction,
+    changing the integral of the density over each cell relative to the
+    tabulated count.  Such tilings are therefore rejected rather than
+    recorded: the tolerance is the same absolute float64 coordinate-roundoff
+    allowance used for the uniform-axis checks, so regular tables and
+    explicit, contiguous, nonuniform widths pass.
     """
     widths = np.broadcast_to(np.asarray(widths, dtype=float), centres.shape)
     lower, upper = centres - widths / 2, centres + widths / 2
@@ -190,6 +199,19 @@ def _cell_edges(centres, widths, name, context):
             f"{context}: {name} cell edges centre - width/2 are not strictly increasing"
         )
     residual = float(np.max(np.abs(lower[1:] - upper[:-1]), initial=0.0))
+
+    # A cell extends to the next lower edge, so any residual above roundoff
+    # would change the integrated density of the cell relative to the table.
+    tolerance = 64 * np.finfo(float).eps * max(1, np.max(np.abs(centres)))
+    if residual > tolerance:
+        raise ValueError(
+            f"{context}: {name} cells do not tile the axis (maximum gap or "
+            f"overlap between centre + width/2 and the next lower edge is "
+            f"{residual:.3g}, above the roundoff tolerance {tolerance:.3g}); "
+            f"piecewise-constant interpolation requires contiguous cells. "
+            f"Supply a regular table or contiguous explicit redshift_widths, "
+            f"or use interpolation='spline'"
+        )
     return _immutable(edges), residual
 
 
@@ -300,14 +322,22 @@ class DensityReader:
     interpolation : {'piecewise_constant', 'spline'}, optional
         'piecewise_constant' (default) holds each cell density constant on
         centre +/- width/2 cells, so magnitude and redshift integrals reproduce the
-        tabulated counts. 'spline' selects the legacy quadratic RectBivariateSpline
-        (kx=ky=2, s=0) through the cell centres.
+        tabulated counts. It requires the cells to tile each axis: the maximum gap
+        or overlap between centre + width/2 and the next lower edge must not exceed
+        the coordinate roundoff tolerance below, otherwise ValueError is raised
+        (regular tables and contiguous explicit nonuniform widths are accepted).
+        'spline' selects the legacy quadratic RectBivariateSpline (kx=ky=2, s=0)
+        through the cell centres and has no tiling requirement.
 
     Notes
     -----
     Uniform-axis tolerance is 64*eps64*max(1,max(abs(axis))), an absolute
-    float64 coordinate-roundoff allowance. Magnitudes must remain uniform;
-    irregular redshifts require explicit widths or legacy_first_spacing.
+    float64 coordinate-roundoff allowance; the same tolerance bounds the cell
+    tiling residual under piecewise-constant interpolation. Magnitudes must
+    remain uniform; irregular redshifts require explicit widths or
+    legacy_first_spacing, and under piecewise-constant interpolation those widths
+    must make the cells contiguous (for example explicit widths equal to the
+    nodal spacing; legacy_first_spacing on irregular nodes is rejected).
     """
 
     z: np.ndarray
@@ -371,7 +401,8 @@ class DensityReader:
         ValueError
             If table shape, grid, normalization support, width declarations or
             interpolation choice are invalid, or piecewise-constant cell edges are
-            not strictly increasing.
+            not strictly increasing or do not tile the redshift or magnitude axis
+            within the coordinate roundoff tolerance.
         ImportError
             If SciPy is unavailable for the spline interpolation.
 
