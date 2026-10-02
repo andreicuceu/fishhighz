@@ -31,8 +31,23 @@ FIXED_REFERENCE = {
 }
 
 
+# Paired density interpolation and magnitude-partition policies. The first pair
+# is the default; the quadratic spline is retained as the legacy alternative.
+DENSITY_INTERPOLATION_POLICIES = {
+    "piecewise_constant_cells": (
+        "piecewise_constant",
+        "density_cell_edges_support_snr_nodes",
+    ),
+    "RectBivariateSpline_kx2_ky2_s0": (
+        "spline",
+        "density_knots_support_snr_nodes_negative_roots",
+    ),
+}
+
 # Native INI defaults expand the qualified prescription without changing its
 # scientific inputs. Strings preserve the explicit native-schema representation.
+# magnitude_partition is absent here: it follows density_interpolation unless
+# stated explicitly.
 INI_DEFAULTS = {
     "model": {
         "parameterization": "ap_at",
@@ -51,13 +66,12 @@ INI_DEFAULTS = {
         "density_width_policy": "legacy_first_spacing",
         "density_redshift_normalization": "target_density",
         "density_negative_policy": "floor_negative",
-        "density_interpolation": "RectBivariateSpline_kx2_ky2_s0",
+        "density_interpolation": "piecewise_constant_cells",
         "snr_smoothing": "legacy",
         "snr_interpolation": "linear_RegularGridInterpolator",
         "snr_bright_policy": "clamp_to_brightest_tabulated_magnitude",
         "snr_clamp": "1e-10",
         "snr_sentinel": "1e20",
-        "magnitude_partition": "density_knots_support_snr_nodes_negative_roots",
         "weighting_method": "early_lyaforecast",
         "weighting_reference": "fiducial_auto_p3d_and_p1d_times_response_squared",
         "weighting_reference_k_t_deg": "2.4",

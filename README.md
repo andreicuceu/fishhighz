@@ -56,6 +56,15 @@ The native interface uses packaged inputs and does not require Vega or
 lyaforecast installations. Historical compatibility examples have separate
 reference-package requirements, described in the documentation.
 
+Source densities dN/(dz dm deg^2) are piecewise constant within each table
+cell by default (`density_interpolation = piecewise_constant_cells`), following
+lyaforecast's `Histogram2DInterpolator`. Integrals over cells therefore
+reproduce the normalized table counts, and queries outside the outer cell edges
+return 1e-20. Set `density_interpolation = RectBivariateSpline_kx2_ky2_s0` in
+`[input policies]` to recover the legacy quadratic spline; in Python, use
+`DensityReader(..., interpolation="spline")`. The historical validation code
+and saved evidence use the spline explicitly.
+
 ## Minimal forecast
 
 The bundled recipe is accessible from an installed package:

@@ -35,6 +35,7 @@ def density(tmp_path):
     return DensityReader(
         density_path,
         semantics="cell_count_per_deg2",
+        interpolation="spline",
         target_density=None,
         z_norm_min=None,
     )
@@ -108,6 +109,7 @@ def test_negative_and_small_values(tmp_path):
     density_reader = DensityReader(
         density_path,
         semantics="cell_count_per_deg2",
+        interpolation="spline",
         target_density=None,
         z_norm_min=None,
     )
@@ -123,6 +125,7 @@ def test_negative_and_small_values(tmp_path):
         density_reader = DensityReader(
             density_path,
             semantics="cell_count_per_deg2",
+            interpolation="spline",
             target_density=None,
             z_norm_min=None,
         )
@@ -758,7 +761,7 @@ from fishhighz.validation.synthetic import run
 assert len(run())==7
 from fishhighz.adapters.legacy_inputs import DensityReader
 try:
-    DensityReader('unused',semantics='cell_count_per_deg2',target_density=None,z_norm_min=None)
+    DensityReader('unused',semantics='cell_count_per_deg2',target_density=None,z_norm_min=None,interpolation='spline')
 except ImportError as e:
     assert 'fishhighz[survey]' in str(e)
 else:

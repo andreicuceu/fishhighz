@@ -7,6 +7,12 @@ from the S2--S4 calculation. Its recipe identity is
 selection `bin1-qso-only; bins2-6-all`. Record this full identity with derived
 results. Changing one of these choices creates a different recipe.
 
+Since 2026-10-01 the default source-density interpolation is
+`piecewise_constant_cells` (see *Source densities* below); the S2--S4 evidence
+used `RectBivariateSpline_kx2_ky2_s0`. The revision string was deliberately kept,
+so record `density_interpolation` and `magnitude_partition` with the recipe
+identity (they are part of the saved `input_policies`).
+
 The prescription is a selected, numerically qualified set of forecast
 assumptions. S4 found that the mixed forest--galaxy damping prescription is the
 largest isolated contribution to its smaller joint BAO errors relative to fixed
@@ -112,6 +118,67 @@ over an unspecified nuisance model. The public API is broader: callers may put
 explicit nuisance parameters in `ParameterRegistry`, map them through
 `BoundParameters`, and supply a prior precision matrix. Parameter roles and
 bounds never create a prior or silently select a marginalized set.
+
+## Source densities
+
+Survey tables give counts per deg^2 in rectangular `(z, m)` cells. After
+normalization to the target density, the counts are divided by the cell widths
+`Delta z` and `Delta m` to give `dN/(dz dm deg^2)`. Galaxy densities are
+evaluated at `z_eval`; forest source densities at the representative source
+redshift
+
+```text
+1 + z_source = lambda_Lya (1 + z_eval) / sqrt(lambda_rest,min lambda_rest,max).
+```
+
+Both are then integrated over magnitude on a composite Gauss--Legendre
+partition.
+
+From 2026-10-01 the default interpolation, `piecewise_constant_cells`, follows
+lyaforecast's `Histogram2DInterpolator` (lyaforecast commits 349c08e--4aaf26c):
+
+- The density is constant within each cell.
+- The lower edge of each cell is its tabulated centre minus `Delta/2`. A cell
+  extends to the next lower edge, and the last cell ends at centre plus
+  `Delta/2`.
+- Cells are closed below.
+- Queries outside the outer edges, in redshift or magnitude, return 1e-20.
+- The magnitude partition is the union of the cell edges inside the
+  integration limits and the SNR magnitude nodes
+  (`density_cell_edges_support_snr_nodes`).
+
+With this partition, the magnitude integral of the density alone is exact.
+Integrals over cells reproduce the normalized table counts, and the
+interpolated density cannot be negative. On the DESI-2 SRD v2 tables:
+
+- The magnitude integrals reproduced the cell counts to 2.3e-14 (relative).
+- The redshift sums reproduced the target densities to 2e-16.
+- Values agreed with lyaforecast's interpolator to 3e-16.
+
+The legacy alternative, `RectBivariateSpline_kx2_ky2_s0`, is a quadratic tensor
+spline through the cell centres. It extends beyond the last redshift node and
+uses the knot/support/negative-root partition
+(`density_knots_support_snr_nodes_negative_roots`). Negative values are floored
+under `floor_negative`. The spline remains selectable in `[input policies]`, or
+via `DensityReader(..., interpolation="spline")`. The historical validation
+code that reproduces the S2--S4 evidence pins it explicitly. With the spline
+selected, the eight SRD v2 cases reproduce the previous results exactly.
+
+Scientific consequences:
+
+- **Integrals and BAO errors.** The spline does not conserve the tabulated
+  integral, so per-bin densities and BAO errors change. For the SRD v2 cases,
+  joint errors in bins 1--5 change by between -8% and +21%. The largest
+  changes involve Ly-alpha(LBG), for example +21% in bin 2 of the
+  `lya_lbg_lae_3x2pt` case.
+- **Redshift support.** A source density now vanishes outside the table's
+  redshift support instead of following spline extrapolation. In bin 6 of the
+  SRD v2 inputs, the Ly-alpha(LBG) source redshift (3.65) lies above the top
+  LBG cell edge (3.41). That forest therefore carries no information there, as
+  in the updated lyaforecast. Tables must cover every required `z_source`.
+- **Numerical qualification.** The S2 magnitude-refinement qualification was
+  established on the spline partition. It has not been repeated for the
+  piecewise-constant partition.
 
 ## Forest weights and noise
 

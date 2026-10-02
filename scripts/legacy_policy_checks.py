@@ -48,6 +48,7 @@ def run(reference, saved):
         reader = DensityReader(
             root / "lyaforecast/resources/data" / c[key]["dn dz"],
             semantics="cell_count_per_deg2",
+            interpolation="spline",
             target_density=t.tracer_density,
             z_norm_min=2.15 if forest or t.simple_name == "qso" else None,
             magnitude_bounds=(t.mag_min, t.mag_max) if forest else None,

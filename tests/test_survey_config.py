@@ -569,12 +569,29 @@ def _write_modified_ini(tmp_path, changes, *, expanded=False):
     return fishhighz.parse_survey_ini(path)
 
 
-def test_named_prescription_matches_original_expanded_ini():
-    """Check named prescription matches original expanded ini."""
+def test_named_prescription_matches_original_expanded_ini(tmp_path):
+    """Check named prescription matches original expanded ini.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+
+    Notes
+    -----
+    The original expanded INI records the legacy spline density policies. The
+    compact default differs only by the piecewise-constant density pair, and
+    selecting the spline explicitly restores the original expansion.
+    """
     from fishhighz.accuracy import REVISION
 
     compact = fishhighz.parse_survey_ini()
     original = fishhighz.parse_survey_ini("tests/data/desi2_accuracy_expanded.ini")
+    legacy = _write_modified_ini(
+        tmp_path,
+        {"input policies": {"density_interpolation": "RectBivariateSpline_kx2_ky2_s0"}},
+    )
     for name in (
         "cosmology",
         "survey",
@@ -584,7 +601,23 @@ def test_named_prescription_matches_original_expanded_ini():
         "fields",
         "bins",
     ):
-        assert getattr(compact, name) == getattr(original, name)
+        if name != "input_policies":
+            assert getattr(compact, name) == getattr(original, name)
+        assert getattr(legacy, name) == getattr(original, name)
+    density_pair = ("density_interpolation", "magnitude_partition")
+    assert {
+        key: value
+        for key, value in compact.input_policies.items()
+        if key not in density_pair
+    } == {
+        key: value
+        for key, value in original.input_policies.items()
+        if key not in density_pair
+    }
+    assert [compact.input_policies[key] for key in density_pair] == [
+        "piecewise_constant_cells",
+        "density_cell_edges_support_snr_nodes",
+    ]
     assert compact.provenance["prescription"] == {
         "name": "accuracy",
         "revision": REVISION,

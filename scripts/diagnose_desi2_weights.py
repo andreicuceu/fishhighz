@@ -48,6 +48,7 @@ def sample_reader(root):
         reader = DensityReader(
             r.root / "lyaforecast/resources/data" / t["dn dz"],
             semantics="cell_count_per_deg2",
+            interpolation="spline",
             target_density=t.getfloat("target density"),
             z_norm_min=2.15 if forest or field.id == "qso" else None,
             magnitude_bounds=(t.getfloat("min_band_mag"), t.getfloat("max_band_mag"))

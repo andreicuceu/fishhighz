@@ -145,9 +145,135 @@ def _query(axis, values, name, context):
     return values
 
 
+DENSITY_INTERPOLATIONS = ("piecewise_constant", "spline")
+
+
+def _cell_edges(centres, widths, name, context):
+    """Construct lyaforecast cell edges from tabulated centres and widths.
+
+    Parameters
+    ----------
+    centres : ndarray
+        Ordered cell centres, shape (n_cell,).
+    widths : array_like
+        Positive cell widths, scalar or shape (n_cell,), in centre units.
+    name : str
+        Coordinate label for errors.
+    context : str
+        Reader identity for error messages.
+
+    Returns
+    -------
+    edges : ndarray
+        Immutable cell edges, shape (n_cell + 1,).
+    tiling_residual : float
+        Maximum absolute gap or overlap between the nominal upper edge
+        centre + width/2 of each cell and the lower edge of the next cell.
+
+    Raises
+    ------
+    ValueError
+        If the edges are not strictly increasing.
+
+    Notes
+    -----
+    As in lyaforecast/tracer.py, edges are the lower edges centre - width/2 and
+    the upper edge of the last cell; each cell extends to the next lower edge.
+    Tables whose centres were rounded therefore keep the tabulated density value
+    per cell, with a nonzero tiling residual recorded in provenance.
+    """
+    widths = np.broadcast_to(np.asarray(widths, dtype=float), centres.shape)
+    lower, upper = centres - widths / 2, centres + widths / 2
+    edges = np.append(lower, upper[-1])
+    if np.any(np.diff(edges) <= 0):
+        raise ValueError(
+            f"{context}: {name} cell edges centre - width/2 are not strictly increasing"
+        )
+    residual = float(np.max(np.abs(lower[1:] - upper[:-1]), initial=0.0))
+    return _immutable(edges), residual
+
+
+@dataclass(frozen=True, eq=False)
+class CellHistogram2D:
+    """Piecewise-constant density on contiguous (redshift, magnitude) cells.
+
+    Parameters
+    ----------
+    z_edges : ndarray
+        Ordered redshift cell edges, shape (n_z + 1,).
+    magnitude_edges : ndarray
+        Ordered magnitude cell edges, shape (n_magnitude + 1,).
+    values : ndarray
+        Cell densities, shape (n_z, n_magnitude).
+    fill_value : float
+        Value returned outside the outer cell edges.
+
+    Notes
+    -----
+    Cells are closed below and open above, so a query on an interior edge takes
+    the upper cell, as in lyaforecast's Histogram2DInterpolator.
+    """
+
+    z_edges: np.ndarray
+    magnitude_edges: np.ndarray
+    values: np.ndarray
+    fill_value: float = 0.0
+
+    def __post_init__(self):
+        """Pad cell values with the exterior fill value.
+
+        Returns
+        -------
+        None
+            No value is returned.
+        """
+        object.__setattr__(
+            self,
+            "_padded",
+            _immutable(
+                np.pad(
+                    np.asarray(self.values, dtype=float),
+                    1,
+                    mode="constant",
+                    constant_values=self.fill_value,
+                )
+            ),
+        )
+
+    def __call__(self, z, magnitudes):
+        """Evaluate cell densities at broadcast coordinates.
+
+        Parameters
+        ----------
+        z : array_like
+            Redshift queries.
+        magnitudes : array_like
+            Magnitude queries, broadcastable against z.
+
+        Returns
+        -------
+        density : ndarray
+            Cell densities with the broadcast shape; fill_value outside the
+            outer edges.
+        """
+        z, magnitudes = np.broadcast_arrays(
+            np.asarray(z, dtype=float), np.asarray(magnitudes, dtype=float)
+        )
+        z_index = np.searchsorted(self.z_edges, z, side="right")
+        magnitude_index = np.searchsorted(
+            self.magnitude_edges, magnitudes, side="right"
+        )
+        # The upper outer edge belongs to the last cell (closed outer domain).
+        z_index[z == self.z_edges[-1]] = len(self.z_edges) - 1
+        magnitude_index[magnitudes == self.magnitude_edges[-1]] = (
+            len(self.magnitude_edges) - 1
+        )
+        return self._padded[z_index, magnitude_index]
+
+
 @dataclass(frozen=True, init=False, eq=False)
 class DensityReader:
-    """Quadratic density adapter for explicit cell counts per square degree.
+    """Density adapter for explicit cell counts per square degree.
 
     Parameters
     ----------
@@ -171,6 +297,11 @@ class DensityReader:
         width inference. Cannot be combined with redshift_widths.
     label : str
         Caller population label, used only for provenance and errors.
+    interpolation : {'piecewise_constant', 'spline'}, optional
+        'piecewise_constant' (default) holds each cell density constant on
+        centre +/- width/2 cells, so magnitude and redshift integrals reproduce the
+        tabulated counts. 'spline' selects the legacy quadratic RectBivariateSpline
+        (kx=ky=2, s=0) through the cell centres.
 
     Notes
     -----
@@ -185,7 +316,11 @@ class DensityReader:
     redshift_widths: np.ndarray
     density: np.ndarray
     provenance: object
+    interpolation: str
+    z_edges: np.ndarray
+    magnitude_edges: np.ndarray
     _spline: object
+    _histogram: object
     _context: str
 
     def __init__(
@@ -199,8 +334,9 @@ class DensityReader:
         redshift_widths=None,
         width_policy=None,
         label="density",
+        interpolation="piecewise_constant",
     ):
-        """Read a rectangular source-count table and prepare its density spline.
+        """Read a rectangular source-count table and prepare its density interpolant.
 
         Parameters
         ----------
@@ -222,6 +358,8 @@ class DensityReader:
             requires uniform spacing unless explicit widths are supplied.
         label : str, optional
             Population label for errors and provenance; default density.
+        interpolation : str, optional
+            piecewise_constant (default) or the legacy quadratic spline.
 
         Returns
         -------
@@ -231,16 +369,22 @@ class DensityReader:
         Raises
         ------
         ValueError
-            If table shape, grid, normalization support or width declarations are
-            invalid.
+            If table shape, grid, normalization support, width declarations or
+            interpolation choice are invalid, or piecewise-constant cell edges are
+            not strictly increasing.
         ImportError
-            If SciPy is unavailable.
+            If SciPy is unavailable for the spline interpolation.
 
         Notes
         -----
-        Reads the table and creates a quadratic spline. Counts are normalized over the selected raw cells before division by redshift and magnitude cell widths. Explicit physical widths and the legacy first-spacing convention remain distinct.
+        Reads the table and creates the selected interpolant. Counts are normalized over the selected raw cells before division by redshift and magnitude cell widths. Explicit physical widths and the legacy first-spacing convention remain distinct.
         """
-        spline, _, _ = _scipy()
+        if interpolation not in DENSITY_INTERPOLATIONS:
+            raise ValueError(
+                f"interpolation must be one of {DENSITY_INTERPOLATIONS}, "
+                f"got {interpolation!r}"
+            )
+        spline = _scipy()[0] if interpolation == "spline" else None
         if semantics != "cell_count_per_deg2":
             raise ValueError("require explicit cell_count_per_deg2 semantics")
         caller = validate_label(label, "density label")
@@ -354,6 +498,38 @@ class DensityReader:
             ) from error
         if not np.all(np.isfinite(density)):
             raise ValueError(f"{context}: nonfinite prepared density")
+        if interpolation == "piecewise_constant":
+            z_edges, z_tiling_residual = _cell_edges(
+                redshift_grid, widths, "redshift", context
+            )
+            magnitude_edges, magnitude_tiling_residual = _cell_edges(
+                magnitude_grid, magnitude_spacing, "magnitude", context
+            )
+            histogram = CellHistogram2D(z_edges, magnitude_edges, _immutable(density))
+            spline_interpolant = None
+            z_domain = (z_edges[0], z_edges[-1])
+            magnitude_domain = (magnitude_edges[0], magnitude_edges[-1])
+            interpolation_label = "piecewise_constant_cells"
+        else:
+            z_edges = magnitude_edges = histogram = None
+            z_tiling_residual = magnitude_tiling_residual = None
+            spline_interpolant = spline(
+                redshift_grid,
+                magnitude_grid,
+                density,
+                kx=2,
+                ky=2,
+                s=0,
+                bbox=[
+                    redshift_grid[0],
+                    redshift_grid[-1],
+                    magnitude_grid[0],
+                    magnitude_grid[-1],
+                ],
+            )
+            z_domain = (redshift_grid[0], redshift_grid[-1])
+            magnitude_domain = (magnitude_grid[0], magnitude_grid[-1])
+            interpolation_label = "RectBivariateSpline kx=2 ky=2 s=0"
         provenance = freeze(
             dict(
                 path=path,
@@ -374,9 +550,13 @@ class DensityReader:
                 magnitude_axis=magnitude_grid,
                 width_order="reconstructed sorted redshift axis",
                 units="deg^-2 redshift^-1 mag^-1",
-                interpolation="RectBivariateSpline kx=2 ky=2 s=0",
-                z_domain=(redshift_grid[0], redshift_grid[-1]),
-                magnitude_domain=(magnitude_grid[0], magnitude_grid[-1]),
+                interpolation=interpolation_label,
+                z_domain=z_domain,
+                magnitude_domain=magnitude_domain,
+                z_edges=z_edges,
+                magnitude_edges=magnitude_edges,
+                z_cell_tiling_residual=z_tiling_residual,
+                magnitude_cell_tiling_residual=magnitude_tiling_residual,
             )
         )
         for name, value in dict(
@@ -386,21 +566,12 @@ class DensityReader:
             redshift_widths=widths,
             density=_immutable(density),
             provenance=provenance,
+            interpolation=interpolation,
+            z_edges=z_edges,
+            magnitude_edges=magnitude_edges,
             _context=context,
-            _spline=spline(
-                redshift_grid,
-                magnitude_grid,
-                density,
-                kx=2,
-                ky=2,
-                s=0,
-                bbox=[
-                    redshift_grid[0],
-                    redshift_grid[-1],
-                    magnitude_grid[0],
-                    magnitude_grid[-1],
-                ],
-            ),
+            _spline=spline_interpolant,
+            _histogram=histogram,
         ).items():
             object.__setattr__(self, name, value)
 
@@ -410,9 +581,11 @@ class DensityReader:
         Parameters
         ----------
         z : float
-            Dimensionless redshift inside the tabulated domain.
+            Dimensionless redshift inside the tabulated domain: the closed cell-edge
+            range for piecewise_constant, or the closed centre range for spline.
         magnitudes : array_like
-            Magnitude nodes, shape (n_magnitude,), in requested order.
+            Magnitude nodes, shape (n_magnitude,), in requested order, inside the
+            corresponding magnitude domain.
 
         Returns
         -------
@@ -427,11 +600,23 @@ class DensityReader:
             nonfinite.
         """
         z = scalar(z, "redshift")
-        _query(self.z, z, "redshift", self._context)
-        magnitude_grid = _query(self.magnitudes, magnitudes, "magnitude", self._context)
+        histogram = self._histogram
+        _query(
+            self.z if histogram is None else self.z_edges, z, "redshift", self._context
+        )
+        magnitude_grid = _query(
+            self.magnitudes if histogram is None else self.magnitude_edges,
+            magnitudes,
+            "magnitude",
+            self._context,
+        )
         if magnitude_grid.ndim != 1 or not len(magnitude_grid):
             raise ValueError("magnitudes must be nonempty 1D")
-        result = self._spline.ev(np.full(magnitude_grid.shape, z), magnitude_grid)
+        result = (
+            self._spline.ev(np.full(magnitude_grid.shape, z), magnitude_grid)
+            if histogram is None
+            else histogram(z, magnitude_grid)
+        )
         if np.any(result < 0) or not np.all(np.isfinite(result)):
             raise ValueError(
                 f"{self._context}: negative/nonfinite interpolated density at z={z}, magnitudes={magnitude_grid.tolist()}"

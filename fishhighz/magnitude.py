@@ -51,7 +51,7 @@ def breakpoints(densities, snrs, z_queries, lo, hi):
     ----------
     densities : mapping
         Named density readers or adapters, optionally exposing a quadratic
-        spline.
+        spline or a piecewise-constant cell histogram.
     snrs : mapping
         SNR readers or adapters exposing tabulated magnitude nodes.
     z_queries : mapping of str to float
@@ -67,7 +67,9 @@ def breakpoints(densities, snrs, z_queries, lo, hi):
 
     Notes
     -----
-    Spline roots partition the existing interpolation; they do not change
+    Piecewise-constant densities contribute their magnitude cell edges only, so
+    Gauss–Legendre integration of the density alone is exact within each
+    interval. Spline roots partition the existing interpolation; they do not change
     the reader's density interpolation or negative-value policy. Interior roots
     exclude a relative 1e-12 endpoint neighbourhood. Adjacent boundaries are
     merged with the existing 64*eps magnitude criterion.
@@ -77,6 +79,12 @@ def breakpoints(densities, snrs, z_queries, lo, hi):
     for name, density in densities.items():
         reader = getattr(density, "reader", density)
         magnitude_axis = getattr(reader, "magnitudes", None)
+        histogram = getattr(density, "_histogram", None)
+        if histogram is not None:
+            # Constant cells: the density is discontinuous only at cell edges.
+            edges = np.asarray(histogram.magnitude_edges)
+            points.extend(edges[(edges >= lo) & (edges <= hi)])
+            continue
         spline = getattr(density, "_spline", None)
         if magnitude_axis is None:
             continue

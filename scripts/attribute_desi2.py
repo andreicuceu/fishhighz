@@ -190,6 +190,7 @@ def density_adapters(task, reference_origin):
         reader = DensityReader(
             Path(reference_origin) / "resources/data" / t["dn dz"],
             semantics="cell_count_per_deg2",
+            interpolation="spline",
             target_density=float(t["target density"]),
             z_norm_min=2.15 if field.id == "qso" else None,
             width_policy="legacy_first_spacing",

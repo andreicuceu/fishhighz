@@ -115,6 +115,7 @@ class RealRecipe:
             reader = DensityReader(
                 path,
                 semantics="cell_count_per_deg2",
+                interpolation="spline",
                 target_density=tracer_settings.getfloat("target density"),
                 z_norm_min=2.15 if forest or field.id == "qso" else None,
                 magnitude_bounds=(

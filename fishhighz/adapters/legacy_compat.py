@@ -1,7 +1,8 @@
 """Opt-in input fallbacks adapted from lyaforecast tracer/spectrograph (GPLv3).
 
 Strict readers remain unchanged. Negative-density flooring is a named extension
-beyond the reference, which preserves negative spline overshoot. Sample records
+beyond the reference, which preserves negative spline overshoot. Piecewise-constant
+densities follow lyaforecast's cell histogram, with 1e-20 outside the cell edges. Sample records
 are owned snapshots; no mutable counters or reader objects enter forecasts.
 """
 
@@ -14,7 +15,9 @@ from ..geometry import LYA_REST_ANGSTROM, _positive
 from ..response import pixel_width_angstrom_to_velocity
 from ..survey import freeze
 from ..weights import density_per_velocity
-from .legacy_inputs import DensityReader, SNRReader, _scipy
+from .legacy_inputs import CellHistogram2D, DensityReader, SNRReader, _scipy
+
+DENSITY_FLOOR = 1e-20
 
 
 def plain(value):
@@ -118,7 +121,10 @@ class LegacyDensity:
 
     negative_policy must be 'reject' or 'floor_negative'. The latter replaces
     negative in-domain-magnitude interpolants only; zero and positive values
-    below 1e-20 are retained. Redshift extension is the reference spline behavior.
+    below 1e-20 are retained. The interpolation follows the reader. For the
+    spline, redshift extension is the reference behavior. For piecewise-constant
+    cells, coordinates outside the redshift or magnitude cell edges receive 1e-20,
+    as in lyaforecast, and in-domain values cannot be negative.
     """
 
     reader: DensityReader
@@ -139,7 +145,7 @@ class LegacyDensity:
 
         Notes
         -----
-        Retains the reference reduction order, including the flat zero-masked sum for forest normalization. The source reader is unchanged.
+        Retains the reference reduction order, including the flat zero-masked sum for forest normalization. The source reader is unchanged. The interpolant (spline or cell histogram) matches the reader's interpolation.
         """
         if not isinstance(self.reader, DensityReader):
             raise ValueError("require validated DensityReader")
@@ -173,8 +179,19 @@ class LegacyDensity:
             if target is not None:
                 values *= target / normalization_count
             values /= reader.redshift_widths[:, None] * reader.provenance["dm"]
-        spline, _, _ = _scipy()
         object.__setattr__(self, "_normalization_measure", float(normalization_count))
+        if reader.interpolation == "piecewise_constant":
+            object.__setattr__(self, "_spline", None)
+            object.__setattr__(
+                self,
+                "_histogram",
+                CellHistogram2D(
+                    reader.z_edges, reader.magnitude_edges, values, DENSITY_FLOOR
+                ),
+            )
+            return
+        spline, _, _ = _scipy()
+        object.__setattr__(self, "_histogram", None)
         object.__setattr__(
             self,
             "_spline",
@@ -188,7 +205,8 @@ class LegacyDensity:
         ----------
         z : float
             Nonnegative dimensionless source redshift; spline extension is
-            permitted.
+            permitted, and piecewise-constant cells return 1e-20 outside their
+            redshift edges.
         magnitudes : array_like
             Magnitude nodes, shape (n_magnitude,), in requested order.
 
@@ -211,6 +229,8 @@ class LegacyDensity:
         if z < 0:
             raise ValueError("redshift must be nonnegative")
         reader = self.reader
+        if self._histogram is not None:
+            return self._sample_cells(z, magnitude_grid)
 
         # Magnitude boundaries and negative spline overshoot have separate policies.
         outside_mask = (magnitude_grid < reader.magnitudes[0]) | (
@@ -252,6 +272,62 @@ class LegacyDensity:
                 density_floor=outside_mask,
                 negative_density=negative_mask,
                 redshift_extension=redshift_extension_mask,
+            ),
+            reader.provenance,
+        )
+
+    def _sample_cells(self, z, magnitude_grid):
+        """Evaluate the piecewise-constant density with exterior floors.
+
+        Parameters
+        ----------
+        z : float
+            Nonnegative dimensionless source redshift.
+        magnitude_grid : ndarray
+            Validated magnitude nodes, shape (n_magnitude,).
+
+        Returns
+        -------
+        record : mappingproxy
+            Density values in deg^-2 redshift^-1 mag^-1, shape (n_magnitude,), with
+            cell values and exterior-floor provenance.
+        """
+        reader, histogram = self.reader, self._histogram
+        z_edges, magnitude_edges = histogram.z_edges, histogram.magnitude_edges
+        magnitude_outside = (magnitude_grid < magnitude_edges[0]) | (
+            magnitude_grid > magnitude_edges[-1]
+        )
+        redshift_outside = np.full(
+            magnitude_grid.shape, z < z_edges[0] or z > z_edges[-1]
+        )
+        raw = real_array(histogram(z, magnitude_grid), "raw density")
+        values = raw.copy()
+        values[magnitude_outside | redshift_outside] = DENSITY_FLOOR
+        return _record(
+            values,
+            raw,
+            dict(z=z, magnitudes=magnitude_grid),
+            dict(
+                z=float(np.clip(z, z_edges[0], z_edges[-1])),
+                magnitudes=np.clip(
+                    magnitude_grid, magnitude_edges[0], magnitude_edges[-1]
+                ),
+            ),
+            dict(
+                magnitude_domain="legacy_floor_outside_cell_edges",
+                density_floor=DENSITY_FLOOR,
+                redshift="floor_outside_cells",
+                interpolation="piecewise_constant_cells",
+                negative=self.negative_policy,
+                negative_is_reference_extension=False,
+                compatibility_normalization_measure=self._normalization_measure,
+                normalization_reduction="legacy flat zero-masked forest sum; selected-row galaxy sum",
+            ),
+            dict(
+                density_floor=magnitude_outside | redshift_outside,
+                negative_density=np.zeros(magnitude_grid.shape, dtype=bool),
+                redshift_extension=np.zeros(magnitude_grid.shape, dtype=bool),
+                redshift_outside_cells=redshift_outside,
             ),
             reader.provenance,
         )

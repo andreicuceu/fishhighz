@@ -86,6 +86,7 @@ def density(path, **kwargs):
         semantics="cell_count_per_deg2",
         target_density=kwargs.pop("target_density", None),
         z_norm_min=kwargs.pop("z_norm_min", None),
+        interpolation=kwargs.pop("interpolation", "spline"),
         **kwargs,
     )
 

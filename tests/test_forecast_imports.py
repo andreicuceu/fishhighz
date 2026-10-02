@@ -55,7 +55,7 @@ source=ForestInput(dict(z_source=5,magnitudes=[20,21],quadrature=[1,1],rho=[.01,
     length_velocity=10000,method='supplied',weights=[1,1]),lambda t,z,k:np.ones_like(k),BoundParameters(registry,(),{}),registry.fiducials)
 b=prepare_bin(BinSpec('forest',geometry,grid,p3d,{'f':InstrumentResponse(30,10)},forests={'f':source},independent_sampling=True))
 assert run_forecast([b]).combined.diagnostics.rank==1
-for reader,args in [(DensityReader,dict(path='unused',semantics='cell_count_per_deg2',target_density=None,z_norm_min=None)),
+for reader,args in [(DensityReader,dict(path='unused',semantics='cell_count_per_deg2',target_density=None,z_norm_min=None,interpolation='spline')),
                     (SNRReader,dict(paths=['unused'],smoothing='legacy'))]:
     try: reader(**args)
     except ImportError as error: assert 'fishhighz[survey]' in str(error)

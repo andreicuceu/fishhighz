@@ -18,7 +18,12 @@ from types import MappingProxyType
 
 import numpy as np
 
-from .accuracy import CONTROLS, INI_DEFAULTS, REVISION
+from .accuracy import (
+    CONTROLS,
+    DENSITY_INTERPOLATION_POLICIES,
+    INI_DEFAULTS,
+    REVISION,
+)
 from .fields import ObservedField, PairSelection
 from .geometry import SPEED_LIGHT_KMS, prepare_geometry
 from .grids import gauss_legendre_grid
@@ -460,6 +465,17 @@ def parse_survey_ini(source=None):
             for key, value in defaults.items():
                 if key not in parser[section]:
                     parser[section][key] = value
+        policies = parser["input policies"]
+        if policies["density_interpolation"] not in DENSITY_INTERPOLATION_POLICIES:
+            raise ValueError(
+                f"[input policies] density_interpolation="
+                f"{policies['density_interpolation']!r} is unsupported; choose from "
+                f"{tuple(DENSITY_INTERPOLATION_POLICIES)}"
+            )
+        if "magnitude_partition" not in policies:
+            policies["magnitude_partition"] = DENSITY_INTERPOLATION_POLICIES[
+                policies["density_interpolation"]
+            ][1]
         if "num_z_bins" not in parser["survey"] and "z_edges" in parser["survey"]:
             parser["survey"]["num_z_bins"] = str(
                 len(_float_list(parser["survey"]["z_edges"], "[survey] z_edges", 2)) - 1
@@ -740,12 +756,10 @@ def parse_survey_ini(source=None):
         "density_semantics": "cell_count_per_deg2",
         "density_width_policy": "legacy_first_spacing",
         "density_redshift_normalization": "target_density",
-        "density_interpolation": "RectBivariateSpline_kx2_ky2_s0",
         "density_negative_policy": "floor_negative",
         "snr_smoothing": "legacy",
         "snr_interpolation": "linear_RegularGridInterpolator",
         "snr_bright_policy": "clamp_to_brightest_tabulated_magnitude",
-        "magnitude_partition": "density_knots_support_snr_nodes_negative_roots",
         "weighting_method": "early_lyaforecast",
         "weighting_reference": "fiducial_auto_p3d_and_p1d_times_response_squared",
         "sampling_noise": "independent_diagonal",
@@ -755,6 +769,20 @@ def parse_survey_ini(source=None):
             raise ValueError(
                 f"[input policies] {key}={parser['input policies'][key]!r} is unsupported"
             )
+    density_interpolation = parser["input policies"]["density_interpolation"]
+    if density_interpolation not in DENSITY_INTERPOLATION_POLICIES:
+        raise ValueError(
+            f"[input policies] density_interpolation={density_interpolation!r} is "
+            f"unsupported; choose from {tuple(DENSITY_INTERPOLATION_POLICIES)}"
+        )
+    partition = DENSITY_INTERPOLATION_POLICIES[density_interpolation][1]
+    if parser["input policies"]["magnitude_partition"] != partition:
+        raise ValueError(
+            f"[input policies] magnitude_partition="
+            f"{parser['input policies']['magnitude_partition']!r} is inconsistent "
+            f"with density_interpolation={density_interpolation!r}; expected "
+            f"{partition!r}"
+        )
     try:
         model_beta = float(parser["model"]["forest_beta"])
         damping_amplitude = float(parser["model"]["damping_amplitude"])
@@ -1390,6 +1418,9 @@ def _build_readers(config, fields, stack):
             magnitude_bounds=field.magnitude_bounds,
             width_policy=policy["density_width_policy"],
             label=field.observed.id,
+            interpolation=DENSITY_INTERPOLATION_POLICIES[
+                policy["density_interpolation"]
+            ][0],
         )
         if policy["density_negative_policy"] == "floor_negative":
             density = LegacyDensity(density_reader, "floor_negative")
