@@ -1660,9 +1660,11 @@ def _integrated_source(
     item : FieldConfig
         Forest field (rest-frame forest limits, exposures).
     density : object
-        Density adapter with ``sample_grid`` (legacy) or ``query_grid`` (strict).
+        Density adapter (SourceDensity or DensityTable interface) with the
+        vectorised ``sample_grid(z, magnitudes)`` query.
     snr : object
-        SNR adapter with ``variance_grid``.
+        S/N adapter (ForestSNR or SNRTable interface) with the vectorised
+        ``variance_grid`` query.
     response : InstrumentResponse
         Bin response; its pixel width is the fixed velocity pixel width l_pix.
     bin_config : BinConfig
@@ -1681,14 +1683,14 @@ def _integrated_source(
     source : IntegratedForestSource
         Nodes, density (n_y, n_m), variance (n_p, n_m) and provenance info.
     density_provenance, snr_provenance : dict
-        Adapter provenance of the grid queries (empty for strict readers).
+        Adapter provenance of the grid queries (empty if an adapter returns a
+        plain array instead of a mapping with ``values`` and ``provenance``).
 
     Raises
     ------
     ValueError
-        If the bin has no forest coverage for this field, a reader lacks the
-        vectorised grid queries, or a query leaves its table domain under a
-        strict reader.
+        If the bin has no forest coverage for this field or an adapter lacks
+        the vectorised ``sample_grid`` / ``variance_grid`` queries.
 
     Notes
     -----
@@ -1723,20 +1725,14 @@ def _integrated_source(
         lya_rest_angstrom=lya_rest,
         label=label,
     )
-    for reader, method in (
-        (density, ("sample_grid", "query_grid")),
-        (snr, ("variance_grid",)),
-    ):
-        if not any(hasattr(reader, name) for name in method):
+    for reader, method in ((density, "sample_grid"), (snr, "variance_grid")):
+        if not hasattr(reader, method):
             raise ValueError(
                 f"{label}: the integrated forest-source mode needs a reader with "
-                f"{' or '.join(method)}"
+                f"{method}"
             )
-    grid_density = (
-        density.sample_grid if hasattr(density, "sample_grid") else density.query_grid
-    )
     density_values, density_provenance = _grid_result(
-        grid_density(nodes.zq_nodes, magnitudes)
+        density.sample_grid(nodes.zq_nodes, magnitudes)
     )
 
     # Fixed velocity pixel width of the bin, converted to angstrom at each pixel.

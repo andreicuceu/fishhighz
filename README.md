@@ -43,8 +43,8 @@ Python:
 ```python
 from fishhighz import Forecast
 
-result = Forecast("my-survey.ini").run()   # Forecast() loads the bundled recipe
-result.save("accuracy-desi2")              # new directory: settings.json + results.npz
+result = Forecast("my-survey.ini").run()  # Forecast() loads the bundled recipe
+result.save("accuracy-desi2")  # new directory: settings.json + results.npz
 ```
 
 `result.joint` and `result.individual` give the constraints per bin on the two BAO

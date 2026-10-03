@@ -2,12 +2,20 @@
 
 import numpy as np
 import pytest
+from scipy.interpolate import RegularGridInterpolator
 from test_forecast import forest_spec
 
 from fishhighz.geometry import LYA_REST_ANGSTROM, SPEED_LIGHT_KMS
 from fishhighz.noise import forest_noise
 from fishhighz.response import InstrumentResponse, pixel_width_angstrom_to_velocity
-from fishhighz.survey_tables import DensityTable, SNRTable, sample_forest_tables
+from fishhighz.survey_tables import (
+    DensityTable,
+    ForestSNR,
+    SNRTable,
+    SourceDensity,
+    sample_forest_tables,
+    snr_grid_separable,
+)
 from fishhighz.weights import prepare_forest_weights
 
 
@@ -638,3 +646,518 @@ def test_snr_variance_range_rejection(tmp_path, value):
             pixel_width_angstrom=1,
             exposure_count=4,
         )
+
+
+# --- ForestSNR / SourceDensity fallbacks, vectorised queries and validation ---------
+
+
+@pytest.fixture
+def constant_density(tmp_path):
+    """Write a quadratic synthetic source-count table and read it.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory supplied by pytest.
+
+    Returns
+    -------
+    density : DensityTable
+        Cell-count table with unnormalized densities, three redshift and three
+        magnitude cells.
+    """
+    path = tmp_path / "density.txt"
+    np.savetxt(
+        path,
+        [[z, m, (z - 3) ** 2 + (m - 21) ** 2] for z in [2, 3, 4] for m in [20, 21, 22]],
+    )
+    return reader(path)
+
+
+@pytest.fixture
+def constant_snr(tmp_path):
+    """Write three constant pixel-S/N tables (S/N = 2) and read them unsmoothed.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory supplied by pytest.
+
+    Returns
+    -------
+    snr_table : SNRTable
+        Table on magnitudes 20-22, redshifts 2-4 and wavelengths 4000-5000 A
+        with EXPTIME=1000 s and NEXP=4.
+    """
+    paths = []
+    for magnitude in [20, 21, 22]:
+        path = tmp_path / f"snr{magnitude}.dat"
+        np.savetxt(
+            path,
+            [[w, 2, 2, 2] for w in [4000, 4500, 5000]],
+            header=(
+                f"BAND=r MAG={magnitude} EXPTIME=1000 NEXP=4\n"
+                "Wave SN(z=2) SN(z=3) SN(z=4)"
+            ),
+        )
+        paths.append(path)
+    return SNRTable(paths, smoothing="none")
+
+
+@pytest.mark.parametrize("magnitude", [19.9, 20, 21, 22, 22.00001])
+@pytest.mark.parametrize("z", [1.99999, 2, 3, 4, 4.00001])
+@pytest.mark.parametrize("wavelength", [3999.999, 4000, 4500, 5000, 5000.001])
+def test_snr_branches(constant_snr, magnitude, z, wavelength):
+    """Check the bright clamp and the 1e20 sentinel at the table edges.
+
+    Parameters
+    ----------
+    constant_snr : SNRTable
+        Constant S/N = 2 table.
+    magnitude, z, wavelength : float
+        Query coordinates straddling the closed table domains.
+    """
+    record = ForestSNR(constant_snr).sample(
+        z_source=z,
+        magnitudes=[magnitude],
+        wavelength=wavelength,
+        pixel_width_angstrom=2,
+        exposure_count=8,
+    )
+
+    # S/N = 2 sqrt(2) sqrt(8/4) = 4 inside the table, so variance = 1/16.
+    outside = magnitude > 22 or z < 2 or z > 4 or wavelength < 4000 or wavelength > 5000
+    assert record["values"][0] == pytest.approx(1e20 if outside else 1 / 16, rel=5e-13)
+    counts = record["provenance"]["counts"]
+    assert counts["out_of_range"] == int(outside)
+    assert counts["bright_clamp"] == int(magnitude < 20 and not outside)
+    if outside:
+        assert record["values"][0] == 1e20
+
+
+@pytest.mark.parametrize("pixel,count", [(1e-24, 4), (1, 4), (2, 8)])
+def test_post_scale_floor(constant_snr, pixel, count):
+    """Check that the 1e-10 S/N floor acts after the pixel and exposure scaling.
+
+    Parameters
+    ----------
+    constant_snr : SNRTable
+        Constant S/N = 2 table.
+    pixel : float
+        Pixel width in angstrom.
+    count : int
+        Exposure count.
+    """
+    record = ForestSNR(constant_snr).sample(
+        z_source=3,
+        magnitudes=[21],
+        wavelength=4500,
+        pixel_width_angstrom=pixel,
+        exposure_count=count,
+    )
+    expected = 1 / max(2 * np.sqrt(pixel) * np.sqrt(count / 4), 1e-10) ** 2
+    np.testing.assert_allclose(record["values"], [expected], rtol=5e-13, atol=0)
+
+
+@pytest.mark.parametrize("bad", [True, 1j, "3", np.nan, np.inf])
+def test_invalid_queries(constant_density, constant_snr, bad):
+    """Check that non-real or nonfinite coordinates are rejected.
+
+    Parameters
+    ----------
+    constant_density : DensityTable
+        Synthetic density table.
+    constant_snr : SNRTable
+        Constant S/N table.
+    bad : bool or complex or str or float
+        Invalid redshift or magnitude.
+    """
+    with pytest.raises(ValueError):
+        SourceDensity(constant_density).sample(bad, [21])
+    with pytest.raises(ValueError):
+        ForestSNR(constant_snr).sample(
+            z_source=3,
+            magnitudes=[bad],
+            wavelength=4500,
+            pixel_width_angstrom=1,
+            exposure_count=4,
+        )
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("pixel_width_angstrom", 0),
+        ("pixel_width_angstrom", 1j),
+        ("exposure_count", -1),
+        ("exposure_time", 2),
+        ("wavelength", 0),
+        ("z_source", -1),
+    ],
+)
+def test_invalid_exposure(constant_snr, key, value):
+    """Check that invalid pixel, exposure or coordinate settings are rejected.
+
+    Parameters
+    ----------
+    constant_snr : SNRTable
+        Constant S/N table (EXPTIME = 1000 s).
+    key : str
+        Keyword of ForestSNR.sample set to an invalid value.
+    value : int or complex
+        The invalid value.
+    """
+    kwargs = dict(
+        z_source=3,
+        magnitudes=[30],
+        wavelength=4500,
+        pixel_width_angstrom=1,
+        exposure_count=4,
+    )
+    kwargs[key] = value
+    with pytest.raises(ValueError):
+        ForestSNR(constant_snr).sample(**kwargs)
+
+
+GRID_EXPOSURE_COUNT = 4
+GRID_EXPOSURE_TIME = 4000
+SNR_MAGNITUDES = np.array([19.0, 20.0, 21.3, 22.9, 23.0, 23.4, 25.0])
+SNR_Z_SOURCE = np.array([2.0, 2.37, 3.0, 3.99, 4.0, 1.5, 4.5, 2.8, 3.3, 2.9, 3.1])
+SNR_WAVELENGTH = np.array(
+    [3500.0, 4177.0, 5000.0, 4100.0, 3999.0, 4000.0]
+    + [4200.0, 3400.0, 5100.5, 4600.0, 4650.0]
+)
+SNR_PIXEL_WIDTH = np.array([0.8, 1.6, 0.4, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8, 1e-30, 0.8])
+
+
+@pytest.fixture
+def linear_snr(tmp_path):
+    """Read the linear synthetic S/N tables (magnitudes 20-23, EXPTIME = 4000 s).
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory supplied by pytest.
+
+    Returns
+    -------
+    snr_table : SNRTable
+        Unsmoothed table of the linear model of snr_files.
+    """
+    return SNRTable(snr_files(tmp_path), smoothing="none")
+
+
+def scalar_variance(adapter, **options):
+    """Evaluate ForestSNR.sample at every point and stack the variances.
+
+    Parameters
+    ----------
+    adapter : ForestSNR
+        Adapter under test.
+    **options : dict
+        Extra sample arguments (exposure_count, exposure_time).
+
+    Returns
+    -------
+    variance : ndarray of shape (n_point, n_magnitude)
+        Stacked scalar variances.
+    counts : dict
+        Fallback counts summed over the points.
+    """
+    rows, counts = [], dict(bright_clamp=0, out_of_range=0, snr_floor=0)
+    for z, wavelength, width in zip(SNR_Z_SOURCE, SNR_WAVELENGTH, SNR_PIXEL_WIDTH):
+        record = adapter.sample(
+            z_source=z,
+            magnitudes=SNR_MAGNITUDES,
+            wavelength=wavelength,
+            pixel_width_angstrom=width,
+            **options,
+        )
+        rows.append(record["values"])
+        for key in counts:
+            counts[key] += record["provenance"]["counts"][key]
+    return np.array(rows), counts
+
+
+@pytest.mark.parametrize("exposure_count", [4, 7.5])
+def test_snr_grid_matches_scalar(linear_snr, exposure_count):
+    """Check that variance_grid equals the scalar samples point by point.
+
+    Parameters
+    ----------
+    linear_snr : SNRTable
+        Linear synthetic S/N table.
+    exposure_count : float
+        Exposure count of the query.
+    """
+    adapter = ForestSNR(linear_snr)
+    expected, expected_counts = scalar_variance(adapter, exposure_count=exposure_count)
+    record = adapter.variance_grid(
+        z_source=SNR_Z_SOURCE,
+        wavelength=SNR_WAVELENGTH,
+        magnitudes=SNR_MAGNITUDES,
+        pixel_width_angstrom=SNR_PIXEL_WIDTH,
+        exposure_count=exposure_count,
+    )
+    np.testing.assert_allclose(record["values"], expected, rtol=1e-14, atol=0)
+    assert record["values"].shape == (len(SNR_Z_SOURCE), len(SNR_MAGNITUDES))
+    assert dict(record["provenance"]["counts"]) == expected_counts
+
+    # Every fallback class is exercised: sentinel, bright clamp and S/N floor.
+    assert expected_counts["bright_clamp"] > 0
+    assert expected_counts["out_of_range"] > 0
+    assert expected_counts["snr_floor"] > 0
+    assert np.any(record["values"] == 1e20)
+
+
+def test_snr_grid_all_outside(linear_snr):
+    """Check that a grid entirely outside the table is the sentinel everywhere.
+
+    Parameters
+    ----------
+    linear_snr : SNRTable
+        Linear synthetic S/N table.
+    """
+    record = ForestSNR(linear_snr).variance_grid(
+        z_source=[1.0, 9.0],
+        wavelength=[4000.0, 4000.0],
+        magnitudes=[21.0, 22.0],
+        pixel_width_angstrom=[0.8, 0.8],
+        exposure_count=GRID_EXPOSURE_COUNT,
+    )
+    np.testing.assert_array_equal(record["values"], np.full((2, 2), 1e20))
+    assert record["provenance"]["counts"]["out_of_range"] == 4
+
+
+def test_snr_grid_negative_raw_snr_raises(linear_snr):
+    """Check that a negative interpolated S/N raises on the scalar and grid paths.
+
+    Parameters
+    ----------
+    linear_snr : SNRTable
+        Linear synthetic S/N table.
+    """
+    adapter = ForestSNR(linear_snr)
+
+    class Negative:
+        """Interpolator stand-in returning S/N = -1 at every point."""
+
+        def __call__(self, points):
+            """Return -1 for each coordinate triple of shape (..., 3)."""
+            return -np.ones(points.shape[:-1])
+
+    object.__setattr__(adapter, "_interpolator", Negative())
+    with pytest.raises(ValueError, match="negative interpolated SNR"):
+        adapter.sample(
+            z_source=3.0,
+            magnitudes=[21.0],
+            wavelength=4000.0,
+            pixel_width_angstrom=0.8,
+            exposure_count=GRID_EXPOSURE_COUNT,
+        )
+    with pytest.raises(ValueError, match="negative interpolated SNR"):
+        adapter.variance_grid(
+            z_source=[3.0],
+            magnitudes=[21.0],
+            wavelength=[4000.0],
+            pixel_width_angstrom=[0.8],
+            exposure_count=GRID_EXPOSURE_COUNT,
+        )
+
+
+def test_snr_grid_unrepresentable_variance_raises(linear_snr):
+    """Check that underflow of the scaled S/N is trapped on both paths.
+
+    Parameters
+    ----------
+    linear_snr : SNRTable
+        Linear synthetic S/N table.
+    """
+    adapter = ForestSNR(linear_snr)
+    kwargs = dict(magnitudes=[21.0], exposure_count=1e-320, exposure_time=None)
+    with pytest.raises(ValueError, match="not representable"):
+        adapter.sample(
+            z_source=3.0, wavelength=4000.0, pixel_width_angstrom=1e-320, **kwargs
+        )
+    with pytest.raises(ValueError, match="not representable"):
+        adapter.variance_grid(
+            z_source=[3.0],
+            wavelength=[4000.0],
+            pixel_width_angstrom=[1e-320],
+            **kwargs,
+        )
+
+
+def test_source_density_grid_matches_scalar(tmp_path):
+    """Check that SourceDensity.sample_grid equals the scalar samples per redshift.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory supplied by pytest.
+    """
+    redshift_centres = [2.1, 2.3, 2.5, 2.7]
+    magnitude_centres = [20.05, 20.15, 20.25, 20.35, 20.45]
+    counts = np.random.default_rng(5).uniform(0.5, 3.0, (4, 5))
+    counts[1, 2] = 0.0
+    path = tmp_path / "d.txt"
+    np.savetxt(
+        path,
+        [
+            [z, m, counts[i, j]]
+            for i, z in enumerate(redshift_centres)
+            for j, m in enumerate(magnitude_centres)
+        ],
+    )
+    adapter = SourceDensity(reader(path, target_density=50.0, z_norm_min=2.2))
+
+    # Interior edges, outer edges, cell interiors and exterior points.
+    z_grid = np.array([1.9, 2.0, 2.05, 2.2, 2.3, 2.45, 2.6, 2.7999999, 2.8, 2.9])
+    magnitude_grid = np.array([19.9, 20.0, 20.1, 20.2, 20.33, 20.5, 20.6])
+    scalar = [adapter.sample(z, magnitude_grid) for z in z_grid]
+    record = adapter.sample_grid(z_grid, magnitude_grid)
+    np.testing.assert_allclose(
+        record["values"], [row["values"] for row in scalar], rtol=1e-14, atol=0
+    )
+    np.testing.assert_allclose(
+        record["raw"], [row["raw"] for row in scalar], rtol=1e-14, atol=0
+    )
+    assert record["values"].shape == (len(z_grid), len(magnitude_grid))
+    floor_count = record["provenance"]["counts"]["density_floor"]
+    assert floor_count == np.count_nonzero(record["values"] == 1e-20)
+    assert floor_count > 0
+    with pytest.raises(ValueError, match="nonnegative"):
+        adapter.sample_grid([-0.1], magnitude_grid)
+
+
+def random_snr_table(root, rng):
+    """Read non-separable random S/N tables with legacy smoothing.
+
+    Parameters
+    ----------
+    root : pathlib.Path
+        Output directory.
+    rng : numpy.random.Generator
+        Random number generator.
+
+    Returns
+    -------
+    snr_table : SNRTable
+        Table on magnitudes 20-23, redshifts [2, 2.6, 3, 4], wavelengths
+        3500-5000 A.
+    """
+    paths = []
+    wavelength_grid = np.arange(3500.0, 5100.0, 100.0)
+    redshifts = [2.0, 2.6, 3.0, 4.0]
+    for name, magnitude in [("d", 23), ("a", 20), ("c", 22), ("b", 21)]:
+        path = root / f"{name}.dat"
+        header = f"BAND= r MAG= {magnitude} EXPTIME= 4000 NEXP= 4\nWave " + " ".join(
+            f"SN(z={v})" for v in redshifts
+        )
+        np.savetxt(
+            path,
+            np.column_stack(
+                [wavelength_grid, rng.uniform(0.01, 4, (len(wavelength_grid), 4))]
+            ),
+            header=header,
+        )
+        paths.append(path)
+    return SNRTable(paths, smoothing="legacy")
+
+
+def test_separable_equals_independent_interpolation(tmp_path):
+    """Check snr_grid_separable against a 3-D RegularGridInterpolator to 1e-13.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory supplied by pytest.
+    """
+    table = random_snr_table(tmp_path, np.random.default_rng(6))
+    rng = np.random.default_rng(7)
+    n_point, n_magnitude = 400, 60
+    z_source = rng.uniform(table.z[0], table.z[-1], n_point)
+    wavelength = rng.uniform(table.wavelength[0], table.wavelength[-1], n_point)
+    magnitudes = rng.uniform(table.magnitudes[0], table.magnitudes[-1], n_magnitude)
+
+    # Table nodes and domain edges, where the interval choice is ambiguous.
+    z_source[:4] = table.z[[0, -1, 1, 2]]
+    wavelength[:4] = table.wavelength[[0, -1, 3, 5]]
+    magnitudes[:4] = table.magnitudes[[0, -1, 1, 2]]
+
+    # Oracle built here on the same smoothed tensor, evaluated element by element.
+    oracle = RegularGridInterpolator(
+        (table.magnitudes, table.z, table.wavelength),
+        table.smoothed_snr,
+        method="linear",
+        bounds_error=True,
+    )
+    points = np.empty((n_point, n_magnitude, 3))
+    points[..., 0] = magnitudes[None, :]
+    points[..., 1] = z_source[:, None]
+    points[..., 2] = wavelength[:, None]
+    expected = oracle(points)
+
+    result = snr_grid_separable(oracle, z_source, wavelength, magnitudes)
+    np.testing.assert_allclose(result, expected, rtol=1e-13, atol=0)
+
+
+def test_variance_grid_separable_equals_independent_oracle(tmp_path):
+    """Check ForestSNR.variance_grid against an independent interpolation oracle.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Temporary directory supplied by pytest.
+
+    Notes
+    -----
+    The oracle clamps bright magnitudes, interpolates the smoothed tensor with
+    a RegularGridInterpolator, applies the pixel/exposure scaling and the 1e-10
+    floor, and sets the sentinel 1e20 outside the table.
+    """
+    table = random_snr_table(tmp_path, np.random.default_rng(6))
+    rng = np.random.default_rng(9)
+    n_point = 50
+    z_source = rng.uniform(1.9, 4.1, n_point)
+    wavelength = rng.uniform(3450.0, 5150.0, n_point)
+    pixel_width = rng.uniform(0.2, 2.0, n_point)
+    magnitudes = np.array([19.0, 20.0, 21.7, 22.9, 23.0, 24.0])
+    exposure_count = 2
+
+    record = ForestSNR(table).variance_grid(
+        z_source=z_source,
+        wavelength=wavelength,
+        magnitudes=magnitudes,
+        pixel_width_angstrom=pixel_width,
+        exposure_count=exposure_count,
+    )
+
+    oracle = RegularGridInterpolator(
+        (table.magnitudes, table.z, table.wavelength),
+        table.smoothed_snr,
+        method="linear",
+        bounds_error=True,
+    )
+    expected = np.full((n_point, len(magnitudes)), 1e20)
+    for i in range(n_point):
+        point_inside = (
+            table.z[0] <= z_source[i] <= table.z[-1]
+            and table.wavelength[0] <= wavelength[i] <= table.wavelength[-1]
+        )
+        if not point_inside:
+            continue
+        for j, magnitude in enumerate(magnitudes):
+            if magnitude > table.magnitudes[-1]:
+                continue
+            effective_magnitude = max(magnitude, table.magnitudes[0])
+            raw_snr = oracle([[effective_magnitude, z_source[i], wavelength[i]]])[0]
+            scaled_snr = raw_snr * np.sqrt(pixel_width[i])
+            scaled_snr *= np.sqrt(exposure_count / table.provenance["exposure_count"])
+            expected[i, j] = 1 / max(scaled_snr, 1e-10) ** 2
+
+    np.testing.assert_allclose(record["values"], expected, rtol=1e-13, atol=0)
+
+    # Sentinels and bright clamps are present in the fixture.
+    assert np.any(expected == 1e20)
+    assert record["provenance"]["counts"]["bright_clamp"] > 0

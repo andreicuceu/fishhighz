@@ -1,7 +1,7 @@
 """Full-sample forest recurrences and confirmed stopping, array-only.
 
-Arithmetic adapted from lyaforecast weights.py (GPLv3). Signed compatibility
-preparation is separate from strict public preparation. No normalization occurs
+Arithmetic adapted from lyaforecast weights.py (GPLv3). Signed preparation
+is separate from strict public preparation. No normalization occurs
 inside the nonlinear update. ``_integrals`` normalizes the moments of the
 final weights into forest-noise coefficients.
 """
@@ -110,7 +110,7 @@ def update(inputs, weights, variant):
     propagate so the caller can retain the last finite state; there is no positivity replacement or weight normalization.
     """
     if variant not in VARIANTS:
-        raise ValueError(f"unknown compatibility weighting variant: {variant}")
+        raise ValueError(f"unknown forest weighting variant: {variant}")
     with np.errstate(divide="raise", invalid="raise", over="raise"):
         first_moment, second_moment, _ = moments(inputs, weights)
         signal = inputs.signal
@@ -304,7 +304,7 @@ def solve(
     is evaluated. ``last_step`` measures its preceding transition instead.
     """
     if variant not in VARIANTS:
-        raise ValueError("unknown compatibility weighting variant")
+        raise ValueError("unknown forest weighting variant")
     for value in (min_updates, stable_steps, max_updates):
         if isinstance(value, bool) or not isinstance(value, int) or value < 1:
             raise ValueError("update controls must be positive integers")

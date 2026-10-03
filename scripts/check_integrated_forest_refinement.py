@@ -105,7 +105,7 @@ class TimedReader:
     timer : Timer
         Receives the query times.
     stage : str
-        Stage name for ``sample_grid`` / ``query_grid`` / ``variance_grid``.
+        Stage name for ``sample_grid`` / ``variance_grid``.
     """
 
     def __init__(self, reader, timer, stage):
@@ -117,7 +117,7 @@ class TimedReader:
     def __getattr__(self, name):
         """Delegate attributes, timing the grid-query methods."""
         attribute = getattr(self._reader, name)
-        if name in ("sample_grid", "query_grid", "variance_grid"):
+        if name in ("sample_grid", "variance_grid"):
             return self._timer.wrap(attribute, self._stage)
         return attribute
 

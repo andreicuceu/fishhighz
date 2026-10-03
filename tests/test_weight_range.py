@@ -5,7 +5,9 @@ from decimal import Decimal, localcontext
 import numpy as np
 import pytest
 from test_weights import inject_forest_weights
+from test_weights import prepare as prepare_adaptive
 
+from fishhighz import weights as weights_module
 from fishhighz.response import InstrumentResponse
 
 
@@ -179,3 +181,57 @@ def test_individual_loss_at_other_product_boundaries(rho, w, v):
     """
     with pytest.raises(FloatingPointError, match="underflow"):
         prepare(rho, w, v)
+
+
+def converged_record(forest_weights):
+    """Build a converged solver record carrying prescribed forest weights.
+
+    Parameters
+    ----------
+    forest_weights : array_like of shape (n_magnitude,)
+        Dimensionless weights returned in place of the nonlinear solution.
+
+    Returns
+    -------
+    record : dict
+        Minimal record with status "converged", as read by prepare_forest_weights.
+    """
+    return dict(
+        status="converged",
+        reason="prescribed",
+        weights=np.asarray(forest_weights, dtype=float),
+    )
+
+
+@pytest.mark.parametrize(
+    "forest_weights,message",
+    [
+        # w^2 underflows to zero while w stays finite: the normalization is 0/0.
+        ([1e-200, 1e-200, 1e-200], "weighting integrals/coefficients are not repr"),
+        # w^2 overflows, trapped as FloatingPointError and wrapped with the field id.
+        ([1e200, 1e200, 1e200], "weighting integrals/coefficients are not repr"),
+        # Negative signed weights give I1 < 0 with finite I2, hitting the guard.
+        ([-1.0, -1.0, -1.0], "not representable or lack weighted support"),
+    ],
+)
+def test_prepare_wraps_unrepresentable_solver_weights(
+    monkeypatch, forest_weights, message
+):
+    """Check that unrepresentable moments of converged weights raise ValueError.
+
+    Parameters
+    ----------
+    monkeypatch : pytest.MonkeyPatch
+        Replaces the weight solver used by prepare_forest_weights.
+    forest_weights : list of float
+        Prescribed weights returned by the replaced solver.
+    message : str
+        Regular expression matched against the ValueError message.
+    """
+    monkeypatch.setattr(
+        weights_module,
+        "solve",
+        lambda *args, **kwargs: converged_record(forest_weights),
+    )
+    with pytest.raises(ValueError, match=message):
+        prepare_adaptive()

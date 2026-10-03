@@ -10,14 +10,14 @@ import pytest
 from fishhighz.covariance import gaussian_covariance
 from fishhighz.derivatives import evaluate_derivatives
 from fishhighz.fields import ObservedField, PairSelection
-from fishhighz.fisher import factor_covariance, fisher_from_factors
+from fishhighz.fisher import factor_covariance, fisher_from_factors, fisher_matrix
 from fishhighz.grids import IntegrationGrid
 from fishhighz.kernels.kaiser import _coordinates, _damping, _scales
 from fishhighz.models.external import BoundParameters, P3DProvider, PreparedP3D
 from fishhighz.models.kaiser import KaiserModel, Scaling
 from fishhighz.models.templates import prepare_template
 from fishhighz.parameters import Parameter, ParameterRegistry
-from fishhighz.results import FisherResult
+from fishhighz.results import FisherResult, combine_results
 
 
 def polys(k, derivative=0):
@@ -1006,3 +1006,155 @@ def test_builtin_import_keeps_preparation_libraries_lazy(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout == result.stderr == ""
+
+
+@pytest.mark.parametrize("anisotropic", [False, True])
+def test_bao_oracle_and_independent_bins(anisotropic):
+    """Check BAO-dilation derivatives, Gaussian variances and Fisher blocks.
+
+    Parameters
+    ----------
+    anisotropic : bool
+        Whether parallel and transverse dilations differ, supplied by pytest
+        parametrization.
+
+    Notes
+    -----
+    Two bins carry independent dilation parameters; the Jacobian of each must
+    vanish on the other bin's parameters. The isotropic case is checked against
+    a closed-form wiggle derivative, the anisotropic case against fourth-order
+    differences of an independent closed expression.
+    """
+
+    knots = np.geomspace(0.001, 1, 16000)
+    template = prepare_template(
+        knots,
+        20 + np.sin(30 * knots),
+        np.full_like(knots, 20),
+        z_ref=2.4,
+        h_template=0.7,
+        h_fid=0.7,
+    )
+    field = ObservedField("g", "galaxy", "toy")
+    select = PairSelection([field], [("g", "g")])
+    registry = ParameterRegistry(
+        [
+            Parameter(f"{p}{i}", 1, "target", step=1e-5)
+            for i in (0, 1)
+            for p in ("ap", "at")
+        ]
+    )
+    k_grid = np.array([0.04, 0.07, 0.11, 0.17, 0.23, 0.31])
+    mu_grid = np.array([0.1, 0.8, 0.4, 0.6, 0.95, 0.2])
+    results = []
+    for i in (0, 1):
+        growth_rate = 0.8 if anisotropic else 0
+        width_parallel, width_transverse = (5.0, 2.0) if anisotropic else (0.0, 0.0)
+        model = KaiserModel(
+            template,
+            [field],
+            biases={"g": 1.0},
+            betas={},
+            widths={"g": (width_parallel, width_transverse)},
+            f=growth_rate,
+            local_names=("ap", "at"),
+            wiggle=Scaling("ap_at", ap="ap", at="at"),
+        )
+        collection = PreparedP3D(
+            registry,
+            select,
+            [
+                P3DProvider(
+                    "BAO",
+                    model,
+                    BoundParameters(
+                        registry, ("ap", "at"), {"ap": f"ap{i}", "at": f"at{i}"}
+                    ),
+                    select.required_pairs,
+                )
+            ],
+        )
+        derivatives = evaluate_derivatives(
+            collection, registry.fiducials, 2.4, k_grid, mu_grid
+        )
+        wiggle_power = np.sin(30 * k_grid)
+        wiggle_derivative = 30 * np.cos(30 * k_grid)
+        oracle = np.column_stack(
+            (
+                -wiggle_power - k_grid * mu_grid**2 * wiggle_derivative,
+                -2 * wiggle_power - k_grid * (1 - mu_grid**2) * wiggle_derivative,
+            )
+        )
+        if anisotropic:
+            # Independent closed expression, fourth-order differences; no model calls.
+            def power(ap, at):
+                """Evaluate a scalar dilated wiggle spectrum for the BAO derivative check.
+
+                Parameters
+                ----------
+                ap : float
+                    Dimensionless parallel BAO dilation.
+                at : float
+                    Dimensionless transverse BAO dilation.
+
+                Returns
+                -------
+                power : ndarray
+                    Synthetic power in (Mpc/h)^3 on the enclosing test Fourier nodes.
+                """
+                k_parallel = k_grid * mu_grid / ap
+                k_transverse = k_grid * np.sqrt(1 - mu_grid**2) / at
+                mapped_k = np.hypot(k_parallel, k_transverse)
+                mapped_mu = k_parallel / mapped_k
+                return 20 * (1 + growth_rate * mu_grid**2) ** 2 + np.sin(
+                    30 * mapped_k
+                ) * (1 + growth_rate * mapped_mu**2) ** 2 * np.exp(
+                    -0.5
+                    * (
+                        (k_parallel * width_parallel) ** 2
+                        + (k_transverse * width_transverse) ** 2
+                    )
+                ) / (ap * at**2)
+
+            step = 1e-4
+            oracle = np.column_stack(
+                [
+                    (
+                        -power(1 + 2 * step, 1)
+                        + 8 * power(1 + step, 1)
+                        - 8 * power(1 - step, 1)
+                        + power(1 - 2 * step, 1)
+                    )
+                    / (12 * step),
+                    (
+                        -power(1, 1 + 2 * step)
+                        + 8 * power(1, 1 + step)
+                        - 8 * power(1, 1 - step)
+                        + power(1, 1 - 2 * step)
+                    )
+                    / (12 * step),
+                ]
+            )
+        np.testing.assert_allclose(
+            derivatives.jacobian[:, 0, 2 * i : 2 * i + 2], oracle, rtol=3e-7, atol=1e-8
+        )
+        np.testing.assert_array_equal(
+            derivatives.jacobian[:, 0, 2 * (1 - i) : 2 * (1 - i) + 2], 0
+        )
+        modes = np.arange(1, 7) * 100.0
+        covariance = gaussian_covariance(derivatives.power + 2, modes, select)
+        expected_variance = 2 * (derivatives.power[:, 0] + 2) ** 2 / modes
+        np.testing.assert_allclose(
+            covariance[:, 0, 0], expected_variance, rtol=5e-13, atol=0
+        )
+        fisher = fisher_matrix(derivatives.jacobian, covariance)
+        expected = oracle.T @ (oracle / expected_variance[:, None])
+        np.testing.assert_allclose(
+            fisher[2 * i : 2 * i + 2, 2 * i : 2 * i + 2], expected, rtol=3e-7, atol=0
+        )
+        result = FisherResult(registry, fisher)
+        assert result.diagnostics.rank == 2
+        results.append(result)
+    combined = combine_results(results)
+    assert combined.diagnostics.rank == 4
+    np.testing.assert_array_equal(combined.data_fisher[:2, 2:], 0)

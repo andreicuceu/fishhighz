@@ -14,6 +14,9 @@ from test_forecast import forest_spec
 from test_weights import FIELD, RESPONSE, geometry
 
 from fishhighz.forecast import prepare_bin, run_bin
+from fishhighz.kernels._compiled_integrated_weights import BLOCK
+from fishhighz.kernels.full_sum_weights import solve
+from fishhighz.kernels.integrated_weights import solve_integrated
 from fishhighz.noise import forest_noise
 from fishhighz.public import _convergence
 from fishhighz.survey import ForestInput
@@ -282,6 +285,47 @@ def test_dense_loop_oracle_adaptive():
     )
     assert adaptive.weights.shape == source.measure.shape
     assert adaptive.weights[1, 2] >= 0
+
+
+def test_multi_block_solution_equals_central_kernel():
+    """Streaming over several blocks reproduces the central kernel on flat inputs.
+
+    Notes
+    -----
+    The flattened source has more than 2 BLOCK samples, so the blocked
+    recurrence crosses block boundaries and ends in a partial block. The central
+    kernel receives the same samples with unit length and unit quadrature, so
+    its density is the measure; the weights agree to 1e-12 and the stopping
+    decisions (updates, candidate) are identical.
+    """
+    n_magnitude = 3
+    n_pixel = (2 * BLOCK) // n_magnitude + 150
+    source = random_source(seed=11, n_pixel=n_pixel, n_magnitude=n_magnitude)
+    measure = source.measure.reshape(-1)
+    variance = source.variance.reshape(-1)
+    assert measure.size > 2 * BLOCK
+    pixel = RESPONSE.pixel_width_velocity
+
+    streamed = solve_integrated(
+        measure, variance, pixel=pixel, signal=SIGNAL, alias=ALIAS
+    )
+    inputs = SimpleNamespace(
+        density=measure,
+        quadrature=np.ones_like(measure),
+        variance=variance,
+        length=1.0,
+        pixel=pixel,
+        signal=SIGNAL,
+        p1d=ALIAS,
+    )
+    reference = solve(inputs, "sum_historical")
+
+    assert streamed["status"] == reference["status"] == "converged"
+    assert streamed["updates"] == reference["updates"]
+    assert streamed["candidate"] == reference["candidate"]
+    np.testing.assert_allclose(
+        streamed["weights"], reference["weights"], rtol=1e-12, atol=0
+    )
 
 
 @pytest.mark.parametrize(

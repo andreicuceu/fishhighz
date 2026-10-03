@@ -1,6 +1,6 @@
 """Fixed per-field forest preparation from normalized arrays; no survey readers.
 
-Cumulative formulas adapted from lyaforecast/weights.py, GPLv3, implementing
+Full-sample formulas adapted from lyaforecast/weights.py, GPLv3, implementing
 McDonald & Eisenstein (2007). No raw assets or normalization policies are copied.
 """
 
