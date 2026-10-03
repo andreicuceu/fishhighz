@@ -5,18 +5,26 @@ Known subtracted noise affects covariance; its parameter response, if any, must
 be supplied in the mean Jacobian. No covariance derivative information is added.
 """
 
-import os
-
 import numpy as np
 
-from ._arrays import real_array
 from ._information import inspect_information
-from .kernels.fisher import _accumulate_fisher, _cholesky, _forward_substitute
+from .kernels.fisher import _cholesky
+
+# Diagnostics for the nonzero status codes of kernels._compiled_fisher.contract,
+# formatted with the first failing Fourier node and global parameter column.
+_CONTRACTION_ERRORS = {
+    1: "factors node {node} must be finite",
+    2: "jacobian node {node} must be finite",
+    3: "factors node {node}: require exact lower triangle and positive diagonal",
+    4: "nonfinite Fisher solve at node {node}, global parameter column {column}",
+    5: (
+        "nonfinite Fisher accumulation at node {node}; "
+        "check derivative magnitudes/units"
+    ),
+}
 
 
 def _numeric_input(value, name):
-    # Preserve existing array views. Dtype conversion and finite checks happen
-    # one node at a time, avoiding an all-node float64 Jacobian copy.
     """Validate real numeric dtype without copying every Fourier node.
 
     Parameters
@@ -38,7 +46,8 @@ def _numeric_input(value, name):
 
     Notes
     -----
-    Float64 conversion and finite checks are deferred to the node evaluation.
+    Existing array views are preserved. Float64 conversion (only for
+    non-float64 data) and finite checks are deferred to the Fisher contraction.
     """
     array = np.asarray(value)
     if array.dtype.kind not in "iuf":
@@ -215,51 +224,6 @@ def _factor_batch(block):
     return factors
 
 
-def _fisher_one_spectrum(jacobian, factors):
-    """Vectorized one-spectrum (1x1 factor) form of the reference node loop.
-
-    Parameters
-    ----------
-    jacobian : array_like of shape (n_node, 1, n_global)
-        Mean derivatives in (Mpc/h_fid)^3 per global parameter unit.
-    factors : ndarray of shape (n_node, 1, 1)
-        Owned float64 lower Cholesky factors in (Mpc/h_fid)^3.
-
-    Returns
-    -------
-    matrix : ndarray of shape (n_global, n_global) or None
-        Float64 Fisher information in inverse products of global parameter
-        units.
-        Return None if any input or arithmetic check fails, requesting replay
-        through the reference loop.
-
-    Notes
-    -----
-    The one-row forward substitution is a single division and np.add.accumulate
-    sums node contributions in the loop's order, so the result is identical to
-    the loop. Workspace is O(n_node*n_global**2) for the supplied node batch.
-    Returns None whenever any check or value would fail, so the caller replays
-    the reference loop and its first-node diagnostics.
-    """
-    lower = factors[:, 0, 0]
-    if (
-        lower.dtype.kind != "f"
-        or jacobian.dtype.kind != "f"
-        or not np.all(np.isfinite(lower))
-        or np.any(lower <= 0)
-        or not np.all(np.isfinite(jacobian))
-    ):
-        return None
-    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
-        solved = (
-            jacobian[:, 0, :].astype(np.float64) / lower.astype(np.float64)[:, None]
-        )
-        partial = np.add.accumulate(solved[:, :, None] * solved[:, None, :], axis=0)
-    if not np.all(np.isfinite(solved)) or not np.all(np.isfinite(partial)):
-        return None
-    return np.array(partial[-1], dtype=np.float64, order="C", copy=True)
-
-
 def fisher_from_factors(jacobian, factors):
     """Accumulate sum_q (L_q^-1 J_q).T @ (L_q^-1 J_q), reusing factors.
 
@@ -283,6 +247,18 @@ def fisher_from_factors(jacobian, factors):
     ------
     ValueError
         For malformed inputs or nonfinite solve/accumulation with node context.
+        Per node, the order of checks is: finite factors, finite Jacobian,
+        exact lower triangle with positive diagonal, finite solve (reporting
+        the first nonfinite global parameter column), finite accumulation.
+
+    Notes
+    -----
+    The contraction is the compiled Numba kernel
+    ``kernels._compiled_fisher.contract`` (no fastmath, no parallel loops).
+    Integer inputs are converted to float64; float64 inputs are not copied.
+    Compiled arithmetic does not trap floating-point underflow, whatever the
+    NumPy ``errstate``: gradual underflow in the solve or accumulation is
+    accepted silently, while nonfinite results raise as described above.
     """
     factors = _blocks(factors, "factors")
     jacobian = _numeric_input(jacobian, "jacobian")
@@ -294,64 +270,25 @@ def fisher_from_factors(jacobian, factors):
         raise ValueError(
             "jacobian: expected matching nonempty (n_node,n_selected,n_global)"
         )
-    # Unset selects the compiled contraction when Numba is installed; "numpy"
-    # forces the reference loop below.
-    backend = os.environ.get("FISHHIGHZ_FISHER_BACKEND", "numba")
-    if backend not in ("numpy", "numba"):
-        raise ValueError("FISHHIGHZ_FISHER_BACKEND must be numpy or numba")
-    if (
-        backend == "numba"
-        and factors.dtype == jacobian.dtype == np.float64
-        and np.geterr()["under"] == "ignore"
-    ):
-        try:
-            # Numba matrix products call SciPy's BLAS; without it the compiled
-            # kernel aborts the interpreter instead of raising.
-            import scipy.linalg.cython_blas  # noqa: F401
+    # The compiled contraction has one float64 signature; integer inputs are
+    # converted, while float64 inputs are passed on without a copy.
+    if factors.dtype != np.float64:
+        factors = np.asarray(factors, dtype=np.float64)
+    if jacobian.dtype != np.float64:
+        jacobian = np.asarray(jacobian, dtype=np.float64)
 
-            from .kernels._compiled_fisher import contract
-        except ImportError:
-            # The NumPy-only installation remains executable even when an
-            # optional backend was requested but is not installed.
-            pass
-        else:
-            # One writable C-contiguous signature avoids recompiling for sliced
-            # or read-only (prepared, immutable) inputs.
-            matrix, status = contract(
-                np.require(factors, requirements=("C", "W")),
-                np.require(jacobian, requirements=("C", "W")),
-            )
-            if status == 0:
-                return np.array(matrix, dtype=np.float64, order="C", copy=True)
-            # Reproduce reference validation order and first-cell diagnostics.
-    if factors.shape[1] == 1 and np.geterr()["under"] == "ignore":
-        matrix = _fisher_one_spectrum(jacobian, factors)
-        if matrix is not None:
-            return matrix
-    upper = np.triu_indices(factors.shape[1], 1)
-    result = np.zeros((jacobian.shape[2], jacobian.shape[2]), dtype=np.float64)
-    solved = np.empty(jacobian.shape[1:], dtype=np.float64)
-    for node in range(len(jacobian)):
-        lower = real_array(factors[node], f"factors node {node}")
-        derivative = real_array(jacobian[node], f"jacobian node {node}")
-        if np.any(lower[upper] != 0) or np.any(lower.diagonal() <= 0):
-            raise ValueError(
-                f"factors node {node}: require exact lower triangle and positive diagonal"
-            )
-        with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
-            _forward_substitute(lower, derivative, solved)
-        if not np.all(np.isfinite(solved)):
-            column = np.argwhere(~np.isfinite(solved))[0, 1]
-            raise ValueError(
-                f"nonfinite Fisher solve at node {node}, global parameter column {column}"
-            )
-        with np.errstate(over="ignore", invalid="ignore"):
-            _accumulate_fisher(solved, result)
-        if not np.all(np.isfinite(result)):
-            raise ValueError(
-                f"nonfinite Fisher accumulation at node {node}; check derivative magnitudes/units"
-            )
-    return result
+    # Lazy import keeps Numba compilation out of package import. One writable
+    # C-contiguous signature avoids recompiling for sliced or read-only
+    # (prepared, immutable) inputs.
+    from .kernels._compiled_fisher import contract
+
+    matrix, status, node, column = contract(
+        np.require(factors, requirements=("C", "W")),
+        np.require(jacobian, requirements=("C", "W")),
+    )
+    if status != 0:
+        raise ValueError(_CONTRACTION_ERRORS[status].format(node=node, column=column))
+    return np.array(matrix, dtype=np.float64, order="C", copy=True)
 
 
 def fisher_matrix(jacobian, covariance):

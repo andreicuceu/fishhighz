@@ -1,7 +1,8 @@
-"""Numeric-only Cholesky, forward substitution, and Fisher contraction.
+"""Numeric-only Cholesky factorization and forward substitution.
 
 Callers validate shapes and attach numerical-failure context. No models or names
-are accessed; no compilation or automatic parallelism is enabled.
+are accessed; no compilation or automatic parallelism is enabled. The Fisher
+contraction itself is the compiled kernel in ``_compiled_fisher``.
 """
 
 import numpy as np
@@ -52,21 +53,3 @@ def _forward_substitute(lower, rhs, out):
     """
     for row in range(len(lower)):
         out[row] = (rhs[row] - lower[row, :row] @ out[:row]) / lower[row, row]
-
-
-def _accumulate_fisher(solved, out):
-    """Add one cell's whitened-Jacobian contraction to the Fisher matrix.
-
-    Parameters
-    ----------
-    solved : ndarray of shape (n_pair, n_parameter)
-        Whitened Jacobian, in inverse parameter units.
-    out : ndarray of shape (n_parameter, n_parameter)
-        Accumulated Fisher information, in inverse products of parameter units.
-
-    Returns
-    -------
-    None
-        Add solved.T @ solved to out in place, using one matrix temporary.
-    """
-    out += solved.T @ solved

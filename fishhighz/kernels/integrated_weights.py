@@ -29,44 +29,21 @@ accepted. The differences are
   reaches twice its count (which supplies the confirmation record), are
   evaluated exactly.
 
-Two interchangeable backends supply the streaming passes: a chunked NumPy
-implementation (this module, the reference for the compiled one) and a Numba
-implementation in ``_compiled_integrated_weights`` (no fastmath, no parallel
-loops). Select with ``FISHHIGHZ_INTEGRATED_BACKEND`` = ``numba`` (default,
-falling back to NumPy when Numba is unavailable) or ``numpy``.
+The streaming passes over the arrays are the Numba kernels of
+``_compiled_integrated_weights`` (no fastmath, no parallel loops), imported
+lazily. Compiled arithmetic does not trap floating-point underflow; a
+nonfinite full sum raises FloatingPointError, which the recurrence records as
+an arithmetic failure. The final moments of :func:`integrated_moments` remain a
+chunked NumPy reduction that traps underflow.
 """
-
-import os
-from types import SimpleNamespace
 
 import numpy as np
 
 from .full_sum_weights import METRICS, relative_change
 
-# Elements per streaming chunk of the NumPy backend (256 kB per float64 buffer,
-# resident in the L2 cache).
+# Elements per streaming chunk of the final NumPy moments (256 kB per float64
+# buffer, resident in the L2 cache).
 CHUNK = 1 << 15
-
-BACKENDS = ("numpy", "numba")
-
-
-def _max_abs(chunk, buffer):
-    """Return the maximum absolute value of a 1-D chunk without a temporary.
-
-    Parameters
-    ----------
-    chunk : ndarray of shape (n,)
-        Values; n > 0.
-    buffer : ndarray of shape (n,)
-        Scratch array of the same length, overwritten (may be ``chunk``).
-
-    Returns
-    -------
-    value : float
-        max(|chunk|).
-    """
-    np.abs(chunk, out=buffer)
-    return buffer.max()
 
 
 def _moments_chunk(measure, weights, variance, work):
@@ -94,267 +71,113 @@ def _moments_chunk(measure, weights, variance, work):
     return n1, n2, n3
 
 
-def _state_weights(variance, coefficient, out):
-    """Evaluate w = c / (c + v) of one chunk.
-
-    Parameters
-    ----------
-    variance : ndarray of shape (n,)
-        Dimensionless pixel variances.
-    coefficient : float
-        Scalar c of the state.
-    out : ndarray of shape (n,)
-        Receives the weights.
-
-    Raises
-    ------
-    FloatingPointError
-        Under the caller's NumPy error policy (divide, invalid, over).
-    """
-    np.add(variance, coefficient, out=out)
-    np.divide(coefficient, out, out=out)
-
-
-def numpy_moments_pass(measure, variance, coefficient):
-    """Evaluate the moments of the weights w = c / (c + variance), chunked.
-
-    Parameters
-    ----------
-    measure, variance : ndarray of shape (n,)
-        Flattened measure in deg^-2 and dimensionless pixel variance.
-    coefficient : float
-        Scalar c of the state (P1D/pixel for the seed).
-
-    Returns
-    -------
-    n1, n2, n3 : float
-        Full sums of mu w, mu w^2 and mu w^2 v.
-
-    Raises
-    ------
-    FloatingPointError
-        Under the caller's NumPy error policy.
-    """
-    n_total = len(measure)
-    weights = np.empty(min(CHUNK, n_total))
-    work = np.empty_like(weights)
-    n1 = n2 = n3 = 0.0
-    for start in range(0, n_total, CHUNK):
-        stop = min(start + CHUNK, n_total)
-        size = stop - start
-        _state_weights(variance[start:stop], coefficient, weights[:size])
-        a1, a2, a3 = _moments_chunk(
-            measure[start:stop], weights[:size], variance[start:stop], work[:size]
-        )
-        n1, n2, n3 = n1 + a1, n2 + a2, n3 + a3
-    return n1, n2, n3
-
-
-def numpy_step_pass(
-    measure, variance, coefficient_new, coefficient_old, reciprocal_new, reciprocal_old
-):
-    """Evaluate the new state's moments and its change from the previous state.
-
-    Parameters
-    ----------
-    measure, variance : ndarray of shape (n,)
-        Flattened measure in deg^-2 and dimensionless pixel variance.
-    coefficient_new, coefficient_old : float
-        Scalars c of the new and the previous state.
-    reciprocal_new, reciprocal_old : float
-        1 / max(w) of the two states.
-
-    Returns
-    -------
-    n1, n2, n3 : float
-        Full sums of mu w, mu w^2 and mu w^2 v of the new weights.
-    max_difference : float
-        max|w_new - w_old|.
-    max_shape_difference : float
-        max|w_new * reciprocal_new - w_old * reciprocal_old|; see
-        :func:`numpy_difference_pass`.
-
-    Raises
-    ------
-    FloatingPointError
-        Under the caller's NumPy error policy.
-    """
-    n_total = len(measure)
-    new = np.empty(min(CHUNK, n_total))
-    old, work, other = np.empty_like(new), np.empty_like(new), np.empty_like(new)
-    n1 = n2 = n3 = 0.0
-    max_difference = max_shape = 0.0
-    for start in range(0, n_total, CHUNK):
-        stop = min(start + CHUNK, n_total)
-        size = stop - start
-        chunk_new, chunk_old = new[:size], old[:size]
-        _state_weights(variance[start:stop], coefficient_new, chunk_new)
-        _state_weights(variance[start:stop], coefficient_old, chunk_old)
-        a1, a2, a3 = _moments_chunk(
-            measure[start:stop], chunk_new, variance[start:stop], work[:size]
-        )
-        n1, n2, n3 = n1 + a1, n2 + a2, n3 + a3
-        np.subtract(chunk_new, chunk_old, out=work[:size])
-        max_difference = max(max_difference, _max_abs(work[:size], work[:size]))
-        np.multiply(chunk_new, reciprocal_new, out=work[:size])
-        np.multiply(chunk_old, reciprocal_old, out=other[:size])
-        np.subtract(work[:size], other[:size], out=work[:size])
-        max_shape = max(max_shape, _max_abs(work[:size], work[:size]))
-    return n1, n2, n3, max_difference, max_shape
-
-
-def numpy_difference_pass(
-    variance, coefficient_new, coefficient_old, reciprocal_new, reciprocal_old
-):
-    """Evaluate the change between two states of the one-parameter family.
-
-    Parameters
-    ----------
-    variance : ndarray of shape (n,)
-        Flattened dimensionless pixel variance.
-    coefficient_new, coefficient_old : float
-        Scalars c of the two states.
-    reciprocal_new, reciprocal_old : float
-        1 / max(w) of the two states.
-
-    Returns
-    -------
-    max_difference : float
-        max|w_new - w_old|.
-    max_shape_difference : float
-        max|w_new * reciprocal_new - w_old * reciprocal_old|, the change of the
-        amplitude-normalized weights.
-
-    Notes
-    -----
-    The normalization multiplies by the reciprocal amplitude instead of
-    dividing elementwise (the reference ``full_sum_weights.changes`` divides):
-    the two differ by at most one unit in the last place of each normalized
-    weight, i.e. by about 2e-16 in absolute terms against a tolerance of 1e-4,
-    and the multiplication is several times cheaper than a division on the
-    1e7-element arrays of an integrated source.
-    """
-    n_total = len(variance)
-    new = np.empty(min(CHUNK, n_total))
-    old, work = np.empty_like(new), np.empty_like(new)
-    max_difference = max_shape = 0.0
-    for start in range(0, n_total, CHUNK):
-        stop = min(start + CHUNK, n_total)
-        size = stop - start
-        chunk_new, chunk_old = new[:size], old[:size]
-        _state_weights(variance[start:stop], coefficient_new, chunk_new)
-        _state_weights(variance[start:stop], coefficient_old, chunk_old)
-        np.subtract(chunk_new, chunk_old, out=work[:size])
-        max_difference = max(max_difference, _max_abs(work[:size], work[:size]))
-        np.multiply(chunk_new, reciprocal_new, out=chunk_new)
-        np.multiply(chunk_old, reciprocal_old, out=chunk_old)
-        np.subtract(chunk_new, chunk_old, out=work[:size])
-        max_shape = max(max_shape, _max_abs(work[:size], work[:size]))
-    return max_difference, max_shape
-
-
-def numpy_fill_pass(variance, coefficient, out):
-    """Write the weights w = c / (c + variance) of a state, chunked.
-
-    Parameters
-    ----------
-    variance : ndarray of shape (n,)
-        Flattened dimensionless pixel variance.
-    coefficient : float
-        Scalar c of the state.
-    out : ndarray of shape (n,)
-        Receives the weights.
-    """
-    for start in range(0, len(variance), CHUNK):
-        stop = min(start + CHUNK, len(variance))
-        _state_weights(variance[start:stop], coefficient, out[start:stop])
-
-
-NUMPY_BACKEND = SimpleNamespace(
-    name="numpy",
-    moments=numpy_moments_pass,
-    step=numpy_step_pass,
-    difference=numpy_difference_pass,
-    fill=numpy_fill_pass,
-)
-
-
-class _CompiledBackend:
-    """Compiled passes that replay a failed pass through the NumPy reference.
+class _CompiledPasses:
+    """Streaming passes of the recurrence, compiled with Numba.
 
     The compiled kernels cannot raise NumPy floating-point errors; they flag
-    nonfinite sums, and the host then repeats the pass with the NumPy
-    implementation to reproduce the exact exception.
-
-    Parameters
-    ----------
-    module : module
-        ``_compiled_integrated_weights``.
+    nonfinite full sums with a nonzero status, which is raised here as
+    FloatingPointError so that the recurrence records an arithmetic failure.
+    Compiled arithmetic does not trap underflow.
     """
 
-    name = "numba"
+    def __init__(self):
+        """Import the compiled kernels (lazily, keeping Numba out of import)."""
+        from . import _compiled_integrated_weights as module
 
-    def __init__(self, module):
-        """Store the compiled passes."""
         self._module = module
 
     def moments(self, measure, variance, coefficient):
-        """Compiled :func:`numpy_moments_pass` with NumPy replay on failure."""
+        """Return N1, N2, N3 of the weights w = c / (c + v).
+
+        Parameters
+        ----------
+        measure, variance : ndarray of shape (n,)
+            Flattened float64 measure in deg^-2 and dimensionless pixel
+            variance.
+        coefficient : float
+            Scalar c of the state.
+
+        Returns
+        -------
+        n1, n2, n3 : float
+            Full sums of mu w, mu w^2 and mu w^2 v.
+
+        Raises
+        ------
+        FloatingPointError
+            If a full sum is nonfinite.
+        """
         *values, status = self._module.moments_pass(measure, variance, coefficient)
         if status:
-            return numpy_moments_pass(measure, variance, coefficient)
+            raise FloatingPointError(
+                "moments pass: nonfinite full sums N1, N2, N3 of the weights"
+            )
         return tuple(values)
 
     def step(self, measure, variance, *scalars):
-        """Compiled :func:`numpy_step_pass` with NumPy replay on failure."""
+        """Return the new state's moments and its change from the previous state.
+
+        Parameters
+        ----------
+        measure, variance : ndarray of shape (n,)
+            Flattened float64 measure in deg^-2 and dimensionless pixel
+            variance.
+        *scalars : float
+            coefficient_new, coefficient_old, reciprocal_new, reciprocal_old:
+            scalars c of the two states and their 1 / max(w).
+
+        Returns
+        -------
+        n1, n2, n3 : float
+            Full sums of mu w, mu w^2 and mu w^2 v of the new weights.
+        max_difference, max_shape_difference : float
+            max|w_new - w_old| and the maximum change of the amplitude-
+            normalized weights.
+
+        Raises
+        ------
+        FloatingPointError
+            If a full sum of the new state is nonfinite.
+        """
         *values, status = self._module.step_pass(measure, variance, *scalars)
         if status:
-            return numpy_step_pass(measure, variance, *scalars)
+            raise FloatingPointError(
+                "step pass: nonfinite full sums N1, N2, N3 of the updated weights"
+            )
         return tuple(values)
 
     def difference(self, variance, *scalars):
-        """Compiled :func:`numpy_difference_pass`."""
+        """Return max|w_new - w_old| and the maximum normalized-shape change.
+
+        Parameters
+        ----------
+        variance : ndarray of shape (n,)
+            Flattened float64 dimensionless pixel variance.
+        *scalars : float
+            coefficient_new, coefficient_old, reciprocal_new, reciprocal_old.
+
+        Returns
+        -------
+        max_difference, max_shape_difference : float
+            Changes between the two states; the normalization multiplies by
+            the reciprocal amplitude instead of dividing elementwise (a
+            difference of one unit in the last place).
+        """
         return self._module.difference_pass(variance, *scalars)
 
     def fill(self, variance, coefficient, out):
-        """Compiled :func:`numpy_fill_pass`."""
+        """Write the weights w = c / (c + v) of a state into ``out``.
+
+        Parameters
+        ----------
+        variance : ndarray of shape (n,)
+            Flattened float64 dimensionless pixel variance.
+        coefficient : float
+            Scalar c of the state.
+        out : ndarray of shape (n,)
+            Receives the dimensionless weights.
+        """
         self._module.fill_pass(variance, coefficient, out)
-
-
-def select_backend(name=None):
-    """Resolve the streaming-pass backend.
-
-    Parameters
-    ----------
-    name : {'numpy', 'numba'} or None, optional
-        Requested backend; None reads ``FISHHIGHZ_INTEGRATED_BACKEND`` and
-        defaults to ``'numba'``.
-
-    Returns
-    -------
-    backend : object
-        Object with ``moments``, ``step``, ``difference`` and ``fill`` passes.
-        Numba is used only when it imports and the NumPy underflow policy is
-        'ignore' (compiled arithmetic cannot trap underflow); otherwise the
-        NumPy backend is returned.
-
-    Raises
-    ------
-    ValueError
-        If the requested backend name is unknown.
-    """
-    if name is None:
-        name = os.environ.get("FISHHIGHZ_INTEGRATED_BACKEND", "numba")
-    if name not in BACKENDS:
-        raise ValueError("FISHHIGHZ_INTEGRATED_BACKEND must be numpy or numba")
-    if name == "numba" and np.geterr()["under"] == "ignore":
-        try:
-            from . import _compiled_integrated_weights as module
-        except ImportError:
-            # The NumPy-only installation stays executable.
-            return NUMPY_BACKEND
-        return _CompiledBackend(module)
-    return NUMPY_BACKEND
 
 
 def coefficients_from_moments(n1, n2, n3, pixel):
@@ -513,9 +336,7 @@ def _update_coefficient(first_moment, pixel, signal, alias):
     return coefficient
 
 
-def fixed_weights_integrated(
-    measure, variance, *, pixel, signal, alias, updates, backend=None
-):
+def fixed_weights_integrated(measure, variance, *, pixel, signal, alias, updates):
     """Return the weights after a prescribed number of updates from the seed.
 
     Parameters
@@ -531,8 +352,6 @@ def fixed_weights_integrated(
         Reference B in km/s.
     updates : int
         Nonnegative number of updates after the seed.
-    backend : {'numpy', 'numba'} or None, optional
-        See :func:`select_backend`.
 
     Returns
     -------
@@ -550,7 +369,7 @@ def fixed_weights_integrated(
     """
     if isinstance(updates, bool) or not isinstance(updates, int) or updates < 0:
         raise ValueError("updates must be a nonnegative integer")
-    passes = select_backend(backend)
+    passes = _CompiledPasses()
     with np.errstate(divide="raise", invalid="raise", over="raise"):
         coefficient = alias / pixel
         for _ in range(updates):
@@ -618,8 +437,8 @@ def _run(measure, variance, pixel, signal, alias, controls, passes, result):
         Pixel width, S and B.
     controls : tuple
         (rtol, min_updates, stable_steps, max_updates).
-    passes : object
-        Streaming-pass backend.
+    passes : _CompiledPasses
+        Streaming passes over the arrays.
     result : dict
         Convergence record, updated in place; its 'weights' entry is left
         unset.
@@ -748,7 +567,6 @@ def solve_integrated(
     min_updates=3,
     stable_steps=3,
     max_updates=96,
-    backend=None,
 ):
     """Iterate the 'sum_historical' recurrence to confirmed convergence.
 
@@ -773,8 +591,6 @@ def solve_integrated(
         Positive tolerance for all five relative-change metrics.
     min_updates, stable_steps, max_updates : int
         Update controls as in the reference solver.
-    backend : {'numpy', 'numba'} or None, optional
-        See :func:`select_backend`.
 
     Returns
     -------
@@ -812,7 +628,7 @@ def solve_integrated(
         )
         return result
 
-    passes = select_backend(backend)
+    passes = _CompiledPasses()
     controls = (rtol, min_updates, stable_steps, max_updates)
     state = _run(measure, variance, pixel, signal, alias, controls, passes, result)
     if state is not None:

@@ -4,7 +4,6 @@ Cumulative formulas adapted from lyaforecast/weights.py, GPLv3, implementing
 McDonald & Eisenstein (2007). No raw assets or normalization policies are copied.
 """
 
-import os
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -794,7 +793,6 @@ def prepare_integrated_forest_weights(
     signal=None,
     alias=None,
     iterations=None,
-    backend=None,
 ):
     """Prepare early-lyaforecast weights for a source integrated in z_q and pixel.
 
@@ -833,18 +831,6 @@ def prepare_integrated_forest_weights(
     iterations : int, optional
         Nonnegative fixed update count. Default None requests adaptive stopping
         with confirmed convergence.
-    backend : {'reference', 'numpy', 'numba'}, optional
-        Implementation of the recurrence. Default None reads
-        ``FISHHIGHZ_INTEGRATED_BACKEND`` and falls back to 'numba' (which
-        itself falls back to 'numpy' when Numba is unavailable). 'reference'
-        runs the central kernels ``full_sum_weights.solve``/``fixed_weights``
-        unchanged on the flattened arrays; 'numpy' and 'numba' run the
-        dedicated streaming recurrence of ``kernels.integrated_weights``, which
-        reproduces it to floating-point summation order (relative 1e-12) with
-        identical update counts and stopping decisions, except when ``rtol``
-        coincides with a stopping metric to within its rounding (~1e-16
-        absolute), where the backends may stop at a different state that is
-        still within ``rtol``.
 
     Returns
     -------
@@ -871,13 +857,15 @@ def prepare_integrated_forest_weights(
     summation. Arrays are flattened explicitly (C order, as views) and weights
     are reshaped afterwards.
 
-    The default backends run the dedicated streaming recurrence of
+    The recurrence is the dedicated compiled streaming implementation of
     ``kernels.integrated_weights``, which reproduces the central kernel
-    (same update count, candidate, stopping decisions and record keys) with
-    full sums that are more accurate than the central kernel's cumulative
-    prefix sums (about 1e-16 against n*eps relative, i.e. up to about 1e-12
-    at the 1e7 nodes of a production source); ``backend='reference'`` runs the
-    central kernels themselves.
+    ``full_sum_weights.solve``/``fixed_weights`` (same update count, candidate,
+    stopping decisions and record keys, except when ``rtol`` coincides with a
+    stopping metric to within its rounding, ~1e-16 absolute) with full sums
+    that are more accurate than the central kernel's cumulative prefix sums
+    (about 1e-16 against n*eps relative, i.e. up to about 1e-12 at the 1e7
+    nodes of a production source). Compiled arithmetic does not trap
+    floating-point underflow.
     """
     if method != "early_lyaforecast":
         raise ValueError(
@@ -923,42 +911,13 @@ def prepare_integrated_forest_weights(
         signal, alias = auxiliary.signal, auxiliary.alias
     signal, alias = _positive(signal, "S"), _positive(alias, "B")
 
-    if backend is None:
-        backend = os.environ.get("FISHHIGHZ_INTEGRATED_BACKEND", "numba")
-    if backend not in ("reference", "numpy", "numba"):
-        raise ValueError(
-            "FISHHIGHZ_INTEGRATED_BACKEND must be reference, numpy or numba"
-        )
-
     # Explicit C-order flattening (views; the validated arrays are contiguous).
     flat_measure = measure.reshape(-1)
     flat_variance = pixel_variance.reshape(-1)
 
     try:
         with np.errstate(over="raise", invalid="raise", divide="raise", under="ignore"):
-            if backend == "reference":
-                # Central kernels, unchanged, on the flattened arrays.
-                inputs = SimpleNamespace(
-                    density=flat_measure,
-                    quadrature=np.ones_like(flat_measure),
-                    variance=flat_variance,
-                    length=1.0,  # N1 already carries the forest length
-                    pixel=pixel,
-                    signal=signal,
-                    p1d=alias,
-                )
-                if iterations is None:
-                    solution = solve(
-                        inputs,
-                        METHODS[method],
-                        rtol=rtol,
-                        min_updates=min_updates,
-                        stable_steps=stable_steps,
-                        max_updates=max_updates,
-                    )
-                else:
-                    flat_weights = fixed_weights(inputs, METHODS[method], iterations)
-            elif iterations is None:
+            if iterations is None:
                 solution = solve_integrated(
                     flat_measure,
                     flat_variance,
@@ -969,7 +928,6 @@ def prepare_integrated_forest_weights(
                     min_updates=min_updates,
                     stable_steps=stable_steps,
                     max_updates=max_updates,
-                    backend=backend,
                 )
             else:
                 flat_weights = fixed_weights_integrated(
@@ -979,7 +937,6 @@ def prepare_integrated_forest_weights(
                     signal=signal,
                     alias=alias,
                     updates=iterations,
-                    backend=backend,
                 )
 
             if iterations is None:
@@ -994,27 +951,13 @@ def prepare_integrated_forest_weights(
                 convergence = dict(status="fixed_count", updates=iterations)
 
             # Normalize moments only after the weights have been determined.
-            if backend == "reference":
-                (
-                    first_moment,
-                    second_moment,
-                    noise_moment,
-                    aliasing_coefficient,
-                    pixel_power,
-                ) = _integrals(flat_measure, flat_weights, flat_variance, 1.0, pixel)
-                total_first, total_second, total_noise = (
-                    first_moment[-1],
-                    second_moment[-1],
-                    noise_moment[-1],
-                )
-            else:
-                (
-                    total_first,
-                    total_second,
-                    total_noise,
-                    aliasing_coefficient,
-                    pixel_power,
-                ) = integrated_moments(flat_measure, flat_weights, flat_variance, pixel)
+            (
+                total_first,
+                total_second,
+                total_noise,
+                aliasing_coefficient,
+                pixel_power,
+            ) = integrated_moments(flat_measure, flat_weights, flat_variance, pixel)
             if (
                 not np.isfinite(aliasing_coefficient)
                 or aliasing_coefficient <= 0

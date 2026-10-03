@@ -299,6 +299,34 @@ def test_zero_columns_and_nonfinite_arithmetic():
         fisher_from_factors([[[1e154]], [[1e154]]], [[[1.0]], [[1.0]]])
 
 
+def test_contraction_diagnostics_report_first_failing_node_and_column():
+    """Check node, column and per-node check order of contraction errors."""
+    factors = np.tile(np.eye(2), (3, 1, 1))
+    jacobian = np.ones((3, 2, 3))
+
+    bad_jacobian = jacobian.copy()
+    bad_jacobian[2, 1, 1] = np.inf
+    with pytest.raises(ValueError, match=r"^jacobian node 2 must be finite$"):
+        fisher_from_factors(bad_jacobian, factors)
+
+    # A nonfinite factor entry is reported before a nonfinite Jacobian entry
+    # and before the triangular-structure check of the same node.
+    bad_factors = factors.copy()
+    bad_factors[1, 1, 1] = np.nan
+    bad_factors[1, 0, 1] = 1.0
+    with pytest.raises(ValueError, match=r"^factors node 1 must be finite$"):
+        fisher_from_factors(bad_jacobian, bad_factors)
+
+    # The first nonfinite whitened entry is reported in (pair, parameter) order.
+    # Column 0 of the second pair is 0 / 1e-320 = 0; column 1 overflows.
+    tiny = factors.copy()
+    tiny[1, 1, 1] = 1e-320
+    partial = jacobian.copy()
+    partial[1, 1, 0] = 0.0
+    with pytest.raises(ValueError, match="solve at node 1, global parameter column 1"):
+        fisher_from_factors(partial, tiny)
+
+
 def test_integer_inputs_normalize_to_float64():
     """Check integer inputs normalize to float64."""
     factors = factor_covariance([[[4, 0], [0, 9]]])

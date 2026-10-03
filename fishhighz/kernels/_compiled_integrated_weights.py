@@ -1,4 +1,4 @@
-"""Optional compiled streaming passes of the integrated-source weight recurrence.
+"""Compiled streaming passes of the integrated-source weight recurrence.
 
 Every state of the 'sum_historical' recurrence is the one-parameter family
 w = c / (c + v) of the pixel variances v, so the passes below take the scalar c
@@ -9,10 +9,11 @@ without reductions, which LLVM vectorizes (``error_model='numpy'`` removes the
 Python division-by-zero branch), and the sums are accumulated block-wise
 (partial sums of one block added to the running total), mirroring the
 pairwise-like NumPy reductions. No fastmath and no parallel loops; every
-elementwise operation is the IEEE operation of the NumPy reference in
-``integrated_weights``. The kernels cannot raise NumPy floating-point errors;
-they return a nonzero status for nonfinite sums and the host replays the pass
-through the NumPy reference.
+elementwise operation is the IEEE operation w = c / (v + c) followed by the
+sequential products of ``kernels.weights._integrals``. The kernels cannot raise
+NumPy floating-point errors and do not trap underflow; they return a nonzero
+status for nonfinite sums, which the host in ``integrated_weights`` raises as
+FloatingPointError.
 """
 
 import numpy as np
@@ -139,8 +140,9 @@ def difference_pass(
         max|w_new - w_old|.
     max_shape_difference : float
         max|w_new * reciprocal_new - w_old * reciprocal_old|, the change of the
-        amplitude-normalized weights (the reference divides by the amplitude;
-        see ``integrated_weights.numpy_difference_pass``).
+        amplitude-normalized weights (the central
+        ``full_sum_weights.changes`` divides by the amplitude instead; the two
+        differ by at most one unit in the last place).
     """
     n_total = variance.shape[0]
     new = np.empty(BLOCK)

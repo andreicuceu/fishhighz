@@ -237,35 +237,3 @@ def test_inactive_columns_are_exactly_zero_and_joint_matches_direct_solve():
     jac = np.stack(jac, axis=-1)
     direct = np.einsum("nsi,nsj->ij", jac, np.linalg.solve(covariance, jac))
     np.testing.assert_allclose(data[np.ix_([0, 2], [0, 2])], direct, rtol=1e-7)
-
-
-@pytest.mark.parametrize("nodes", [1, 7, 300])
-def test_one_spectrum_numpy_contraction_matches_reference_loop(nodes, monkeypatch):
-    """Check one spectrum numpy contraction matches reference loop.
-
-    Parameters
-    ----------
-    nodes : int
-        Evaluation nodes, supplied by pytest parametrization.
-    monkeypatch : pytest.MonkeyPatch
-        Fixture that restores patched callables, attributes, and environment
-        variables after the test.
-    """
-    from fishhighz.fisher import factor_covariance, fisher_from_factors
-
-    monkeypatch.setenv("FISHHIGHZ_FISHER_BACKEND", "numpy")
-    rng = np.random.default_rng(nodes)
-    factors = factor_covariance(rng.uniform(0.1, 10, (nodes, 1, 1)))
-    jac = rng.normal(size=(nodes, 1, 3)) * np.geomspace(1e-3, 1e3, 3)
-    fast = fisher_from_factors(jac, factors)
-    with np.errstate(under="warn"):  # selects the reference node loop
-        loop = fisher_from_factors(jac, factors)
-    np.testing.assert_array_equal(fast, loop)
-    bad = jac.copy()
-    bad[-1, 0, 1] = np.inf
-    messages = []
-    for policy in ("ignore", "warn"):
-        with np.errstate(under=policy), pytest.raises(ValueError) as error:
-            fisher_from_factors(bad, factors)
-        messages.append(str(error.value))
-    assert messages[0] == messages[1]
