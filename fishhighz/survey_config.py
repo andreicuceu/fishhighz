@@ -386,6 +386,53 @@ def _density_partition(density_interpolation):
     return DENSITY_INTERPOLATION_POLICIES[density_interpolation][1]
 
 
+# Historical prescription revision and its quadratic-spline density policies,
+# removed from FishHighz. They are recognized only to explain the rejection.
+_REMOVED_REVISION = "early-lyaforecast-2026-09-18"
+_REMOVED_DENSITY_POLICIES = {
+    "density_interpolation": "RectBivariateSpline_kx2_ky2_s0",
+    "magnitude_partition": "density_knots_support_snr_nodes_negative_roots",
+}
+
+
+def _reject_removed_policies(parser):
+    """Reject the removed historical revision and spline density policies.
+
+    Parameters
+    ----------
+    parser : configparser.ConfigParser
+        Native survey INI as written, before default expansion.
+
+    Returns
+    -------
+    None
+        No value is returned.
+
+    Raises
+    ------
+    ValueError
+        If ``[prescription] revision`` names the removed historical revision, or
+        ``[input policies]`` selects the removed quadratic-spline density
+        interpolation or its magnitude partition.
+    """
+    if parser.get("prescription", "revision", fallback=None) == _REMOVED_REVISION:
+        raise ValueError(
+            f"[prescription] revision={_REMOVED_REVISION!r} has been removed from "
+            "FishHighz together with its quadratic-spline source-density "
+            f"interpolation; use {NATIVE_REVISION!r} (piecewise-constant cells) "
+            "or omit the revision"
+        )
+    for key, value in _REMOVED_DENSITY_POLICIES.items():
+        if parser.get("input policies", key, fallback=None) == value:
+            raise ValueError(
+                f"[input policies] {key}={value!r} has been removed from FishHighz: "
+                "the quadratic-spline source-density interpolation is no longer "
+                "supported; use the piecewise-constant cell policies "
+                "density_interpolation = piecewise_constant_cells and "
+                "magnitude_partition = density_cell_edges_support_snr_nodes"
+            )
+
+
 _INTEGRATION_MODES = ("central", "integrated")
 _INTEGRATION_NUMERICAL_KEYS = tuple(INTEGRATED_DEFAULTS)
 _INTEGRATION_FIELD_KEYS = ("min_zq_forest", "max_zq_forest")
@@ -613,7 +660,7 @@ def parse_survey_ini(source=None):
 
     Notes
     -----
-    The parser expands the selected accuracy prescription and checks supported model, input and numerical conventions. The ``[prescription] revision`` (default ``early-lyaforecast-2026-10-01``; the historical ``early-lyaforecast-2026-09-18`` is also accepted) sets the default source-density interpolation: piecewise-constant cells for the native revision, the quadratic ``RectBivariateSpline_kx2_ky2_s0`` for the historical one. An explicit ``[input policies] density_interpolation`` overrides it, and the revision and effective policies are recorded in the provenance. It reads no survey tables and invokes no CAMB calculation.
+    The parser expands the selected accuracy prescription and checks supported model, input and numerical conventions. The ``[prescription] revision`` defaults to ``early-lyaforecast-2026-10-01``, whose source densities are piecewise constant on the tabulated cells; the revision and effective policies are recorded in the provenance. The removed historical revision and its quadratic-spline density policies raise ValueError. It reads no survey tables and invokes no CAMB calculation.
 
     The opt-in integrated forest-source mode (``[input policies]
     forest_source_integration = integrated``, or ``[prescription] revision =
@@ -626,14 +673,8 @@ def parse_survey_ini(source=None):
 
     parser, path, source_identity = _read_parser(source)
     if "schema" not in parser:
-        legacy = "cosmo" in parser or any(s.startswith("tracer") for s in parser)
-        detail = (
-            "lyaforecast INI schema is unsupported"
-            if legacy
-            else "missing [schema] section"
-        )
         raise UnsupportedSchemaError(
-            f"unsupported FishHighz INI schema: {detail}; expected "
+            "unsupported FishHighz INI schema: missing [schema] section; expected "
             f"[{SCHEMA_NAME}] version {SCHEMA_VERSION}"
         )
     _section_options(parser, "schema", ("name", "version"), ("name", "version"))
@@ -696,6 +737,7 @@ def parse_survey_ini(source=None):
     # Integrated forest-source keys are resolved first and removed, so the
     # remaining validation and the recorded mappings are those of the central
     # mode unless the integrated mode was requested.
+    _reject_removed_policies(parser)
     integration_request = _pop_integration_keys(parser)
     integrated, resolved_revision = _resolve_integration_mode(
         integration_request,
@@ -731,10 +773,9 @@ def parse_survey_ini(source=None):
                     parser[section][key] = value
         policies = parser["input policies"]
 
-        # The revision fixes the default source-density treatment: the native
-        # revision uses piecewise-constant cells, the historical revision the
-        # quadratic spline. An explicit [input policies] entry overrides it and
-        # is recorded with the other effective policies. Unknown values are
+        # The revision fixes the default source-density treatment
+        # (piecewise-constant cells); an explicit [input policies] entry is
+        # recorded with the other effective policies. Unknown values are
         # rejected here and mismatched interpolation/partition pairs below,
         # which also covers INIs without a [prescription] section.
         if "density_interpolation" not in policies:
@@ -1037,15 +1078,6 @@ def parse_survey_ini(source=None):
             )
     density_interpolation = parser["input policies"]["density_interpolation"]
     partition = _density_partition(density_interpolation)
-    if (
-        integrated
-        and DENSITY_INTERPOLATION_POLICIES[density_interpolation][0]
-        != "piecewise_constant"
-    ):
-        raise ValueError(
-            "the integrated forest-source mode requires piecewise-constant density "
-            f"cells, not density_interpolation={density_interpolation!r}"
-        )
     if parser["input policies"]["magnitude_partition"] != partition:
         raise ValueError(
             f"[input policies] magnitude_partition="
@@ -1432,7 +1464,7 @@ def parse_ini(source=None):
 
     Notes
     -----
-    The parser expands the selected accuracy prescription and checks supported model, input and numerical conventions. The ``[prescription] revision`` (default ``early-lyaforecast-2026-10-01``; the historical ``early-lyaforecast-2026-09-18`` is also accepted) sets the default source-density interpolation: piecewise-constant cells for the native revision, the quadratic ``RectBivariateSpline_kx2_ky2_s0`` for the historical one. An explicit ``[input policies] density_interpolation`` overrides it, and the revision and effective policies are recorded in the provenance. It reads no survey tables and invokes no CAMB calculation.
+    The parser expands the selected accuracy prescription and checks supported model, input and numerical conventions. The ``[prescription] revision`` defaults to ``early-lyaforecast-2026-10-01``, whose source densities are piecewise constant on the tabulated cells; the revision and effective policies are recorded in the provenance. The removed historical revision and its quadratic-spline density policies raise ValueError. It reads no survey tables and invokes no CAMB calculation.
     """
 
     return parse_survey_ini(source)
@@ -1545,15 +1577,15 @@ def _grid_result(result):
     Parameters
     ----------
     result : mapping or array_like
-        Legacy adapters return a mapping with ``values`` and ``provenance``;
-        strict readers return the array itself.
+        SourceDensity/ForestSNR return a mapping with ``values`` and
+        ``provenance``; other readers may return the array itself.
 
     Returns
     -------
     values : ndarray
         Query values.
     provenance : dict
-        Adapter provenance (empty for strict readers).
+        Sampler provenance (empty for plain array results).
     """
     if hasattr(result, "items"):
         return np.asarray(result["values"]), dict(result["provenance"])
@@ -1583,7 +1615,7 @@ def _integrated_zq_limits(item, density, limits):
     Raises
     ------
     ValueError
-        If the density has no redshift cell edges (spline density) or the
+        If the density exposes no redshift cell edges (an injected reader) or the
         limits leave an empty interval.
     """
     edges = getattr(getattr(density, "reader", density), "z_edges", None)
@@ -1886,7 +1918,7 @@ def _require_finite_scalar(value, name, *, positive=False):
 
 
 def _build_readers(config, fields, stack):
-    """Build density and SNR adapters from materialized resources.
+    """Build source-density and forest-SNR samplers from materialized resources.
 
     Parameters
     ----------
@@ -1900,20 +1932,21 @@ def _build_readers(config, fields, stack):
     Returns
     -------
     readers : dict
-        Density/SNR adapters keyed by observed-field ID.
+        Per observed-field ID, ``density`` (SourceDensity) and ``snr``
+        (ForestSNR for forests, else None).
 
     Raises
     ------
     ValueError
-        If reader data or the density policy is unsupported.
+        If the survey tables are invalid.
 
     Notes
     -----
-    Reads configured survey tables and constructs interpolation objects with the adopted explicit compatibility policies.
+    Reads the configured survey tables (survey_tables.DensityTable and
+    SNRTable) and wraps them with the adopted lyaforecast boundary conventions.
     """
 
-    from .adapters.legacy_compat import LegacyDensity, LegacySNR
-    from .adapters.legacy_inputs import DensityReader, SNRReader
+    from .survey_tables import DensityTable, ForestSNR, SNRTable, SourceDensity
 
     result = {}
     policy = config.input_policies
@@ -1921,7 +1954,7 @@ def _build_readers(config, fields, stack):
         kind, density_path = _resolve_resource(field.density, config)
         if kind == "package":
             density_path = stack.enter_context(bundled_path(density_path))
-        density_reader = DensityReader(
+        density_table = DensityTable(
             density_path,
             semantics=policy["density_semantics"],
             target_density=field.target_density,
@@ -1929,24 +1962,18 @@ def _build_readers(config, fields, stack):
             magnitude_bounds=field.magnitude_bounds,
             width_policy=policy["density_width_policy"],
             label=field.observed.id,
-            interpolation=DENSITY_INTERPOLATION_POLICIES[
-                policy["density_interpolation"]
-            ][0],
         )
-        if policy["density_negative_policy"] == "floor_negative":
-            density = LegacyDensity(density_reader, "floor_negative")
-        elif policy["density_negative_policy"] == "reject":
-            density = LegacyDensity(density_reader, "reject")
-        else:
-            raise ValueError("unsupported density_negative_policy")
+        # The parser admits only density_negative_policy = floor_negative, which
+        # SourceDensity records; cell densities are never negative.
+        density = SourceDensity(density_table)
         snr = None
         if field.observed.kind == "forest":
             kind, snr_path = _resolve_resource(field.snr, config)
             paths = sorted(Path(snr_path).glob("*.dat")) if kind == "external" else None
             if kind == "package":
                 paths = stack.enter_context(bundled_paths(snr_path))
-            snr = LegacySNR(
-                SNRReader(
+            snr = ForestSNR(
+                SNRTable(
                     paths, smoothing=policy["snr_smoothing"], label=field.observed.id
                 )
             )
@@ -1971,7 +1998,7 @@ def _normalise_readers(config, fields, readers, stack):
     Returns
     -------
     normalized : dict
-        Per-field dictionaries containing density and snr adapters.
+        Per-field dictionaries containing density and snr samplers.
 
     Raises
     ------
@@ -2008,7 +2035,7 @@ def prepare_survey(config, *, background, template, readers=None, prepare=False)
     template : object
         Prepared smooth/wiggle template with z_ref and h_fid metadata.
     readers : mapping or None, optional
-        Density/SNR adapters keyed by field ID; None loads the configured
+        Density/SNR samplers keyed by field ID; None loads the configured
         resources.
     prepare : bool, optional
         Reserved preparation flag; only the default False is accepted.
@@ -2290,9 +2317,8 @@ def prepare_survey(config, *, background, template, readers=None, prepare=False)
             }
 
             # Central mode: forest density and SNR use the representative
-            # background-source redshift. Integrated mode keeps it only for the
-            # (unchanged) magnitude partition and integrates the forest sources
-            # inside the bin below.
+            # background-source redshift. Integrated mode integrates the forest
+            # sources inside the bin below instead.
             z_sources = {
                 item.observed.id: (
                     wavelength
@@ -2305,9 +2331,7 @@ def prepare_survey(config, *, background, template, readers=None, prepare=False)
             }
             magnitude_min = float(config.survey["min_band_mag"])
             magnitude_max = float(config.survey["max_band_mag"])
-            partition = breakpoints(
-                densities, snrs, z_sources, magnitude_min, magnitude_max
-            )
+            partition = breakpoints(densities, snrs, magnitude_min, magnitude_max)
             magnitudes, quadrature = composite(
                 partition, int(config.numerical["magnitude_order"])
             )
@@ -2486,7 +2510,7 @@ def prepare_ini(source=None, *, background, template, readers=None):
     template : object
         Prepared smooth/wiggle template with z_ref and h_fid metadata.
     readers : mapping or None, optional
-        Density/SNR adapters keyed by field ID; None loads the configured
+        Density/SNR samplers keyed by field ID; None loads the configured
         resources.
 
     Returns

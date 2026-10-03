@@ -383,7 +383,7 @@ def _object_identity(value, source):
     Parameters
     ----------
     value : object
-        Prepared background, template or raw-input adapter.
+        Prepared background, template or survey-table sampler.
     source : str
         Provenance label identifying configured or injected inputs.
 
@@ -414,7 +414,7 @@ def _reader_identity(config, readers, source):
     config : SurveyConfig
         Parsed native survey configuration.
     readers : mapping
-        Density/SNR adapters keyed by observed-field ID.
+        Density/SNR samplers keyed by observed-field ID.
     source : str
         Provenance label for configured or injected readers.
 

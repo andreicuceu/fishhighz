@@ -74,7 +74,7 @@ def test_bundled_reader_policies_match_accuracy_example():
 
 
 def test_legacy_ini_is_not_translated(tmp_path):
-    """Check legacy ini is not translated.
+    """Check a lyaforecast-format INI raises the generic schema error.
 
     Parameters
     ----------
@@ -84,7 +84,7 @@ def test_legacy_ini_is_not_translated(tmp_path):
     """
     legacy = tmp_path / "legacy.ini"
     legacy.write_text("[cosmo]\nfilename = Planck18.ini\n[tracer 1]\ntracer = qso\n")
-    with pytest.raises(fishhighz.UnsupportedSchemaError, match="lyaforecast INI"):
+    with pytest.raises(fishhighz.UnsupportedSchemaError, match=r"missing \[schema\]"):
         fishhighz.parse_survey_ini(legacy)
 
 
@@ -262,7 +262,7 @@ class _SNR:
         Parameters
         ----------
         **kwargs : dict
-            Sampling keywords from SNRReader, including magnitudes of shape
+            Sampling keywords from SNRTable, including magnitudes of shape
             (n_magnitudes,), source redshift, wavelength in Angstrom, pixel width in
             Angstrom, and exposure count.
 
@@ -572,29 +572,18 @@ def _write_modified_ini(tmp_path, changes, *, expanded=False):
     return fishhighz.parse_survey_ini(path)
 
 
-def test_named_prescription_matches_original_expanded_ini(tmp_path):
-    """Check named prescription matches original expanded ini.
-
-    Parameters
-    ----------
-    tmp_path : pathlib.Path
-        Isolated temporary directory supplied by pytest; generated test files
-        are written here.
+def test_named_prescription_matches_original_expanded_ini():
+    """Check the compact prescription expands to the explicitly expanded INI.
 
     Notes
     -----
-    The original expanded INI records the legacy spline density policies. The
-    compact default differs only by the piecewise-constant density pair, and
-    selecting the spline explicitly restores the original expansion.
+    The expanded INI states the piecewise-constant density pair explicitly; it
+    has no [prescription] section, so only the compact INI records a revision.
     """
     from fishhighz.accuracy import NATIVE_REVISION
 
     compact = fishhighz.parse_survey_ini()
     original = fishhighz.parse_survey_ini("tests/data/desi2_accuracy_expanded.ini")
-    legacy = _write_modified_ini(
-        tmp_path,
-        {"input policies": {"density_interpolation": "RectBivariateSpline_kx2_ky2_s0"}},
-    )
     for name in (
         "cosmology",
         "survey",
@@ -604,23 +593,11 @@ def test_named_prescription_matches_original_expanded_ini(tmp_path):
         "fields",
         "bins",
     ):
-        if name != "input_policies":
-            assert getattr(compact, name) == getattr(original, name)
-        assert getattr(legacy, name) == getattr(original, name)
-    density_pair = ("density_interpolation", "magnitude_partition")
-    assert {
-        key: value
-        for key, value in compact.input_policies.items()
-        if key not in density_pair
-    } == {
-        key: value
-        for key, value in original.input_policies.items()
-        if key not in density_pair
-    }
-    assert [compact.input_policies[key] for key in density_pair] == [
-        "piecewise_constant_cells",
-        "density_cell_edges_support_snr_nodes",
-    ]
+        assert getattr(compact, name) == getattr(original, name)
+    assert [
+        compact.input_policies[key]
+        for key in ("density_interpolation", "magnitude_partition")
+    ] == ["piecewise_constant_cells", "density_cell_edges_support_snr_nodes"]
     assert compact.provenance["prescription"] == {
         "name": "accuracy",
         "revision": NATIVE_REVISION,
@@ -629,32 +606,19 @@ def test_named_prescription_matches_original_expanded_ini(tmp_path):
 
 
 def test_revision_selects_default_density_treatment(tmp_path):
-    """Check the prescription revision fixes the default density interpolation.
+    """Check the native revision fixes the density cells and others are rejected.
 
     Parameters
     ----------
     tmp_path : pathlib.Path
         Isolated temporary directory supplied by pytest; generated test files
         are written here.
-
-    Notes
-    -----
-    The native revision defaults to the piecewise-constant pair and the
-    historical revision to the quadratic-spline pair, which reproduces the
-    explicitly expanded historical INI. An explicit ``[input policies]`` entry
-    overrides either default and is recorded; unknown revisions and mismatched
-    interpolation/partition pairs are rejected.
     """
-    from fishhighz.accuracy import NATIVE_REVISION, REVISION
+    from fishhighz.accuracy import NATIVE_REVISION
 
     assert NATIVE_REVISION == "early-lyaforecast-2026-10-01"
-    assert REVISION == "early-lyaforecast-2026-09-18"
     density_pair = ("density_interpolation", "magnitude_partition")
     cells = ("piecewise_constant_cells", "density_cell_edges_support_snr_nodes")
-    spline = (
-        "RectBivariateSpline_kx2_ky2_s0",
-        "density_knots_support_snr_nodes_negative_roots",
-    )
 
     # Omitted revision and explicit native revision are identical.
     default = fishhighz.parse_survey_ini()
@@ -666,54 +630,42 @@ def test_revision_selects_default_density_treatment(tmp_path):
         assert config.provenance["prescription"]["revision"] == NATIVE_REVISION
     assert native.input_policies == default.input_policies
 
-    # Historical revision: spline pair, historical identity, and the expanded
-    # historical INI is reproduced in every section.
-    historical = _write_modified_ini(tmp_path, {"prescription": {"revision": REVISION}})
-    original = fishhighz.parse_survey_ini("tests/data/desi2_accuracy_expanded.ini")
-    assert tuple(historical.input_policies[key] for key in density_pair) == spline
-    assert historical.provenance["prescription"] == {
-        "name": "accuracy",
-        "revision": REVISION,
-    }
-    for name in (
-        "cosmology",
-        "survey",
-        "model",
-        "input_policies",
-        "numerical",
-        "fields",
-        "bins",
-    ):
-        assert getattr(historical, name) == getattr(original, name)
-
-    # Explicit overrides win over either revision default and are recorded.
-    for revision, override, pair in (
-        (NATIVE_REVISION, "RectBivariateSpline_kx2_ky2_s0", spline),
-        (REVISION, "piecewise_constant_cells", cells),
-    ):
-        config = _write_modified_ini(
-            tmp_path,
-            {
-                "prescription": {"revision": revision},
-                "input policies": {"density_interpolation": override},
-            },
-        )
-        assert tuple(config.input_policies[key] for key in density_pair) == pair
-        assert config.provenance["prescription"]["revision"] == revision
-
-    # Unknown revisions and mismatched pairs are rejected for both revisions.
+    # Unknown revisions and mismatched pairs are rejected.
     with pytest.raises(ValueError, match="unsupported revision"):
         _write_modified_ini(tmp_path, {"prescription": {"revision": "future"}})
-    mismatched_partition = {NATIVE_REVISION: spline[1], REVISION: cells[1]}
-    for revision, partition in mismatched_partition.items():
-        with pytest.raises(ValueError, match="inconsistent"):
-            _write_modified_ini(
-                tmp_path,
-                {
-                    "prescription": {"revision": revision},
-                    "input policies": {"magnitude_partition": partition},
-                },
-            )
+    with pytest.raises(ValueError, match="inconsistent"):
+        _write_modified_ini(
+            tmp_path, {"input policies": {"magnitude_partition": "density_cells"}}
+        )
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"prescription": {"revision": "early-lyaforecast-2026-09-18"}},
+        {"input policies": {"density_interpolation": "RectBivariateSpline_kx2_ky2_s0"}},
+        {
+            "input policies": {
+                "magnitude_partition": "density_knots_support_snr_nodes_negative_roots"
+            }
+        },
+    ],
+    ids=["revision", "density_interpolation", "magnitude_partition"],
+)
+def test_removed_historical_revision_and_spline_rejected(tmp_path, changes):
+    """The removed historical revision and spline policies raise ValueError.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Isolated temporary directory supplied by pytest; generated test files
+        are written here.
+    changes : dict
+        Section-to-option mapping selecting a removed value, supplied by pytest
+        parametrization.
+    """
+    with pytest.raises(ValueError, match="has been removed"):
+        _write_modified_ini(tmp_path, changes)
 
 
 @pytest.mark.parametrize(

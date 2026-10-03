@@ -193,7 +193,7 @@ class BinSpec:
 
 @dataclass(frozen=True)
 class PreparedBin:
-    """Fixed owned numerical state; no raw adapters or file handles.
+    """Fixed owned numerical state; no survey-table objects or file handles.
 
     ``weights`` maps active forest IDs to their immutable ForestWeights,
     including convergence metadata. ``diagnostics`` records pair counts/order,

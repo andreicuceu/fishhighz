@@ -28,11 +28,7 @@ import numpy as np
 from ._arrays import immutable_float_array, integer, readonly, real_array
 from .geometry import SPEED_LIGHT_KMS
 from .magnitude import composite
-
-# Floor of the legacy density adapter (adapters.legacy_compat.DENSITY_FLOOR).
-# Duplicated here to keep this module free of adapter and survey imports; a test
-# asserts that the two values agree.
-LEGACY_DENSITY_FLOOR = 1e-20
+from .survey_tables import DENSITY_FLOOR
 
 
 def _positive_scalar(value, name):
@@ -454,7 +450,7 @@ def integrated_forest_source(
     pixel_width_velocity,
     label="",
     info=None,
-    density_floor=LEGACY_DENSITY_FLOOR,
+    density_floor=DENSITY_FLOOR,
 ):
     """Assemble an IntegratedForestSource and reject windows without sources.
 
@@ -478,7 +474,8 @@ def integrated_forest_source(
         Extra plain provenance merged into the source info.
     density_floor : float, optional
         Density at or below which a node counts as outside the source table;
-        default 1e-20, the legacy density-adapter floor.
+        default ``survey_tables.DENSITY_FLOOR`` (1e-20), the density that
+        ``SourceDensity`` assigns outside its cell edges.
 
     Returns
     -------
@@ -511,7 +508,6 @@ def integrated_forest_source(
 
 
 __all__ = [
-    "LEGACY_DENSITY_FLOOR",
     "IntegratedForestSource",
     "IntegrationNodes",
     "integrated_forest_source",

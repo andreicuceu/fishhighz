@@ -5,15 +5,12 @@ are kept outside ``fishhighz.validation`` so a native survey preparation can
 record the exact S2--S4 recipe without importing historical evidence code.
 """
 
-# Historical recipe identity. It keys the saved S2--S4 validation evidence
-# (profiles, trials, schemas) and must not change; the spline density treatment
-# of that evidence is selected by this revision in the native INI path as well.
-REVISION = "early-lyaforecast-2026-09-18"
-
-# Native-INI prescription identity from 2026-10-01: same weighting, response and
-# quadrature recipe, but piecewise-constant source-density cells by default. The
-# density tables and redshift edges are survey inputs set by the INI, not by the
-# revision (the bundled INI switched to the SRD v2 inputs on the same date).
+# Native-INI prescription identity from 2026-10-01: the S2--S4 weighting,
+# response and quadrature recipe with piecewise-constant source-density cells.
+# The density tables and redshift edges are survey inputs set by the INI, not by
+# the revision (the bundled INI switched to the SRD v2 inputs on the same date).
+# The earlier historical revision with quadratic-spline source densities has
+# been removed; survey_config rejects it with an explicit error.
 NATIVE_REVISION = "early-lyaforecast-2026-10-01"
 
 # Integrated forest-source prescription identity from 2026-10-02: the native
@@ -36,27 +33,19 @@ CONTROLS = {
 }
 
 
-# Paired density interpolation and magnitude-partition policies. Which member is
-# the default depends on the prescription revision (REVISION_DENSITY_INTERPOLATION);
-# the other remains selectable through [input policies] density_interpolation.
+# Paired density interpolation and magnitude-partition policies: name ->
+# (cell treatment, magnitude partition). Only piecewise-constant cells remain.
 DENSITY_INTERPOLATION_POLICIES = {
     "piecewise_constant_cells": (
         "piecewise_constant",
         "density_cell_edges_support_snr_nodes",
     ),
-    "RectBivariateSpline_kx2_ky2_s0": (
-        "spline",
-        "density_knots_support_snr_nodes_negative_roots",
-    ),
 }
 
-# Default density interpolation of each supported [prescription] revision. The
-# historical revision reproduces the pre-2026-10-01 quadratic-spline treatment of
-# the source densities; the native revision uses piecewise-constant cells.
+# Default density interpolation of each supported [prescription] revision.
 REVISION_DENSITY_INTERPOLATION = {
     NATIVE_REVISION: "piecewise_constant_cells",
     INTEGRATED_REVISION: "piecewise_constant_cells",
-    REVISION: "RectBivariateSpline_kx2_ky2_s0",
 }
 
 # Native INI defaults expand the qualified prescription without changing its
@@ -138,6 +127,5 @@ __all__ = [
     "INTEGRATED_DEFAULTS",
     "INTEGRATED_REVISION",
     "NATIVE_REVISION",
-    "REVISION",
     "REVISION_DENSITY_INTERPOLATION",
 ]

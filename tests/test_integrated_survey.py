@@ -12,7 +12,6 @@ from fishhighz.accuracy import (
     INTEGRATED_DEFAULTS,
     INTEGRATED_REVISION,
     NATIVE_REVISION,
-    REVISION,
     REVISION_DENSITY_INTERPOLATION,
 )
 from fishhighz.forecast import prepare_bin
@@ -124,9 +123,7 @@ def test_central_configuration_has_no_integration_state(tmp_path, expanded):
     assert dict(compact.numerical) == dict(full.numerical)
 
 
-@pytest.mark.parametrize(
-    "revision", [None, NATIVE_REVISION, REVISION], ids=["default", "native", "hist"]
-)
+@pytest.mark.parametrize("revision", [None, NATIVE_REVISION], ids=["default", "native"])
 def test_existing_revisions_unchanged(tmp_path, revision):
     """Existing revisions keep their density treatment and an unchanged identity."""
     changes = {} if revision is None else {"prescription": {"revision": revision}}
@@ -207,12 +204,8 @@ def test_integrated_revision_implies_integrated_mode(tmp_path):
             "prescription": {"revision": NATIVE_REVISION},
             **INTEGRATED,
         },
-        {
-            "prescription": {"revision": REVISION},
-            **INTEGRATED,
-        },
     ],
-    ids=["central+integrated revision", "integrated+native", "integrated+historical"],
+    ids=["central+integrated revision", "integrated+native"],
 )
 def test_mode_revision_conflicts_rejected(tmp_path, changes):
     """Conflicting mode and revision raise ValueError."""
@@ -238,19 +231,6 @@ def test_central_key_equals_absent_key(tmp_path):
     assert explicit.provenance["numerical"] == default.provenance["numerical"]
     assert explicit.provenance["input_policies"] == default.provenance["input_policies"]
     assert "forest_source_integration" not in explicit.provenance
-
-
-def test_spline_density_with_integrated_mode_rejected(tmp_path):
-    """Integrated mode needs piecewise-constant cells."""
-    spline = {
-        "input policies": {
-            "forest_source_integration": "integrated",
-            "density_interpolation": "RectBivariateSpline_kx2_ky2_s0",
-            "magnitude_partition": "density_knots_support_snr_nodes_negative_roots",
-        }
-    }
-    with pytest.raises(ValueError, match="piecewise-constant"):
-        _parse(tmp_path, spline)
 
 
 @pytest.mark.parametrize(

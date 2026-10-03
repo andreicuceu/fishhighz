@@ -1,8 +1,8 @@
 """Magnitude partitions and composite Gauss--Legendre quadrature.
 
 These functions preserve the adopted accuracy algorithm exactly.  They accept
-the production reader/adapters and do not depend on validation or legacy
-forecast packages.
+the production survey tables and samplers and do not depend on validation or
+legacy forecast packages.
 """
 
 import numpy as np
@@ -44,18 +44,16 @@ def composite(partition, order):
     ).ravel()
 
 
-def breakpoints(densities, snrs, z_queries, lo, hi):
+def breakpoints(densities, snrs, lo, hi):
     """Partition magnitude integration at density, support, and SNR boundaries.
 
     Parameters
     ----------
     densities : mapping
-        Named density readers or adapters, optionally exposing a quadratic
-        spline or a piecewise-constant cell histogram.
+        Named density tables or samplers, optionally exposing a
+        piecewise-constant cell histogram (``_histogram``).
     snrs : mapping
-        SNR readers or adapters exposing tabulated magnitude nodes.
-    z_queries : mapping of str to float
-        Dimensionless redshift query for each named density reader.
+        SNR tables or samplers exposing tabulated magnitude nodes.
     lo, hi : float
         Lower and upper magnitude integration limits.
 
@@ -69,14 +67,13 @@ def breakpoints(densities, snrs, z_queries, lo, hi):
     -----
     Piecewise-constant densities contribute their magnitude cell edges only, so
     Gauss–Legendre integration of the density alone is exact within each
-    interval. Spline roots partition the existing interpolation; they do not change
-    the reader's density interpolation or negative-value policy. Interior roots
-    exclude a relative 1e-12 endpoint neighbourhood. Adjacent boundaries are
-    merged with the existing 64*eps magnitude criterion.
+    interval. A density without cell edges contributes its tabulated magnitude
+    nodes. Adjacent boundaries are merged with the existing 64*eps magnitude
+    criterion.
     """
 
     points = [lo, hi]
-    for name, density in densities.items():
+    for density in densities.values():
         reader = getattr(density, "reader", density)
         magnitude_axis = getattr(reader, "magnitudes", None)
         histogram = getattr(density, "_histogram", None)
@@ -85,40 +82,11 @@ def breakpoints(densities, snrs, z_queries, lo, hi):
             edges = np.asarray(histogram.magnitude_edges)
             points.extend(edges[(edges >= lo) & (edges <= hi)])
             continue
-        spline = getattr(density, "_spline", None)
         if magnitude_axis is None:
             continue
-        spline_knots = spline.get_knots()[1] if spline is not None else magnitude_axis
-        knots = np.unique(np.r_[magnitude_axis, spline_knots, lo, hi])
-        knots = knots[(knots >= lo) & (knots <= hi)]
-        points.extend(knots)
-        for a, b in zip(knots[:-1], knots[1:]):
-            if a < magnitude_axis[0] or b > magnitude_axis[-1] or spline is None:
-                continue
-            density_samples = spline.ev(
-                np.full(3, z_queries[name]), [a, (a + b) / 2, b]
-            )
-            constant_coefficient = density_samples[0]
-            quadratic_coefficient = 2 * (
-                density_samples[2] - 2 * density_samples[1] + density_samples[0]
-            )
-            linear_coefficient = (
-                density_samples[2] - density_samples[0] - quadratic_coefficient
-            )
-            roots = (
-                np.roots(
-                    [quadratic_coefficient, linear_coefficient, constant_coefficient]
-                )
-                if quadratic_coefficient != 0
-                else (
-                    [-constant_coefficient / linear_coefficient]
-                    if linear_coefficient != 0
-                    else []
-                )
-            )
-            for root in roots:
-                if np.isreal(root) and 1e-12 < float(np.real(root)) < 1 - 1e-12:
-                    points.append(a + (b - a) * float(np.real(root)))
+        # Without cell edges the tabulated magnitude nodes partition the range.
+        knots = np.unique(np.r_[magnitude_axis, lo, hi])
+        points.extend(knots[(knots >= lo) & (knots <= hi)])
     for snr in snrs.values():
         reader = getattr(snr, "reader", snr)
         if hasattr(reader, "magnitudes"):

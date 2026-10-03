@@ -73,13 +73,13 @@ density_semantics = cell_count_per_deg2
 density_width_policy = legacy_first_spacing
 density_redshift_normalization = target_density
 density_negative_policy = floor_negative
-density_interpolation = RectBivariateSpline_kx2_ky2_s0
+density_interpolation = piecewise_constant_cells
 snr_smoothing = legacy
 snr_interpolation = linear_RegularGridInterpolator
 snr_bright_policy = clamp_to_brightest_tabulated_magnitude
 snr_clamp = 1e-10
 snr_sentinel = 1e20
-magnitude_partition = density_knots_support_snr_nodes_negative_roots
+magnitude_partition = density_cell_edges_support_snr_nodes
 weighting_method = early_lyaforecast
 weighting_reference = fiducial_auto_p3d_and_p1d_times_response_squared
 weighting_reference_k_t_deg = 2.4
@@ -299,7 +299,7 @@ def test_bundled_recipe_name_is_resolved_without_cwd_file(tmp_path, monkeypatch)
     try:
         Forecast("desi2_accuracy.ini")
     except ValueError as error:
-        assert "lyaforecast INI" in str(error)
+        assert "missing [schema] section" in str(error)
     else:
         raise AssertionError(
             "an existing relative INI must not be replaced by the bundle"
@@ -713,7 +713,7 @@ def test_saved_exposure_and_bias_settings(tmp_path):
             Parameters
             ----------
             **kwargs : dict
-                Sampling keywords from SNRReader, including magnitudes of shape
+                Sampling keywords from SNRTable, including magnitudes of shape
                 (n_magnitudes,), source redshift, wavelength in Angstrom, pixel width in
                 Angstrom, and exposure count.
 

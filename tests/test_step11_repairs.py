@@ -7,11 +7,11 @@ import numpy as np
 import pytest
 from test_forecast import forest_spec, scalar_spec
 
-from fishhighz.adapters.legacy_inputs import DensityReader
 from fishhighz.forecast import prepare_bin, run_bin, run_forecast
 from fishhighz.geometry import SPEED_LIGHT_KMS, prepare_geometry
 from fishhighz.models.external import P3DProvider, PreparedP3D
 from fishhighz.survey import freeze
+from fishhighz.survey_tables import DensityTable
 from fishhighz.weights import prepare_forest_weights
 
 
@@ -34,7 +34,7 @@ def poly(z, m):
 
 
 def irregular_fixture(path, shuffle=False):
-    """Write source counts on nonuniform redshift cells.
+    """Write source counts on nonuniform, contiguous redshift cells.
 
     Parameters
     ----------
@@ -49,8 +49,13 @@ def irregular_fixture(path, shuffle=False):
     fixture : tuple of ndarray
         Redshift centers (4,), magnitudes (4,), redshift-cell widths (4,), and
         table rows (16, 3).
+
+    Notes
+    -----
+    The cells centre +/- width/2 tile [1.9, 4.1] with edges 1.9, 2.1, 2.5, 3.2
+    and 4.1, as piecewise-constant density cells require.
     """
-    redshift_grid = np.array([2.0, 2.3, 2.9, 3.7])
+    redshift_grid = np.array([2.0, 2.3, 2.85, 3.65])
     magnitude_grid = np.array([20.0, 20.5, 21.0, 21.5])
     widths = np.array([0.2, 0.4, 0.7, 0.9])
     rows = np.array(
@@ -74,19 +79,19 @@ def density(path, **kwargs):
     path : pathlib.Path
         Path of the temporary test artifact to read or write.
     **kwargs : dict
-        DensityReader options, including explicit redshift cell widths, density normalization, and interpolation settings.
+        DensityTable options, including explicit redshift cell widths and
+        density normalization.
 
     Returns
     -------
-    reader : DensityReader
-        Density interpolator with the requested raw-cell semantics.
+    reader : DensityTable
+        Piecewise-constant density table with the requested raw-cell semantics.
     """
-    return DensityReader(
+    return DensityTable(
         path,
         semantics="cell_count_per_deg2",
         target_density=kwargs.pop("target_density", None),
         z_norm_min=kwargs.pop("z_norm_min", None),
-        interpolation=kwargs.pop("interpolation", "spline"),
         **kwargs,
     )
 
@@ -149,11 +154,14 @@ def test_explicit_density_widths(tmp_path, shuffle, target, masked):
         density_reader.provenance["selected_measure"], measure, rtol=5e-13, atol=0
     )
     if not masked:
-        for a in [redshift_grid[0], 2.65, redshift_grid[-1]]:
-            query = np.array([21.3, 20.0, 20.7, 21.5])
+        # Queries return the density of the containing cell: 2.65 lies in the
+        # cell centred on 2.85, and 21.3/20.7 in the cells centred on 21.5/20.5.
+        query = np.array([21.3, 20.0, 20.7, 21.5])
+        query_cells = np.array([21.5, 20.0, 20.5, 21.5])
+        for a, a_cell in [(2.0, 2.0), (2.65, 2.85), (3.65, 3.65)]:
             np.testing.assert_allclose(
                 density_reader.query(a, query),
-                poly(a, query) * scale,
+                poly(a_cell, query_cells) * scale,
                 rtol=5e-12,
                 atol=0,
             )
@@ -180,24 +188,12 @@ def test_legacy_width_oracle_and_uniform_preservation(tmp_path):
     """
     path = tmp_path / "counts"
     redshift_grid, magnitude_grid, widths, rows = irregular_fixture(path)
-    legacy = density(path, width_policy="legacy_first_spacing")
+    # The first spacing applied to every irregular cell leaves gaps between the
+    # cells, which piecewise-constant densities reject; explicit widths tile.
+    with pytest.raises(ValueError, match="do not tile"):
+        density(path, width_policy="legacy_first_spacing")
     physical = density(path, redshift_widths=widths)
-    expected = np.array(
-        [
-            [
-                c / (redshift_grid[1] - redshift_grid[0]) / 0.5
-                for a, b, c in rows
-                if a == zi
-            ]
-            for zi in redshift_grid
-        ]
-    )
-    np.testing.assert_allclose(legacy.density, expected, rtol=5e-13, atol=0)
-    assert not np.allclose(legacy.density, physical.density)
-    assert legacy.provenance["width_policy"] == "legacy_first_spacing"
-    np.testing.assert_array_equal(
-        legacy.redshift_widths, np.full(4, redshift_grid[1] - redshift_grid[0])
-    )
+    assert physical.provenance["width_policy"] == "explicit"
     # The old uniform path must give exactly the same values as either policy.
     redshift_grid = np.arange(2, 4, 0.5)
     np.savetxt(

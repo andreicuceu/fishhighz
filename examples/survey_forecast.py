@@ -6,11 +6,6 @@ from tempfile import TemporaryDirectory
 
 import numpy as np
 
-from fishhighz.adapters.legacy_inputs import (
-    DensityReader,
-    SNRReader,
-    sample_forest_readers,
-)
 from fishhighz.fields import ObservedField, PairSelection
 from fishhighz.forecast import prepare_bin, run_forecast
 from fishhighz.geometry import LYA_REST_ANGSTROM, SPEED_LIGHT_KMS, prepare_geometry
@@ -21,6 +16,7 @@ from fishhighz.parameters import Parameter, ParameterRegistry
 from fishhighz.response import InstrumentResponse, pixel_width_angstrom_to_velocity
 from fishhighz.results import diagonal_prior
 from fishhighz.survey import BinSpec, ForestInput
+from fishhighz.survey_tables import DensityTable, SNRTable, sample_forest_tables
 
 
 def make_readers(root, population):
@@ -35,8 +31,8 @@ def make_readers(root, population):
 
     Returns
     -------
-    readers : tuple of DensityReader and SNRReader
-        Readers for source counts per deg^2 per redshift/magnitude cell and
+    readers : tuple of DensityTable and SNRTable
+        Tables for source counts per deg^2 per redshift/magnitude cell and
         dimensionless pixel SNR.
 
     Notes
@@ -79,7 +75,7 @@ def make_readers(root, population):
         )
         paths.append(path)
     return (
-        DensityReader(
+        DensityTable(
             density,
             semantics="cell_count_per_deg2",
             target_density=100 * (1 + population),
@@ -87,7 +83,7 @@ def make_readers(root, population):
             magnitude_bounds=(20, 23),
             label=f"population {population}",
         ),
-        SNRReader(paths, smoothing="legacy", label=f"population {population}"),
+        SNRTable(paths, smoothing="legacy", label=f"population {population}"),
     )
 
 
@@ -206,7 +202,7 @@ def run(root=None):
             rest_min, rest_max = 1040.0, 1200.0
             z_source = wavelength / np.sqrt(rest_min * rest_max) - 1
             magnitude_grid = np.array([20.0, 21.0, 22.0, 23.0])
-            sampled = sample_forest_readers(
+            sampled = sample_forest_tables(
                 *readers[i],
                 geometry,
                 responses[name],

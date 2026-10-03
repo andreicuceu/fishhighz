@@ -926,24 +926,24 @@ def test_no_file_reads_on_repeated_runs(tmp_path, monkeypatch):
     """
     from pathlib import Path
 
-    from test_legacy_inputs import density_file, reader, snr_files
+    from test_survey_tables import density_file, reader, snr_files
 
-    from fishhighz.adapters.legacy_inputs import SNRReader, sample_forest_readers
     from fishhighz.geometry import LYA_REST_ANGSTROM
     from fishhighz.response import pixel_width_angstrom_to_velocity
+    from fishhighz.survey_tables import SNRTable, sample_forest_tables
 
     spec, _ = forest_spec(auxiliary=False)
     path = tmp_path / "density"
     density_file(path)
     density_reader = reader(path)
-    snr = SNRReader(snr_files(tmp_path), smoothing="none")
+    snr = SNRTable(snr_files(tmp_path), smoothing="none")
     response = InstrumentResponse(
         pixel_width_angstrom_to_velocity(
             0.8, lambda_obs_angstrom=LYA_REST_ANGSTROM * (1 + spec.geometry.z_eval)
         ),
         10,
     )
-    data = sample_forest_readers(
+    data = sample_forest_tables(
         density_reader,
         snr,
         spec.geometry,

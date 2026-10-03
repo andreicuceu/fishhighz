@@ -3,9 +3,7 @@
 import numpy as np
 import pytest
 
-from fishhighz.adapters.legacy_compat import DENSITY_FLOOR
 from fishhighz.forest_integration import (
-    LEGACY_DENSITY_FLOOR,
     IntegratedForestSource,
     IntegrationNodes,
     integrated_forest_source,
@@ -13,6 +11,7 @@ from fishhighz.forest_integration import (
     pixel_width_angstrom,
 )
 from fishhighz.geometry import LYA_REST_ANGSTROM, SPEED_LIGHT_KMS
+from fishhighz.survey_tables import DENSITY_FLOOR
 
 REST_MIN, REST_MAX = 1040.0, 1200.0
 Z_EDGES = (2.2, 2.4)
@@ -293,16 +292,15 @@ def test_integrated_source_measure():
 
 def test_density_all_at_floor_raises_with_label():
     nodes = make_nodes()
-    floor = np.full((len(nodes.zq_nodes), 3), LEGACY_DENSITY_FLOOR)
+    floor = np.full((len(nodes.zq_nodes), 3), DENSITY_FLOOR)
     with pytest.raises(ValueError, match=r"field a, bin 2: no forest coverage"):
         make_source(nodes, density=floor)
     with pytest.raises(ValueError, match="no forest coverage"):
         make_source(nodes, density=np.zeros_like(floor))
 
-    # One populated node suffices; the floor matches the legacy adapter.
+    # One populated node suffices.
     floor[0, 0] = 1.0
     make_source(nodes, density=floor)
-    assert LEGACY_DENSITY_FLOOR == DENSITY_FLOOR
 
 
 @pytest.mark.parametrize(

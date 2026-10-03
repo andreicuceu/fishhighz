@@ -1,17 +1,13 @@
-"""Synthetic raw-grid interpolation and independent normalization oracles."""
+"""Synthetic survey-table cells, SNR interpolation and normalization oracles."""
 
 import numpy as np
 import pytest
 from test_forecast import forest_spec
 
-from fishhighz.adapters.legacy_inputs import (
-    DensityReader,
-    SNRReader,
-    sample_forest_readers,
-)
 from fishhighz.geometry import LYA_REST_ANGSTROM, SPEED_LIGHT_KMS
 from fishhighz.noise import forest_noise
 from fishhighz.response import InstrumentResponse, pixel_width_angstrom_to_velocity
+from fishhighz.survey_tables import DensityTable, SNRTable, sample_forest_tables
 from fishhighz.weights import prepare_forest_weights
 
 
@@ -32,6 +28,32 @@ def polynomial(z, m):
         input shape.
     """
     return 2 + z * z + 0.1 * (m - 20) ** 2 + 0.3 * z * (m - 20)
+
+
+def cell_polynomial(z, m):
+    """Evaluate the synthetic density at the centre of the containing table cell.
+
+    Parameters
+    ----------
+    z : float or ndarray
+        Dimensionless redshift inside the cell edges [1.75, 3.75].
+    m : float or ndarray
+        Apparent magnitude inside the cell edges [19.5, 23.5].
+
+    Returns
+    -------
+    density : float or ndarray
+        Piecewise-constant cell density of the table written by density_file,
+        per deg^2 per redshift per magnitude.
+
+    Notes
+    -----
+    The cells of density_file have centres 2, 2.5, 3, 3.5 (width 0.5) in
+    redshift and 20, 21, 22, 23 (width 1) in magnitude, closed below.
+    """
+    z_centre = 2 + 0.5 * np.floor((np.asarray(z) - 1.75) / 0.5)
+    m_centre = 20 + np.floor(np.asarray(m) - 19.5)
+    return polynomial(z_centre, m_centre)
 
 
 def density_file(path, *, shuffle=False):
@@ -69,19 +91,19 @@ def reader(path, **kwargs):
     path : pathlib.Path
         Path of the temporary test artifact to read or write.
     **kwargs : dict
-        DensityReader options, including target density per deg^2, normalization redshift, magnitude bounds, and interpolation settings.
+        DensityTable options, including target density per deg^2,
+        normalization redshift and magnitude bounds.
 
     Returns
     -------
-    reader : DensityReader
-        Source-density interpolator for the temporary table.
+    reader : DensityTable
+        Piecewise-constant source-density table for the temporary file.
     """
-    return DensityReader(
+    return DensityTable(
         path,
         semantics="cell_count_per_deg2",
         target_density=kwargs.pop("target_density", None),
         z_norm_min=kwargs.pop("z_norm_min", None),
-        interpolation=kwargs.pop("interpolation", "spline"),
         **kwargs,
     )
 
@@ -203,10 +225,11 @@ def test_density_offgrid_and_order(tmp_path):
     density_file(path, shuffle=True)
     density_reader = reader(path)
     magnitude_grid = np.array([22.3, 20, 21.1, 23])
+    # Off-centre queries return the density of the containing cell.
     for z in [2, 2.73, 3.5]:
         np.testing.assert_allclose(
             density_reader.query(z, magnitude_grid),
-            polynomial(z, magnitude_grid),
+            cell_polynomial(z, magnitude_grid),
             rtol=5e-12,
             atol=0,
         )
@@ -235,7 +258,6 @@ def test_density_offgrid_and_order(tmp_path):
         "semantics",
         "outside_z",
         "outside_m",
-        "overshoot",
     ],
 )
 def test_density_errors(tmp_path, case):
@@ -268,22 +290,17 @@ def test_density_errors(tmp_path, case):
         rows = rows[rows[:, 0] < 3]
     if case == "zero_support":
         options.update(target_density=10, z_norm_min=4)
-    if case == "overshoot":
-        rows[:, 2] = (rows[:, 1] == 20).astype(float)
     np.savetxt(path, rows)
     with pytest.raises(ValueError):
         if case == "semantics":
-            DensityReader(
-                path, semantics="dndzdm", target_density=None, z_norm_min=None
-            )
+            DensityTable(path, semantics="dndzdm", target_density=None, z_norm_min=None)
         else:
             density_reader = reader(path, **options)
+            # Closed cell-edge domain: redshift [1.75, 3.75], magnitude [19.5, 23.5].
             if case == "outside_z":
-                density_reader.query(1.999, [21])
+                density_reader.query(1.749, [21])
             if case == "outside_m":
-                density_reader.query(2, [23.01])
-            if case == "overshoot":
-                density_reader.query(2.7, [21.5])
+                density_reader.query(2, [23.51])
 
 
 def test_snr_affine_and_variance(tmp_path):
@@ -295,7 +312,7 @@ def test_snr_affine_and_variance(tmp_path):
         Isolated temporary directory supplied by pytest; generated test files
         are written here.
     """
-    snr = SNRReader(snr_files(tmp_path), smoothing="none")
+    snr = SNRTable(snr_files(tmp_path), smoothing="none")
     magnitude_grid = np.array([20, 22.3, 23, 21.1])
     expected = 3 + 0.1 * magnitude_grid + 0.2 * 2.8 + 0.001 * 4177
     np.testing.assert_allclose(
@@ -332,7 +349,7 @@ def test_smoothing_reflection_oracle(tmp_path):
         are written here.
     """
     paths = snr_files(tmp_path, lambda m, z, w: float(w == 3500))
-    snr = SNRReader(paths, smoothing="legacy")
+    snr = SNRTable(paths, smoothing="legacy")
     offsets = np.arange(-40, 41)
     kernel = np.exp(-0.5 * (offsets / 10) ** 2)
     kernel /= sum(kernel)
@@ -355,7 +372,7 @@ def test_smoothing_reflection_oracle(tmp_path):
     )
     for p in paths:
         p.unlink()  # Only generated pytest temporary fixtures.
-    snr = SNRReader(snr_files(tmp_path, lambda *a: 3), smoothing="legacy")
+    snr = SNRTable(snr_files(tmp_path, lambda *a: 3), smoothing="legacy")
     np.testing.assert_allclose(snr.smoothed_snr, 3, rtol=5e-13, atol=0)
 
 
@@ -414,7 +431,7 @@ def test_snr_input_errors(tmp_path, case):
         lines[3] = lines[2]
     snr_path.write_text("\n".join(lines) + "\n")
     with pytest.raises(ValueError):
-        SNRReader(paths, smoothing="none")
+        SNRTable(paths, smoothing="none")
 
 
 @pytest.mark.parametrize(
@@ -443,7 +460,7 @@ def test_snr_query_errors(tmp_path, options):
         Optional controls defining this case, supplied by pytest
         parametrization.
     """
-    snr = SNRReader(snr_files(tmp_path), smoothing="none")
+    snr = SNRTable(snr_files(tmp_path), smoothing="none")
     kwargs = dict(
         z_source=3,
         magnitudes=[21],
@@ -465,7 +482,7 @@ def test_zero_snr_fails(tmp_path):
         Isolated temporary directory supplied by pytest; generated test files
         are written here.
     """
-    snr = SNRReader(snr_files(tmp_path, lambda *a: 0), smoothing="none")
+    snr = SNRTable(snr_files(tmp_path, lambda *a: 0), smoothing="none")
     with pytest.raises(ValueError, match="positive SNR"):
         snr.variance(
             z_source=3,
@@ -490,13 +507,13 @@ def test_reader_weight_boundary(tmp_path):
     path = tmp_path / "density"
     density_file(path)
     density_reader = reader(path)
-    snr = SNRReader(snr_files(tmp_path), smoothing="none")
+    snr = SNRTable(snr_files(tmp_path), smoothing="none")
     wavelength = LYA_REST_ANGSTROM * (1 + bin_geometry.z_eval)
     response = InstrumentResponse(
         pixel_width_angstrom_to_velocity(0.8, lambda_obs_angstrom=wavelength), 10
     )
     magnitude_grid = np.array([20.0, 21.0, 22.0])
-    sampled = sample_forest_readers(
+    sampled = sample_forest_tables(
         density_reader,
         snr,
         bin_geometry,
@@ -506,7 +523,7 @@ def test_reader_weight_boundary(tmp_path):
         pixel_width_angstrom=0.8,
         exposure_count=4,
     )
-    rho = polynomial(3.2, magnitude_grid) * 4.2 / SPEED_LIGHT_KMS
+    rho = cell_polynomial(3.2, magnitude_grid) * 4.2 / SPEED_LIGHT_KMS
     variance = 1 / (
         (3 + 0.1 * magnitude_grid + 0.2 * 3.2 + 0.001 * wavelength) ** 2 * 0.8
     )
@@ -550,7 +567,7 @@ def test_reader_weight_boundary(tmp_path):
         else:
             np.testing.assert_allclose(noise.total, expected, rtol=5e-13, atol=0)
     expected_galaxy = (
-        sum(polynomial(bin_geometry.z_eval, magnitude_grid) * [0.5, 1, 0.5])
+        sum(cell_polynomial(bin_geometry.z_eval, magnitude_grid) * [0.5, 1, 0.5])
         * (1 + bin_geometry.z_eval)
         / SPEED_LIGHT_KMS
         * bin_geometry.a_v
@@ -565,7 +582,7 @@ def test_reader_weight_boundary(tmp_path):
         atol=0,
     )
     with pytest.raises(ValueError, match="inconsistent"):
-        sample_forest_readers(
+        sample_forest_tables(
             density_reader,
             snr,
             bin_geometry,
@@ -612,7 +629,7 @@ def test_snr_variance_range_rejection(tmp_path, value):
         Value at the tested validation boundary, supplied by pytest
         parametrization.
     """
-    snr = SNRReader(snr_files(tmp_path, lambda *a: value), smoothing="none")
+    snr = SNRTable(snr_files(tmp_path, lambda *a: value), smoothing="none")
     with pytest.raises(ValueError, match="representable"):
         snr.variance(
             z_source=3,

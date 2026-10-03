@@ -1,54 +1,65 @@
-"""Strict legacy density/SNR readers, adapted from lyaforecast (GPLv3).
+"""Survey source-density and forest S/N tables, adapted from lyaforecast (GPLv3).
 
 Provenance: lyaforecast/tracer.py (_setup_dndzdm_lya/_tracer) and
-spectrograph.py (_setup_desi_spectro, get_pixel_rms_noise). Only interpolation
-and explicit normalization conventions are retained; boundary fallbacks are
-not. No raw assets are distributed. SciPy is imported only on reader setup.
+spectrograph.py (_setup_desi_spectro, get_pixel_rms_noise). No raw assets are
+distributed. SciPy is imported only when an S/N table is prepared or
+interpolated.
+
+Two layers are provided:
+
+- ``DensityTable`` and ``SNRTable`` read and validate the raw tables, retain
+  their explicit normalization conventions and raise on any query outside the
+  closed table domains.
+- ``SourceDensity`` and ``ForestSNR`` sample those tables with the lyaforecast
+  boundary conventions adopted by the native INI path: the source density is
+  1e-20 outside the cell edges, and the S/N is clamped at the brightest
+  tabulated magnitude, floored at 1e-10 after pixel/exposure scaling, and
+  replaced by a 1e20 variance sentinel outside the table. Sample records are
+  owned snapshots; no mutable counters or table objects enter forecasts.
+
+Source densities are piecewise constant on contiguous (redshift, magnitude)
+cells, as in lyaforecast's Histogram2DInterpolator.
 """
 
 import hashlib
 import io
-import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
-from .._arrays import label as validate_label
-from .._arrays import real_array, scalar
-from ..geometry import LYA_REST_ANGSTROM, _immutable, _positive
-from ..noise import local_galaxy_density
-from ..response import pixel_width_angstrom_to_velocity
-from ..survey import freeze
-from ..weights import density_per_velocity
+from ._arrays import label as validate_label
+from ._arrays import real_array, scalar
+from .geometry import LYA_REST_ANGSTROM, _immutable, _positive
+from .noise import local_galaxy_density
+from .response import pixel_width_angstrom_to_velocity
+from .survey import freeze
+from .weights import density_per_velocity
+
+# Source density assigned outside the tabulated cell edges, as in lyaforecast.
+DENSITY_FLOOR = 1e-20
 
 
 def _scipy():
-    """Import optional interpolation and smoothing routines.
+    """Import the S/N interpolation and smoothing routines.
 
     Returns
     -------
-    spline : type
-        scipy.interpolate.RectBivariateSpline.
     interpolator : type
         scipy.interpolate.RegularGridInterpolator.
     gaussian_filter : callable
         scipy.ndimage.gaussian_filter1d.
 
-    Raises
-    ------
-    ImportError
-        If the optional survey dependencies are unavailable.
+    Notes
+    -----
+    SciPy is a core dependency; the import is deferred so that importing
+    FishHighz does not load it.
     """
-    try:
-        from scipy.interpolate import RectBivariateSpline, RegularGridInterpolator
-        from scipy.ndimage import gaussian_filter1d
-    except ImportError as error:
-        raise ImportError(
-            "raw survey readers require SciPy; install fishhighz[survey]"
-        ) from error
-    return RectBivariateSpline, RegularGridInterpolator, gaussian_filter1d
+    from scipy.interpolate import RegularGridInterpolator
+    from scipy.ndimage import gaussian_filter1d
+
+    return RegularGridInterpolator, gaussian_filter1d
 
 
 def _read(path):
@@ -126,7 +137,7 @@ def _query(axis, values, name, context):
     name : str
         Coordinate label for errors.
     context : str
-        Reader identity for error messages.
+        Table identity for error messages.
 
     Returns
     -------
@@ -175,6 +186,30 @@ def _grid_vector(values, name):
     return vector
 
 
+def _magnitude_vector(values):
+    """Validate a nonempty magnitude vector.
+
+    Parameters
+    ----------
+    values : array_like
+        Magnitude nodes, shape (n_magnitude,).
+
+    Returns
+    -------
+    magnitudes : ndarray
+        Validated finite magnitude vector.
+
+    Raises
+    ------
+    ValueError
+        If magnitudes are empty, nonfinite or not one dimensional.
+    """
+    magnitudes = real_array(values, "magnitudes")
+    if magnitudes.ndim != 1 or not len(magnitudes):
+        raise ValueError("magnitudes must be nonempty 1D")
+    return magnitudes
+
+
 def _paired_points(z_source, wavelength, pixel_width_angstrom):
     """Validate paired source-redshift, wavelength and pixel-width vectors.
 
@@ -210,35 +245,6 @@ def _paired_points(z_source, wavelength, pixel_width_angstrom):
     if np.any(pixel_width_angstrom <= 0):
         raise ValueError("pixel_width_angstrom must be positive and representable")
     return z_source, wavelength, pixel_width_angstrom
-
-
-def _grid_query(axis, values, name, context):
-    """Require every coordinate of a vector to lie in a closed domain.
-
-    Parameters
-    ----------
-    axis : ndarray
-        Ordered domain nodes, shape (n_node,).
-    values : ndarray
-        Validated query coordinates, any shape, in the units of axis.
-    name : str
-        Coordinate label for errors.
-    context : str
-        Reader identity for error messages.
-
-    Raises
-    ------
-    ValueError
-        If any coordinate lies outside [axis[0], axis[-1]]. The message reports
-        the number of violations and the extreme queries, not the full vector.
-    """
-    outside = (values < axis[0]) | (values > axis[-1])
-    if np.any(outside):
-        raise ValueError(
-            f"{context}: {int(np.count_nonzero(outside))} {name} queries outside "
-            f"closed domain [{axis[0]}, {axis[-1]}] "
-            f"(query range [{values.min()}, {values.max()}])"
-        )
 
 
 def _row_chunks(n_row, n_column):
@@ -336,13 +342,13 @@ def snr_grid_separable(interpolator, z_source, wavelength, magnitudes):
 
 
 def snr_grid_values(interpolator, z_source, wavelength, magnitudes):
-    """Interpolate the SNR grid with the selected implementation.
+    """Interpolate the SNR table on paired points times magnitudes.
 
     Parameters
     ----------
     interpolator : callable
-        The reader's 3-D linear interpolator over (magnitude, source redshift,
-        wavelength); a SciPy RegularGridInterpolator selects the separable path.
+        Linear interpolator over (magnitude, source redshift, wavelength),
+        normally a SciPy RegularGridInterpolator.
     z_source, wavelength : ndarray of shape (n_point,)
         Paired coordinates inside the closed table domains.
     magnitudes : ndarray of shape (n_magnitude,)
@@ -355,30 +361,22 @@ def snr_grid_values(interpolator, z_source, wavelength, magnitudes):
 
     Notes
     -----
-    ``FISHHIGHZ_SNR_GRID`` selects 'separable' (default) or 'interpolator',
-    the generic RegularGridInterpolator call kept as the reference. Any
-    interpolator that is not a SciPy RegularGridInterpolator with at least two
-    nodes per axis (a test double, say) is called directly.
-
-    Raises
-    ------
-    ValueError
-        If the environment selection is unknown.
+    A RegularGridInterpolator with at least two nodes on every axis uses the
+    separable trilinear evaluation (snr_grid_separable). A table with a single
+    node on some axis (one magnitude file, say) has no interval to locate, so
+    it, like any other callable, is evaluated with one generic call on the
+    (n_point, n_magnitude, 3) coordinate array.
     """
-    mode = os.environ.get("FISHHIGHZ_SNR_GRID", "separable")
-    if mode not in ("separable", "interpolator"):
-        raise ValueError("FISHHIGHZ_SNR_GRID must be separable or interpolator")
-    if mode == "separable" and isinstance(interpolator, _scipy()[1]):
-        if all(len(axis) >= 2 for axis in interpolator.grid):
-            return snr_grid_separable(interpolator, z_source, wavelength, magnitudes)
+    regular_grid_interpolator, _ = _scipy()
+    if isinstance(interpolator, regular_grid_interpolator) and all(
+        len(axis) >= 2 for axis in interpolator.grid
+    ):
+        return snr_grid_separable(interpolator, z_source, wavelength, magnitudes)
     points = np.empty((len(z_source), len(magnitudes), 3))
     points[..., 0] = magnitudes[None, :]
     points[..., 1] = z_source[:, None]
     points[..., 2] = wavelength[:, None]
     return interpolator(points)
-
-
-DENSITY_INTERPOLATIONS = ("piecewise_constant", "spline")
 
 
 def _cell_edges(centres, widths, name, context):
@@ -393,7 +391,7 @@ def _cell_edges(centres, widths, name, context):
     name : str
         Coordinate label for errors.
     context : str
-        Reader identity for error messages.
+        Table identity for error messages.
 
     Returns
     -------
@@ -441,9 +439,8 @@ def _cell_edges(centres, widths, name, context):
             f"{context}: {name} cells do not tile the axis (maximum gap or "
             f"overlap between centre + width/2 and the next lower edge is "
             f"{residual:.3g}, above the roundoff tolerance {tolerance:.3g}); "
-            f"piecewise-constant interpolation requires contiguous cells. "
-            f"Supply a regular table or contiguous explicit redshift_widths, "
-            f"or use interpolation='spline'"
+            f"piecewise-constant cells must be contiguous. Supply a regular "
+            f"table or contiguous explicit redshift_widths"
         )
     return _immutable(edges), residual
 
@@ -527,15 +524,15 @@ class CellHistogram2D:
 
 
 @dataclass(frozen=True, init=False, eq=False)
-class DensityReader:
-    """Density adapter for explicit cell counts per square degree.
+class DensityTable:
+    """Source-density table of explicit cell counts per square degree.
 
     Parameters
     ----------
     path : path-like
         Three-column (z, magnitude, cell_count_per_deg2) rectangular table.
     semantics : str
-        Must be 'cell_count_per_deg2'; normalized arrays bypass this reader.
+        Must be 'cell_count_per_deg2'; normalized arrays bypass this table.
     target_density : float or None
         Explicit positive target or None for no renormalization.
     z_norm_min : float or None
@@ -547,30 +544,22 @@ class DensityReader:
         These are explicit measures, never inferred from centre spacing or bins.
     width_policy : {'uniform', 'legacy_first_spacing'}, optional
         Omitted with widths selects 'explicit'. Omitted without widths requires
-        uniform z. Explicit legacy_first_spacing uses z[1]-z[0] for all rows,
-        even on irregular z; this is a compatibility convention, not physical
-        width inference. Cannot be combined with redshift_widths.
+        uniform z. Explicit legacy_first_spacing uses z[1]-z[0] for all rows;
+        this is a compatibility convention, not physical width inference.
+        Cannot be combined with redshift_widths.
     label : str
         Caller population label, used only for provenance and errors.
-    interpolation : {'piecewise_constant', 'spline'}, optional
-        'piecewise_constant' (default) holds each cell density constant on
-        centre +/- width/2 cells, so magnitude and redshift integrals reproduce the
-        tabulated counts. It requires the cells to tile each axis: the maximum gap
-        or overlap between centre + width/2 and the next lower edge must not exceed
-        the coordinate roundoff tolerance below, otherwise ValueError is raised
-        (regular tables and contiguous explicit nonuniform widths are accepted).
-        'spline' selects the legacy quadratic RectBivariateSpline (kx=ky=2, s=0)
-        through the cell centres and has no tiling requirement.
 
     Notes
     -----
-    Uniform-axis tolerance is 64*eps64*max(1,max(abs(axis))), an absolute
-    float64 coordinate-roundoff allowance; the same tolerance bounds the cell
-    tiling residual under piecewise-constant interpolation. Magnitudes must
-    remain uniform; irregular redshifts require explicit widths or
-    legacy_first_spacing, and under piecewise-constant interpolation those widths
-    must make the cells contiguous (for example explicit widths equal to the
-    nodal spacing; legacy_first_spacing on irregular nodes is rejected).
+    The density is held constant on centre +/- width/2 cells, so magnitude and
+    redshift integrals reproduce the tabulated counts. The cells must tile each
+    axis: the maximum gap or overlap between centre + width/2 and the next lower
+    edge must not exceed the coordinate roundoff tolerance 64*eps64*max(1,
+    max(abs(axis))), the same absolute float64 allowance used for the
+    uniform-axis checks. Magnitudes must remain uniform; irregular redshifts
+    require contiguous explicit widths (for example widths equal to the nodal
+    spacing); legacy_first_spacing on irregular nodes is rejected.
     """
 
     z: np.ndarray
@@ -579,10 +568,8 @@ class DensityReader:
     redshift_widths: np.ndarray
     density: np.ndarray
     provenance: object
-    interpolation: str
     z_edges: np.ndarray
     magnitude_edges: np.ndarray
-    _spline: object
     _histogram: object
     _context: str
 
@@ -597,9 +584,8 @@ class DensityReader:
         redshift_widths=None,
         width_policy=None,
         label="density",
-        interpolation="piecewise_constant",
     ):
-        """Read a rectangular source-count table and prepare its density interpolant.
+        """Read a rectangular source-count table and prepare its cell densities.
 
         Parameters
         ----------
@@ -621,8 +607,6 @@ class DensityReader:
             requires uniform spacing unless explicit widths are supplied.
         label : str, optional
             Population label for errors and provenance; default density.
-        interpolation : str, optional
-            piecewise_constant (default) or the legacy quadratic spline.
 
         Returns
         -------
@@ -632,23 +616,17 @@ class DensityReader:
         Raises
         ------
         ValueError
-            If table shape, grid, normalization support, width declarations or
-            interpolation choice are invalid, or piecewise-constant cell edges are
-            not strictly increasing or do not tile the redshift or magnitude axis
-            within the coordinate roundoff tolerance.
-        ImportError
-            If SciPy is unavailable for the spline interpolation.
+            If table shape, grid, normalization support or width declarations
+            are invalid, or the cell edges are not strictly increasing or do not
+            tile the redshift or magnitude axis within the coordinate roundoff
+            tolerance.
 
         Notes
         -----
-        Reads the table and creates the selected interpolant. Counts are normalized over the selected raw cells before division by redshift and magnitude cell widths. Explicit physical widths and the legacy first-spacing convention remain distinct.
+        Counts are normalized over the selected raw cells before division by
+        the redshift and magnitude cell widths. Explicit physical widths and the
+        legacy first-spacing convention remain distinct.
         """
-        if interpolation not in DENSITY_INTERPOLATIONS:
-            raise ValueError(
-                f"interpolation must be one of {DENSITY_INTERPOLATIONS}, "
-                f"got {interpolation!r}"
-            )
-        spline = _scipy()[0] if interpolation == "spline" else None
         if semantics != "cell_count_per_deg2":
             raise ValueError("require explicit cell_count_per_deg2 semantics")
         caller = validate_label(label, "density label")
@@ -762,38 +740,15 @@ class DensityReader:
             ) from error
         if not np.all(np.isfinite(density)):
             raise ValueError(f"{context}: nonfinite prepared density")
-        if interpolation == "piecewise_constant":
-            z_edges, z_tiling_residual = _cell_edges(
-                redshift_grid, widths, "redshift", context
-            )
-            magnitude_edges, magnitude_tiling_residual = _cell_edges(
-                magnitude_grid, magnitude_spacing, "magnitude", context
-            )
-            histogram = CellHistogram2D(z_edges, magnitude_edges, _immutable(density))
-            spline_interpolant = None
-            z_domain = (z_edges[0], z_edges[-1])
-            magnitude_domain = (magnitude_edges[0], magnitude_edges[-1])
-            interpolation_label = "piecewise_constant_cells"
-        else:
-            z_edges = magnitude_edges = histogram = None
-            z_tiling_residual = magnitude_tiling_residual = None
-            spline_interpolant = spline(
-                redshift_grid,
-                magnitude_grid,
-                density,
-                kx=2,
-                ky=2,
-                s=0,
-                bbox=[
-                    redshift_grid[0],
-                    redshift_grid[-1],
-                    magnitude_grid[0],
-                    magnitude_grid[-1],
-                ],
-            )
-            z_domain = (redshift_grid[0], redshift_grid[-1])
-            magnitude_domain = (magnitude_grid[0], magnitude_grid[-1])
-            interpolation_label = "RectBivariateSpline kx=2 ky=2 s=0"
+
+        # Contiguous cells centre +/- width/2 on both axes.
+        z_edges, z_tiling_residual = _cell_edges(
+            redshift_grid, widths, "redshift", context
+        )
+        magnitude_edges, magnitude_tiling_residual = _cell_edges(
+            magnitude_grid, magnitude_spacing, "magnitude", context
+        )
+        histogram = CellHistogram2D(z_edges, magnitude_edges, _immutable(density))
         provenance = freeze(
             dict(
                 path=path,
@@ -814,9 +769,9 @@ class DensityReader:
                 magnitude_axis=magnitude_grid,
                 width_order="reconstructed sorted redshift axis",
                 units="deg^-2 redshift^-1 mag^-1",
-                interpolation=interpolation_label,
-                z_domain=z_domain,
-                magnitude_domain=magnitude_domain,
+                interpolation="piecewise_constant_cells",
+                z_domain=(z_edges[0], z_edges[-1]),
+                magnitude_domain=(magnitude_edges[0], magnitude_edges[-1]),
                 z_edges=z_edges,
                 magnitude_edges=magnitude_edges,
                 z_cell_tiling_residual=z_tiling_residual,
@@ -830,26 +785,23 @@ class DensityReader:
             redshift_widths=widths,
             density=_immutable(density),
             provenance=provenance,
-            interpolation=interpolation,
             z_edges=z_edges,
             magnitude_edges=magnitude_edges,
             _context=context,
-            _spline=spline_interpolant,
             _histogram=histogram,
         ).items():
             object.__setattr__(self, name, value)
 
     def query(self, z, magnitudes):
-        """Evaluate density at one redshift in requested magnitude order.
+        """Evaluate the cell density at one redshift in requested magnitude order.
 
         Parameters
         ----------
         z : float
-            Dimensionless redshift inside the tabulated domain: the closed cell-edge
-            range for piecewise_constant, or the closed centre range for spline.
+            Dimensionless redshift inside the closed redshift cell-edge range.
         magnitudes : array_like
-            Magnitude nodes, shape (n_magnitude,), in requested order, inside the
-            corresponding magnitude domain.
+            Magnitude nodes, shape (n_magnitude,), in requested order, inside
+            the closed magnitude cell-edge range.
 
         Returns
         -------
@@ -860,72 +812,20 @@ class DensityReader:
         Raises
         ------
         ValueError
-            If queries are invalid or interpolated densities are negative or
-            nonfinite.
+            If queries are invalid or outside the cell edges, or densities are
+            negative or nonfinite.
         """
         z = scalar(z, "redshift")
-        histogram = self._histogram
-        _query(
-            self.z if histogram is None else self.z_edges, z, "redshift", self._context
-        )
+        _query(self.z_edges, z, "redshift", self._context)
         magnitude_grid = _query(
-            self.magnitudes if histogram is None else self.magnitude_edges,
-            magnitudes,
-            "magnitude",
-            self._context,
+            self.magnitude_edges, magnitudes, "magnitude", self._context
         )
         if magnitude_grid.ndim != 1 or not len(magnitude_grid):
             raise ValueError("magnitudes must be nonempty 1D")
-        result = (
-            self._spline.ev(np.full(magnitude_grid.shape, z), magnitude_grid)
-            if histogram is None
-            else histogram(z, magnitude_grid)
-        )
+        result = self._histogram(z, magnitude_grid)
         if np.any(result < 0) or not np.all(np.isfinite(result)):
             raise ValueError(
                 f"{self._context}: negative/nonfinite interpolated density at z={z}, magnitudes={magnitude_grid.tolist()}"
-            )
-        return _immutable(result)
-
-    def query_grid(self, z, magnitudes):
-        """Evaluate the piecewise-constant density on a redshift-magnitude grid.
-
-        Parameters
-        ----------
-        z : array_like
-            Dimensionless redshifts, shape (n_z,), inside the closed redshift
-            cell-edge range.
-        magnitudes : array_like
-            Magnitude nodes, shape (n_magnitude,), inside the closed magnitude
-            cell-edge range.
-
-        Returns
-        -------
-        density : ndarray
-            Immutable dN/(dz dm dOmega) in deg^-2 redshift^-1 mag^-1, shape
-            (n_z, n_magnitude); element [i, j] equals query(z[i], magnitudes)[j].
-
-        Raises
-        ------
-        ValueError
-            If the reader uses spline interpolation (the grid query supports
-            piecewise-constant cells only), a query lies outside the closed cell
-            edges, or a density is negative or nonfinite.
-        """
-        histogram = self._histogram
-        if histogram is None:
-            raise ValueError(
-                f"{self._context}: query_grid supports piecewise_constant "
-                "interpolation only"
-            )
-        z = _grid_vector(z, "redshift")
-        magnitude_grid = _grid_vector(magnitudes, "magnitude")
-        _grid_query(self.z_edges, z, "redshift", self._context)
-        _grid_query(self.magnitude_edges, magnitude_grid, "magnitude", self._context)
-        result = histogram(z[:, None], magnitude_grid[None, :])
-        if np.any(result < 0) or not np.all(np.isfinite(result)):
-            raise ValueError(
-                f"{self._context}: negative/nonfinite interpolated density on grid"
             )
         return _immutable(result)
 
@@ -1017,8 +917,8 @@ def _header(text, path):
 
 
 @dataclass(frozen=True, init=False, eq=False)
-class SNRReader:
-    """Header-driven SNR tensor (magnitude,source_redshift,wavelength).
+class SNRTable:
+    """Header-driven SNR tensor (magnitude, source_redshift, wavelength).
 
     smoothing must explicitly be 'legacy' (sigma=10 sample indices, reflect,
     truncate=4) or 'none'. Interpolation is linear in all three closed domains.
@@ -1054,14 +954,14 @@ class SNRReader:
         ------
         ValueError
             If tables, headers, grids or smoothing choices are inconsistent.
-        ImportError
-            If SciPy is unavailable.
 
         Notes
         -----
-        Reads and hashes every table. Legacy smoothing uses a Gaussian width of 10 wavelength sample indices, reflect boundaries and truncation at four standard deviations. Interpolation is linear.
+        Reads and hashes every table. Legacy smoothing uses a Gaussian width of
+        10 wavelength sample indices, reflect boundaries and truncation at four
+        standard deviations. Interpolation is linear.
         """
-        _, interpolator, gaussian = _scipy()
+        interpolator, gaussian = _scipy()
         if smoothing not in ("legacy", "none"):
             raise ValueError("smoothing must be explicitly 'legacy' or 'none'")
         if isinstance(paths, (str, Path)):
@@ -1241,7 +1141,8 @@ class SNRReader:
 
         Notes
         -----
-        Scales inverse squared SNR by pixel width and the ratio of exposure counts; the duration per exposure is not rescaled.
+        Scales inverse squared SNR by pixel width and the ratio of exposure
+        counts; the duration per exposure is not rescaled.
         """
         pixel = _positive(pixel_width_angstrom, "pixel_width_angstrom")
         n_exposures = _positive(exposure_count, "exposure_count")
@@ -1271,7 +1172,308 @@ class SNRReader:
             raise ValueError(f"{self._context}: variance not representable") from error
         return _immutable(result)
 
-    def variance_grid(
+
+def _record(values, raw, original, effective, policies, masks, source):
+    """Freeze sampled values and explicit fallback diagnostics.
+
+    Parameters
+    ----------
+    values : ndarray
+        Final density or variance values, shape (n_magnitude,).
+    raw : ndarray
+        Interpolated density or SNR before fallback/scaling, shape
+        (n_magnitude,).
+    original : mapping
+        Requested coordinates.
+    effective : mapping
+        Coordinates and selections used by interpolation.
+    policies : mapping
+        Named fallback and scaling conventions.
+    masks : mapping of ndarray
+        Boolean fallback selections, each shape (n_magnitude,).
+    source : mapping
+        Original table provenance.
+
+    Returns
+    -------
+    record : mappingproxy
+        Immutable sampled values and diagnostic metadata, including fallback
+        counts.
+    """
+    return freeze(
+        dict(
+            values=values,
+            raw=raw,
+            provenance=dict(
+                compatibility=True,
+                original=original,
+                effective=effective,
+                policies=policies,
+                masks=masks,
+                counts={k: int(np.count_nonzero(v)) for k, v in masks.items()},
+                raw_values=raw,
+                source=source,
+            ),
+        )
+    )
+
+
+@dataclass(frozen=True)
+class SourceDensity:
+    """Sample a validated DensityTable with the lyaforecast exterior floor.
+
+    Coordinates outside the redshift or magnitude cell edges receive 1e-20, as
+    in lyaforecast. In-domain cell densities are never negative, so the
+    recorded negative-density policy ('floor_negative') never acts; zero cells
+    are retained.
+
+    Parameters
+    ----------
+    reader : DensityTable
+        Validated source-density table. The attribute name is kept because
+        provenance and magnitude-partition code read ``density.reader``.
+    """
+
+    reader: DensityTable
+
+    def __post_init__(self):
+        """Prepare the forest-normalized cell densities.
+
+        Returns
+        -------
+        None
+            No value is returned.
+
+        Raises
+        ------
+        ValueError
+            If the source table is not a validated DensityTable.
+
+        Notes
+        -----
+        Retains the reference reduction order, including the flat zero-masked
+        sum for forest normalization. The source table is unchanged.
+        """
+        if not isinstance(self.reader, DensityTable):
+            raise ValueError("require validated DensityTable")
+        # Reference forest normalization sums the entire masked flat array,
+        # including zeroed redshift rows. Preserve its arithmetic ordering here;
+        # the strict table's accepted selected-row reduction stays unchanged.
+        reader = self.reader
+        values = reader.raw_counts.copy()
+        bounds = reader.provenance["magnitude_bounds"]
+        if bounds is not None:
+            magnitude_min, magnitude_max = bounds
+            if magnitude_min is not None:
+                values *= reader.magnitudes[None, :] >= magnitude_min
+            if magnitude_max is not None:
+                values *= reader.magnitudes[None, :] <= magnitude_max
+        threshold = reader.provenance["z_norm_min"]
+        redshift_mask = (
+            np.ones(len(reader.z), dtype=bool)
+            if threshold is None
+            else reader.z > threshold
+        )
+        normalization_count = (
+            np.sum(values * redshift_mask[:, None])
+            if bounds is not None
+            else np.sum(values[redshift_mask])
+        )
+        target = reader.provenance["target_density"]
+        with np.errstate(over="raise", under="raise", invalid="raise", divide="raise"):
+            if target is not None:
+                values *= target / normalization_count
+            values /= reader.redshift_widths[:, None] * reader.provenance["dm"]
+        object.__setattr__(self, "_normalization_measure", float(normalization_count))
+        object.__setattr__(
+            self,
+            "_histogram",
+            CellHistogram2D(
+                reader.z_edges, reader.magnitude_edges, values, DENSITY_FLOOR
+            ),
+        )
+
+    def sample(self, z, magnitudes):
+        """Evaluate the cell density with the exterior floor.
+
+        Parameters
+        ----------
+        z : float
+            Nonnegative dimensionless source redshift; redshifts outside the
+            cell edges receive 1e-20.
+        magnitudes : array_like
+            Magnitude nodes, shape (n_magnitude,), in requested order.
+
+        Returns
+        -------
+        record : mappingproxy
+            Density values in deg^-2 redshift^-1 mag^-1, shape (n_magnitude,),
+            with cell values and exterior-floor provenance.
+
+        Raises
+        ------
+        ValueError
+            If the redshift is invalid or negative.
+        """
+        z, magnitude_grid = scalar(z, "redshift"), _magnitude_vector(magnitudes)
+        if z < 0:
+            raise ValueError("redshift must be nonnegative")
+        reader, histogram = self.reader, self._histogram
+        z_edges, magnitude_edges = histogram.z_edges, histogram.magnitude_edges
+        magnitude_outside = (magnitude_grid < magnitude_edges[0]) | (
+            magnitude_grid > magnitude_edges[-1]
+        )
+        redshift_outside = np.full(
+            magnitude_grid.shape, z < z_edges[0] or z > z_edges[-1]
+        )
+        raw = real_array(histogram(z, magnitude_grid), "raw density")
+        values = raw.copy()
+        values[magnitude_outside | redshift_outside] = DENSITY_FLOOR
+        return _record(
+            values,
+            raw,
+            dict(z=z, magnitudes=magnitude_grid),
+            dict(
+                z=float(np.clip(z, z_edges[0], z_edges[-1])),
+                magnitudes=np.clip(
+                    magnitude_grid, magnitude_edges[0], magnitude_edges[-1]
+                ),
+            ),
+            dict(
+                magnitude_domain="legacy_floor_outside_cell_edges",
+                density_floor=DENSITY_FLOOR,
+                redshift="floor_outside_cells",
+                interpolation="piecewise_constant_cells",
+                negative="floor_negative",
+                negative_is_reference_extension=False,
+                compatibility_normalization_measure=self._normalization_measure,
+                normalization_reduction="legacy flat zero-masked forest sum; selected-row galaxy sum",
+            ),
+            dict(
+                density_floor=magnitude_outside | redshift_outside,
+                negative_density=np.zeros(magnitude_grid.shape, dtype=bool),
+                redshift_extension=np.zeros(magnitude_grid.shape, dtype=bool),
+                redshift_outside_cells=redshift_outside,
+            ),
+            reader.provenance,
+        )
+
+    def sample_grid(self, z, magnitudes):
+        """Evaluate the cell density on a redshift-magnitude grid with floors.
+
+        Parameters
+        ----------
+        z : array_like
+            Nonnegative dimensionless source redshifts, shape (n_z,). Redshifts
+            outside the cell edges receive 1e-20, as in sample.
+        magnitudes : array_like
+            Magnitude nodes, shape (n_magnitude,), in requested order.
+
+        Returns
+        -------
+        record : mappingproxy
+            values and raw densities in deg^-2 redshift^-1 mag^-1, shape
+            (n_z, n_magnitude); element [i, j] equals sample(z[i],
+            magnitudes)["values"][j]. Provenance counts are in grid elements.
+
+        Raises
+        ------
+        ValueError
+            If a redshift is negative or the inputs are invalid.
+        """
+        z = _grid_vector(z, "redshift")
+        magnitude_grid = _magnitude_vector(magnitudes)
+        if np.any(z < 0):
+            raise ValueError("redshift must be nonnegative")
+        reader, histogram = self.reader, self._histogram
+        z_edges, magnitude_edges = histogram.z_edges, histogram.magnitude_edges
+
+        # Same exterior-floor policy as the scalar cell sampling.
+        magnitude_outside = (magnitude_grid < magnitude_edges[0]) | (
+            magnitude_grid > magnitude_edges[-1]
+        )
+        redshift_outside = (z < z_edges[0]) | (z > z_edges[-1])
+        outside_mask = redshift_outside[:, None] | magnitude_outside[None, :]
+        raw = real_array(histogram(z[:, None], magnitude_grid[None, :]), "raw density")
+        values = raw.copy()
+        values[outside_mask] = DENSITY_FLOOR
+        return freeze(
+            dict(
+                values=values,
+                raw=raw,
+                provenance=dict(
+                    compatibility=True,
+                    policies=dict(
+                        magnitude_domain="legacy_floor_outside_cell_edges",
+                        density_floor=DENSITY_FLOOR,
+                        redshift="floor_outside_cells",
+                        interpolation="piecewise_constant_cells",
+                        negative="floor_negative",
+                        negative_is_reference_extension=False,
+                        compatibility_normalization_measure=self._normalization_measure,
+                    ),
+                    counts=dict(
+                        density_floor=int(np.count_nonzero(outside_mask)),
+                        negative_density=0,
+                        redshift_extension=0,
+                        redshift_outside_cells=int(
+                            np.count_nonzero(
+                                np.broadcast_to(redshift_outside[:, None], values.shape)
+                            )
+                        ),
+                    ),
+                    source=reader.provenance,
+                ),
+            )
+        )
+
+
+@dataclass(frozen=True)
+class ForestSNR:
+    """Forest pixel variance from an SNRTable with the lyaforecast fallbacks.
+
+    Bright magnitudes are clamped to the brightest tabulated magnitude, the
+    scaled SNR is floored at 1e-10, and coordinates outside the table receive
+    the exposure-independent variance sentinel 1e20.
+
+    Parameters
+    ----------
+    reader : SNRTable
+        Validated SNR table. The attribute name is kept because provenance and
+        magnitude-partition code read ``snr.reader``.
+    """
+
+    reader: SNRTable
+
+    def __post_init__(self):
+        """Prepare linear interpolation of the validated SNR table.
+
+        Returns
+        -------
+        None
+            No value is returned.
+
+        Raises
+        ------
+        ValueError
+            If the supplied object is not a validated SNRTable.
+        """
+        if not isinstance(self.reader, SNRTable):
+            raise ValueError("require validated SNRTable")
+        interpolator, _ = _scipy()
+        reader = self.reader
+        object.__setattr__(
+            self,
+            "_interpolator",
+            interpolator(
+                (reader.magnitudes, reader.z, reader.wavelength),
+                reader.smoothed_snr.copy(),
+                method="linear",
+                bounds_error=True,
+            ),
+        )
+
+    def sample(
         self,
         *,
         z_source,
@@ -1281,17 +1483,161 @@ class SNRReader:
         exposure_count,
         exposure_time=None,
     ):
-        """Convert table SNR to pixel variance on paired points times magnitudes.
+        """Evaluate pixel variance with explicit legacy SNR fallbacks.
+
+        Parameters
+        ----------
+        z_source : float
+            Dimensionless redshift of the background source.
+        magnitudes : array_like
+            Magnitude nodes, shape (n_magnitude,), in requested order.
+        wavelength : float
+            Observed wavelength in angstrom.
+        pixel_width_angstrom : float
+            Positive observed pixel width in angstrom.
+        exposure_count : float
+            Positive number of exposures.
+        exposure_time : float or None, optional
+            Per-exposure duration in seconds; None uses the table duration, and an
+            explicit value must match it.
+
+        Returns
+        -------
+        record : mappingproxy
+            Dimensionless variance and raw SNR, shape (n_magnitude,), with fallback
+            and exposure provenance.
+
+        Raises
+        ------
+        ValueError
+            If coordinates or exposure settings are invalid, or scaled variance is
+            not representable.
+
+        Notes
+        -----
+        Bright magnitudes clamp to the brightest node. Other out-of-range
+        coordinates use variance 1e20 independently of exposure. In-domain SNR
+        is scaled before the 1e-10 floor.
+        """
+        reader = self.reader
+        source_redshift, observed_wavelength = (
+            scalar(z_source, "z_source"),
+            _positive(wavelength, "wavelength"),
+        )
+        magnitude_grid = _magnitude_vector(magnitudes)
+        if source_redshift < 0:
+            raise ValueError("source redshift must be nonnegative")
+        pixel_width = _positive(pixel_width_angstrom, "pixel_width_angstrom")
+        n_exposures = _positive(exposure_count, "exposure_count")
+        if (
+            exposure_time is not None
+            and _positive(exposure_time, "exposure_time")
+            != reader.provenance["exposure_time"]
+        ):
+            raise ValueError("incompatible per-exposure EXPTIME")
+
+        # Out-of-domain samples retain the exposure-independent sentinel variance.
+        outside_mask = (
+            (magnitude_grid > reader.magnitudes[-1])
+            | (source_redshift < reader.z[0])
+            | (source_redshift > reader.z[-1])
+            | (observed_wavelength < reader.wavelength[0])
+            | (observed_wavelength > reader.wavelength[-1])
+        )
+        bright_mask = (magnitude_grid < reader.magnitudes[0]) & ~outside_mask
+        effective_magnitudes = np.maximum(magnitude_grid, reader.magnitudes[0])
+        raw_snr, scaled_snr = (
+            np.zeros(magnitude_grid.shape),
+            np.zeros(magnitude_grid.shape),
+        )
+        values = np.full(magnitude_grid.shape, 1e20)
+
+        inside_mask = ~outside_mask
+        if np.any(inside_mask):
+            raw_snr[inside_mask] = real_array(
+                self._interpolator(
+                    np.column_stack(
+                        (
+                            effective_magnitudes[inside_mask],
+                            np.full(np.count_nonzero(inside_mask), source_redshift),
+                            np.full(np.count_nonzero(inside_mask), observed_wavelength),
+                        )
+                    )
+                ),
+                "interpolated SNR",
+            )
+            if np.any(raw_snr < 0):
+                raise ValueError("negative interpolated SNR")
+            try:
+                with np.errstate(
+                    over="raise", under="raise", invalid="raise", divide="raise"
+                ):
+                    # Apply pixel/exposure scaling before the reference SNR floor.
+                    scaled_snr[inside_mask] = (
+                        raw_snr[inside_mask]
+                        * np.sqrt(pixel_width)
+                        * np.sqrt(
+                            np.float64(n_exposures)
+                            / reader.provenance["exposure_count"]
+                        )
+                    )
+                    values[inside_mask] = (
+                        1 / np.maximum(scaled_snr[inside_mask], 1e-10) ** 2
+                    )
+            except FloatingPointError as error:
+                raise ValueError("scaled SNR/variance not representable") from error
+        result = _record(
+            values,
+            raw_snr,
+            dict(
+                z_source=source_redshift,
+                wavelength=observed_wavelength,
+                magnitudes=magnitude_grid,
+            ),
+            dict(
+                z_source=source_redshift,
+                wavelength=observed_wavelength,
+                magnitudes=effective_magnitudes,
+                evaluated=inside_mask,
+            ),
+            dict(
+                snr="legacy_floor_clamp",
+                snr_floor=1e-10,
+                sentinel_variance=1e20,
+                pixel_width_angstrom=pixel_width,
+                exposure_count=n_exposures,
+                scaled_snr=scaled_snr,
+            ),
+            dict(
+                bright_clamp=bright_mask,
+                out_of_range=outside_mask,
+                snr_floor=inside_mask & (scaled_snr < 1e-10),
+            ),
+            reader.provenance,
+        )
+        return result
+
+    def variance_grid(
+        self,
+        *,
+        z_source,
+        wavelength,
+        magnitudes,
+        pixel_width_angstrom,
+        exposure_count,
+        exposure_time=None,
+    ):
+        """Evaluate pixel variance on paired points times magnitudes (legacy policy).
 
         Parameters
         ----------
         z_source : array_like
-            Dimensionless source redshifts, shape (n_point,).
-        magnitudes : array_like
-            Magnitude nodes, shape (n_magnitude,).
+            Nonnegative dimensionless source redshifts, shape (n_point,).
         wavelength : array_like
             Observed wavelengths in angstrom, shape (n_point,), paired with
             z_source.
+        magnitudes : array_like
+            Magnitude nodes, shape (n_magnitude,), in requested order.
         pixel_width_angstrom : array_like
             Positive observed pixel widths in angstrom, shape (n_point,).
         exposure_count : float
@@ -1302,66 +1648,130 @@ class SNRReader:
 
         Returns
         -------
-        variance : ndarray
-            Immutable dimensionless variance, shape (n_point, n_magnitude);
-            element [p, j] equals the scalar variance at (z_source[p],
-            magnitudes[j], wavelength[p], pixel_width_angstrom[p]).
+        record : mappingproxy
+            Dimensionless variance values, shape (n_point, n_magnitude), and
+            provenance. Element [p, j] equals sample(...)["values"][j] at point p.
+            Fallback counts (bright_clamp, out_of_range, snr_floor) count grid
+            elements.
 
         Raises
         ------
         ValueError
-            If any point lies outside the closed table domains, the SNR is
-            nonfinite, negative or zero, exposure metadata disagree, or a
-            variance is not representable.
+            If coordinates or exposure settings are invalid, a raw interpolated
+            SNR is negative or nonfinite, or a scaled variance is not
+            representable.
 
         Notes
         -----
-        Uses the arithmetic of variance: 1/(SNR^2 * pixel * n_exposure/table
-        exposures). Interpolation is one vectorised call per chunk of at most
-        2**20 points to bound memory.
+        Reproduces the scalar policy per element: out-of-range magnitude (faint),
+        redshift or wavelength gives the 1e20 sentinel independently of exposure;
+        bright magnitudes clamp to the brightest node; in-domain SNR is scaled by
+        sqrt(pixel width) and sqrt(n_exposure/table exposures) before the 1e-10
+        floor. The interpolator is called once per chunk of at most 2**20 points.
         """
-        z_source, wavelength, pixel = _paired_points(
+        reader = self.reader
+        z_source, observed_wavelength, pixel_width = _paired_points(
             z_source, wavelength, pixel_width_angstrom
         )
+        magnitude_grid = _magnitude_vector(magnitudes)
+        if np.any(z_source < 0):
+            raise ValueError("source redshift must be nonnegative")
         n_exposures = _positive(exposure_count, "exposure_count")
         if (
             exposure_time is not None
             and _positive(exposure_time, "exposure_time")
-            != self.provenance["exposure_time"]
+            != reader.provenance["exposure_time"]
         ):
-            raise ValueError("incompatible per-exposure EXPTIME; no implicit rescaling")
-        magnitude_grid = _grid_vector(magnitudes, "magnitude")
-        _grid_query(self.z, z_source, "source redshift", self._context)
-        _grid_query(self.wavelength, wavelength, "wavelength", self._context)
-        _grid_query(self.magnitudes, magnitude_grid, "magnitude", self._context)
+            raise ValueError("incompatible per-exposure EXPTIME")
 
-        exposure_ratio = np.float64(n_exposures) / self.provenance["exposure_count"]
-        variance = np.empty((len(z_source), len(magnitude_grid)))
-        for rows in _row_chunks(len(z_source), len(magnitude_grid)):
-            snr = snr_grid_values(
-                self._interpolator, z_source[rows], wavelength[rows], magnitude_grid
-            )
-            if not np.all(np.isfinite(snr)) or np.any(snr < 0):
-                raise ValueError(
-                    f"{self._context}: nonfinite/negative interpolated SNR"
+        # Sentinel selections factorize into a per-point and a per-magnitude part.
+        point_inside = (
+            (z_source >= reader.z[0])
+            & (z_source <= reader.z[-1])
+            & (observed_wavelength >= reader.wavelength[0])
+            & (observed_wavelength <= reader.wavelength[-1])
+        )
+        magnitude_inside = magnitude_grid <= reader.magnitudes[-1]
+        inside_mask = point_inside[:, None] & magnitude_inside[None, :]
+        bright_mask = (magnitude_grid < reader.magnitudes[0]) & magnitude_inside
+        effective_magnitudes = np.maximum(magnitude_grid, reader.magnitudes[0])
+
+        # Sentinel variance outside the table domain; the inside block is
+        # overwritten below, so only the outside rows and columns are filled.
+        values = np.empty(inside_mask.shape)
+        values[~point_inside, :] = 1e20
+        values[:, ~magnitude_inside] = 1e20
+        floor_count = 0
+        point_rows = np.flatnonzero(point_inside)
+        magnitude_columns = np.flatnonzero(magnitude_inside)
+        exposure_ratio = np.float64(n_exposures) / reader.provenance["exposure_count"]
+        if len(point_rows) and len(magnitude_columns):
+            for rows in _row_chunks(len(point_rows), len(magnitude_columns)):
+                chunk = point_rows[rows]
+                # Fresh array owned here, so the scaling below is done in place
+                # (same operations and order as the elementwise expressions).
+                raw_snr = snr_grid_values(
+                    self._interpolator,
+                    z_source[chunk],
+                    observed_wavelength[chunk],
+                    effective_magnitudes[magnitude_columns],
                 )
-            if np.any(snr <= 0):
-                raise ValueError(
-                    f"{self._context}: strictly positive SNR required for variance"
-                )
-            try:
-                with np.errstate(
-                    over="raise", under="raise", invalid="raise", divide="raise"
+                if (
+                    raw_snr.dtype != np.float64
+                    or not raw_snr.flags.owndata
+                    or not raw_snr.flags.writeable
                 ):
-                    variance[rows] = 1 / (snr**2 * pixel[rows, None] * exposure_ratio)
-            except FloatingPointError as error:
-                raise ValueError(
-                    f"{self._context}: variance not representable"
-                ) from error
-        return _immutable(variance)
+                    # Not a fresh float64 array of ours: copy before scaling.
+                    raw_snr = real_array(raw_snr, "interpolated SNR")
+                if not np.all(np.isfinite(raw_snr)):
+                    raise ValueError("interpolated SNR must be finite")
+                if raw_snr.min() < 0:
+                    raise ValueError("negative interpolated SNR")
+                try:
+                    with np.errstate(
+                        over="raise", under="raise", invalid="raise", divide="raise"
+                    ):
+                        # Apply pixel/exposure scaling before the reference SNR floor.
+                        scaled_snr = np.multiply(
+                            raw_snr, np.sqrt(pixel_width[chunk, None]), out=raw_snr
+                        )
+                        np.multiply(scaled_snr, np.sqrt(exposure_ratio), out=scaled_snr)
+                        floor_count += int(np.count_nonzero(scaled_snr < 1e-10))
+                        np.maximum(scaled_snr, 1e-10, out=scaled_snr)
+                        np.square(scaled_snr, out=scaled_snr)
+                        variance_block = np.divide(1, scaled_snr, out=scaled_snr)
+                except FloatingPointError as error:
+                    raise ValueError("scaled SNR/variance not representable") from error
+                if len(magnitude_columns) == values.shape[1]:
+                    values[chunk] = variance_block
+                else:
+                    values[np.ix_(chunk, magnitude_columns)] = variance_block
+        return freeze(
+            dict(
+                values=values,
+                provenance=dict(
+                    compatibility=True,
+                    policies=dict(
+                        snr="legacy_floor_clamp",
+                        snr_floor=1e-10,
+                        sentinel_variance=1e20,
+                        exposure_count=n_exposures,
+                    ),
+                    counts=dict(
+                        bright_clamp=int(
+                            np.count_nonzero(point_inside)
+                            * np.count_nonzero(bright_mask)
+                        ),
+                        out_of_range=int(np.count_nonzero(~inside_mask)),
+                        snr_floor=floor_count,
+                    ),
+                    source=reader.provenance,
+                ),
+            )
+        )
 
 
-def sample_forest_readers(
+def sample_forest_tables(
     density,
     snr,
     geometry,
@@ -1373,14 +1783,14 @@ def sample_forest_readers(
     exposure_count,
     exposure_time=None,
 ):
-    """Query each adapter once; return immutable normalized rho/variance metadata.
+    """Query each strict table once; return immutable normalized rho/variance.
 
     Parameters
     ----------
-    density : object
-        Prepared source-density adapter.
-    snr : object
-        Prepared signal-to-noise adapter.
+    density : DensityTable
+        Prepared source-density table (any object exposing ``query``).
+    snr : SNRTable
+        Prepared signal-to-noise table (any object exposing ``variance``).
     geometry : BinGeometry
         Foreground geometry and evaluation redshift.
     response : InstrumentResponse
@@ -1401,7 +1811,7 @@ def sample_forest_readers(
     -------
     sample : mappingproxy
         Immutable rho in deg^-2 (km/s)^-1 mag^-1 and dimensionless variance
-        arrays, both shape (n_magnitude,), with reader provenance.
+        arrays, both shape (n_magnitude,), with table provenance.
 
     Raises
     ------
@@ -1411,8 +1821,8 @@ def sample_forest_readers(
     Notes
     -----
     Pass these arrays to ForestInput with explicit magnitude quadrature, L_v and
-    weighting method. The clustering wavelength uses z_eval; both source readers
-    use z_source. No reader object survives this boundary.
+    weighting method. The clustering wavelength uses z_eval; both source tables
+    use z_source. No table object survives this boundary.
     """
     if scalar(z_source, "z_source") <= geometry.z_eval:
         raise ValueError("z_source must exceed z_eval")
@@ -1452,3 +1862,16 @@ def sample_forest_readers(
             ),
         )
     )
+
+
+__all__ = [
+    "DENSITY_FLOOR",
+    "CellHistogram2D",
+    "DensityTable",
+    "ForestSNR",
+    "SNRTable",
+    "SourceDensity",
+    "sample_forest_tables",
+    "snr_grid_separable",
+    "snr_grid_values",
+]
