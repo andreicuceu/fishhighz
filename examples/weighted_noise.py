@@ -183,8 +183,7 @@ def run(area=1000):
             rho=np.array(rho) * 0.01,
             variance=variance,
             length_velocity=10000,
-            method="legacy",
-            iterations=3,
+            method="early_lyaforecast",
             auxiliary=auxiliary,
         )
         weight_results.append(weights)
@@ -293,7 +292,7 @@ def run(area=1000):
         default_smoothed_p1d_comoving=smoothed.tolist(),
         external_smoothed_p1d_comoving=external_smoothed.tolist(),
         noise=noise.tolist(),
-        weight_changes=[p.weight_changes.tolist() for p in weight_results],
+        weight_updates=[p.convergence["updates"] for p in weight_results],
         weights=[p.weights.tolist() for p in weight_results],
         null_directions=[],  # One amplitude, positive scalar information; no prior.
         interpretation="synthetic populations, not a physical DESI-2 forecast",

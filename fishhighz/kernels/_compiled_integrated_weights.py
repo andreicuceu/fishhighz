@@ -10,7 +10,7 @@ Python division-by-zero branch), and the sums are accumulated block-wise
 (partial sums of one block added to the running total), mirroring the
 pairwise-like NumPy reductions. No fastmath and no parallel loops; every
 elementwise operation is the IEEE operation w = c / (v + c) followed by the
-sequential products of ``kernels.weights._integrals``. The kernels cannot raise
+sequential products of ``kernels.full_sum_weights._integrals``. The kernels cannot raise
 NumPy floating-point errors and do not trap underflow; they return a nonzero
 status for nonfinite sums, which the host in ``integrated_weights`` raises as
 FloatingPointError.

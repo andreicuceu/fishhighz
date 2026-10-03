@@ -7,12 +7,11 @@ import pytest
 from numpy.testing import assert_allclose
 
 from fishhighz.fields import ObservedField, PairSelection
-from fishhighz.geometry import SPEED_LIGHT_KMS, width_velocity_to_comoving
+from fishhighz.geometry import width_velocity_to_comoving
 from fishhighz.response import (
     InstrumentResponse,
     gaussian_fwhm_velocity_to_sigma,
     gaussian_sigma_angstrom_to_velocity,
-    legacy_resolving_power_to_sigma,
     pair_response,
     pixel_width_angstrom_to_velocity,
     prepare_response,
@@ -133,15 +132,6 @@ def test_width_conventions(z):
         resolving_power_fwhm_to_sigma(resolving_power),
         rtol=2e-15,
     )
-    legacy = legacy_resolving_power_to_sigma(resolving_power)
-    assert_allclose(
-        legacy / (299800 / resolving_power), SPEED_LIGHT_KMS / 299800, rtol=1e-15
-    )
-    assert_allclose(
-        legacy / resolving_power_fwhm_to_sigma(resolving_power),
-        2 * np.sqrt(2 * np.log(2)),
-        rtol=1e-15,
-    )
 
 
 @pytest.mark.parametrize(
@@ -175,20 +165,11 @@ def test_response_invalid(q, p, s):
         velocity_response(q, pixel_width_velocity=p, gaussian_sigma_velocity=s)
 
 
-@pytest.mark.parametrize(
-    "helper", [resolving_power_fwhm_to_sigma, legacy_resolving_power_to_sigma]
-)
-def test_bad_resolving_power(helper):
-    """Check bad resolving power.
-
-    Parameters
-    ----------
-    helper : callable
-        Helper callable under examination, supplied by pytest parametrization.
-    """
+def test_bad_resolving_power():
+    """Check that invalid resolving powers are rejected."""
     for value in (0, -1, np.nan, np.inf, True, [10], 1e-320):
         with pytest.raises(ValueError):
-            helper(value)
+            resolving_power_fwhm_to_sigma(value)
 
 
 def test_bad_settings_shapes_and_widths():

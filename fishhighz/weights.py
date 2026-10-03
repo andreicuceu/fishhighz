@@ -9,16 +9,11 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from ._arrays import integer, real_array, scalar
+from ._arrays import real_array, scalar
 from .fields import ObservedField, PairSelection
 from .geometry import SPEED_LIGHT_KMS, BinGeometry, _immutable, _positive
-from .kernels.full_sum_weights import METHODS, fixed_weights, solve
-from .kernels.integrated_weights import (
-    fixed_weights_integrated,
-    integrated_moments,
-    solve_integrated,
-)
-from .kernels.weights import _integrals, _iterate
+from .kernels.full_sum_weights import METHODS, _integrals, solve
+from .kernels.integrated_weights import integrated_moments, solve_integrated
 from .models.external import P3DProvider, PreparedP3D, evaluate_p1d, evaluate_p3d
 from .response import InstrumentResponse, velocity_response
 
@@ -365,11 +360,12 @@ class _ForestContextMixin:
 
 @dataclass(frozen=True, init=False, eq=False)
 class ForestWeights(_ForestContextMixin):
-    """Fixed immutable input arrays, prefix integrals and noise coefficients.
+    """Converged adaptive forest weights, cumulative moments and noise coefficients.
 
-    A is deg²; P_pixel is deg² km/s. I1/I2 are density per source velocity;
-    I3 adds dimensionless pixel variance. weight_changes is max absolute change
-    per update, not a convergence assertion. Construct with prepare_forest_weights.
+    A is deg²; P_pixel is deg² km/s. I1/I2 are cumulative density per source
+    velocity; I3 adds dimensionless pixel variance. ``convergence`` is the
+    record of the adaptive full-sample solver. Construct with
+    prepare_forest_weights.
     """
 
     context: tuple
@@ -380,12 +376,10 @@ class ForestWeights(_ForestContextMixin):
     variance: np.ndarray
     length_velocity: float
     method: str
-    iterations: int | None
     auxiliary: AuxiliarySamples | None
-    signal: float | None
-    alias: float | None
+    signal: float
+    alias: float
     weights: np.ndarray
-    weight_changes: np.ndarray
     I1: np.ndarray
     I2: np.ndarray
     I3: np.ndarray
@@ -406,8 +400,6 @@ def prepare_forest_weights(
     variance,
     length_velocity,
     method,
-    weights=None,
-    iterations=None,
     signal=None,
     alias=None,
     auxiliary=None,
@@ -441,20 +433,15 @@ def prepare_forest_weights(
         Nonnegative dimensionless pixel-noise variance.
     length_velocity : float
         Positive forest length in km/s.
-    method : str
-        Explicit supplied, legacy, inverse_variance, early_lyaforecast, or
-        mcdonald weighting prescription.
-    weights : array_like of shape (n_magnitude,), optional
-        Dimensionless supplied weights; default None. Required only for
-        method='supplied'.
-    iterations : int, optional
-        Nonnegative fixed update count. Default None requests adaptive stopping
-        for the full-sample methods; legacy requires an explicit count.
+    method : {'early_lyaforecast', 'mcdonald'}
+        Adaptive full-sample weighting prescription (``sum_historical`` or
+        ``sum_aliasing`` recurrence of ``kernels.full_sum_weights``).
     signal : float, optional
-        Positive response-smoothed reference S in deg^2 km/s. Default None; used
-        only by iterative prescriptions.
+        Positive response-smoothed reference S in deg^2 km/s. Default None;
+        required unless ``auxiliary`` is given.
     alias : float, optional
-        Positive response-smoothed reference B or B_star in km/s. Default None.
+        Positive response-smoothed reference B in km/s. Default None; required
+        unless ``auxiliary`` is given.
     auxiliary : AuxiliarySamples, optional
         Matching fiducial samples supplying S/B instead of explicit signal and
         alias. Default None.
@@ -483,20 +470,13 @@ def prepare_forest_weights(
     Notes
     -----
     'early_lyaforecast' and 'mcdonald' use full-sample moments and require
-    positive signal/alias or matching fiducial auxiliary samples. With no
-    iterations they require confirmed adaptive convergence (rtol=1e-4, at
-    least three updates and three stable transitions, doubled-count
+    positive signal/alias or matching fiducial auxiliary samples (from
+    sample_auxiliary). Both require confirmed adaptive convergence (rtol=1e-4,
+    at least three updates and three stable transitions, doubled-count
     confirmation, cap 96). Failure raises; no last iterate becomes a forecast.
-    Explicit iterations selects a labeled fixed-count diagnostic.
 
-    Require explicit method='supplied' with weights, or 'legacy' with iterations
-    and positive S/B (signal/alias), optionally from sample_auxiliary.
-    'inverse_variance' requires only alias=B_star, the positive finite P1D
-    already response-smoothed at a fixed weighting mode, and computes
-    B_star/(B_star+pixel_width*variance) once on positive density support.
-    Its weights, iterations, signal and auxiliary arguments must be None.
     z_source exceeds z_eval. No model is queried here. Final noise uses its
-    own mode-dependent intrinsic P1D and response; B_star only sets the weights.
+    own mode-dependent intrinsic P1D and response; S and B only set the weights.
     """
     context = _context(field, geometry, response)
     z_source = _redshift(z_source, "z_source")
@@ -528,97 +508,50 @@ def prepare_forest_weights(
     length = _positive(length_velocity, "length_velocity")
     pixel = response.pixel_width_velocity
 
-    # Resolve the chosen prescription before any nonlinear weight update.
-    if method == "supplied":
-        if weights is None or any(
-            x is not None for x in (iterations, signal, alias, auxiliary)
+    # Resolve the chosen prescription and its S/B references before any
+    # nonlinear weight update.
+    if method not in METHODS:
+        raise ValueError(f"method must be one of {', '.join(METHODS)}")
+    if auxiliary is not None:
+        if (
+            not isinstance(auxiliary, AuxiliarySamples)
+            or auxiliary.context != context
+            or signal is not None
+            or alias is not None
         ):
-            raise ValueError("supplied weights conflict with legacy settings")
-        forest_weights = _nonnegative(weights, "weights")
-        if forest_weights.shape != magnitude_grid.shape:
-            raise ValueError("weights shape mismatch")
-        changes = np.empty(0)
-    elif method == "legacy" or method in METHODS:
-        if weights is not None:
-            raise ValueError("legacy method conflicts with supplied weights")
-        if method == "legacy" or iterations is not None:
-            iterations = integer(iterations, "iterations")
-        if auxiliary is not None:
-            if (
-                not isinstance(auxiliary, AuxiliarySamples)
-                or auxiliary.context != context
-                or signal is not None
-                or alias is not None
-            ):
-                raise ValueError("auxiliary context/settings mismatch")
-            signal, alias = auxiliary.signal, auxiliary.alias
-        signal, alias = _positive(signal, "S"), _positive(alias, "B")
-    elif method == "inverse_variance":
-        if any(x is not None for x in (weights, iterations, signal, auxiliary)):
-            raise ValueError(
-                "inverse_variance requires weights, iterations, signal and auxiliary "
-                "to be None"
-            )
-        alias = _positive(alias, "B_star (alias)")
-        changes = np.empty(0)
-    else:
-        raise ValueError(
-            "method must be supplied, legacy, inverse_variance, early_lyaforecast or mcdonald"
-        )
+            raise ValueError("auxiliary context/settings mismatch")
+        signal, alias = auxiliary.signal, auxiliary.alias
+    signal, alias = _positive(signal, "S"), _positive(alias, "B")
 
-    convergence = None
     try:
         with np.errstate(over="raise", invalid="raise", divide="raise", under="ignore"):
             masses = source_density * magnitude_weights
             if np.any((source_density > 0) & (masses == 0)):
                 raise ValueError("quadrature masses are not representable")
 
-            if method in METHODS:
-                inputs = SimpleNamespace(
-                    density=source_density,
-                    quadrature=magnitude_weights,
-                    variance=pixel_variance,
-                    length=length,
-                    pixel=pixel,
-                    signal=signal,
-                    p1d=alias,
+            inputs = SimpleNamespace(
+                density=source_density,
+                quadrature=magnitude_weights,
+                variance=pixel_variance,
+                length=length,
+                pixel=pixel,
+                signal=signal,
+                p1d=alias,
+            )
+            convergence = solve(
+                inputs,
+                METHODS[method],
+                rtol=rtol,
+                min_updates=min_updates,
+                stable_steps=stable_steps,
+                max_updates=max_updates,
+            )
+            if convergence["status"] != "converged":
+                raise ValueError(
+                    f"{field.id}: {method} {convergence['status']}: "
+                    f"{convergence['reason']}"
                 )
-                if iterations is None:
-                    convergence = solve(
-                        inputs,
-                        METHODS[method],
-                        rtol=rtol,
-                        min_updates=min_updates,
-                        stable_steps=stable_steps,
-                        max_updates=max_updates,
-                    )
-                    if convergence["status"] != "converged":
-                        raise ValueError(
-                            f"{field.id}: {method} {convergence['status']}: "
-                            f"{convergence['reason']}"
-                        )
-                    forest_weights = convergence["weights"]
-                else:
-                    forest_weights = fixed_weights(inputs, METHODS[method], iterations)
-                    convergence = dict(status="fixed_count", updates=iterations)
-                changes = np.empty(0)
-            elif method == "legacy":
-                forest_weights, changes = _iterate(
-                    masses, pixel_variance, length, pixel, signal, alias, iterations
-                )
-                if np.any((source_density > 0) & (forest_weights == 0)):
-                    raise ValueError("legacy weights are not representable")
-            elif method == "inverse_variance":
-                support_mask = source_density > 0
-                forest_weights = np.zeros_like(source_density)
-                with np.errstate(under="raise"):
-                    instrumental_power = pixel * pixel_variance[support_mask]
-                forest_weights[support_mask] = alias / (alias + instrumental_power)
-                if np.any(
-                    (forest_weights[support_mask] <= 0)
-                    | ~np.isfinite(forest_weights[support_mask])
-                ):
-                    raise ValueError("inverse_variance weights are not representable")
+            forest_weights = convergence["weights"]
 
             # Normalize moments only after the weights have been determined.
             (
@@ -659,12 +592,10 @@ def prepare_forest_weights(
         variance=pixel_variance,
         length_velocity=length,
         method=method,
-        iterations=iterations,
         auxiliary=auxiliary,
         signal=signal,
         alias=alias,
         weights=forest_weights,
-        weight_changes=changes,
         I1=first_moment,
         I2=second_moment,
         I3=noise_moment,
@@ -694,7 +625,6 @@ _INTEGRATED_SOURCE_ATTRIBUTES = (
 INTEGRATED_WEIGHT_OPTIONS = frozenset(
     {
         "method",
-        "iterations",
         "signal",
         "alias",
         "auxiliary",
@@ -764,7 +694,6 @@ class IntegratedForestWeights(_ForestContextMixin):
 
     context: tuple
     method: str
-    iterations: int | None
     auxiliary: AuxiliarySamples | None
     signal: float
     alias: float
@@ -792,7 +721,6 @@ def prepare_integrated_forest_weights(
     auxiliary=None,
     signal=None,
     alias=None,
-    iterations=None,
 ):
     """Prepare early-lyaforecast weights for a source integrated in z_q and pixel.
 
@@ -828,9 +756,6 @@ def prepare_integrated_forest_weights(
         Positive response-smoothed reference S in deg^2 km/s. Default None.
     alias : float, optional
         Positive response-smoothed reference B in km/s. Default None.
-    iterations : int, optional
-        Nonnegative fixed update count. Default None requests adaptive stopping
-        with confirmed convergence.
 
     Returns
     -------
@@ -859,7 +784,7 @@ def prepare_integrated_forest_weights(
 
     The recurrence is the dedicated compiled streaming implementation of
     ``kernels.integrated_weights``, which reproduces the central kernel
-    ``full_sum_weights.solve``/``fixed_weights`` (same update count, candidate,
+    ``full_sum_weights.solve`` (same update count, candidate,
     stopping decisions and record keys, except when ``rtol`` coincides with a
     stopping metric to within its rounding, ~1e-16 absolute) with full sums
     that are more accurate than the central kernel's cumulative prefix sums
@@ -898,8 +823,6 @@ def prepare_integrated_forest_weights(
     if not np.isclose(pixel, response.pixel_width_velocity, rtol=1e-12, atol=0):
         raise ValueError("source pixel width differs from the response pixel width")
 
-    if iterations is not None:
-        iterations = integer(iterations, "iterations")
     if auxiliary is not None:
         if (
             not isinstance(auxiliary, AuxiliarySamples)
@@ -917,38 +840,23 @@ def prepare_integrated_forest_weights(
 
     try:
         with np.errstate(over="raise", invalid="raise", divide="raise", under="ignore"):
-            if iterations is None:
-                solution = solve_integrated(
-                    flat_measure,
-                    flat_variance,
-                    pixel=pixel,
-                    signal=signal,
-                    alias=alias,
-                    rtol=rtol,
-                    min_updates=min_updates,
-                    stable_steps=stable_steps,
-                    max_updates=max_updates,
+            solution = solve_integrated(
+                flat_measure,
+                flat_variance,
+                pixel=pixel,
+                signal=signal,
+                alias=alias,
+                rtol=rtol,
+                min_updates=min_updates,
+                stable_steps=stable_steps,
+                max_updates=max_updates,
+            )
+            if solution["status"] != "converged":
+                raise ValueError(
+                    f"{field.id}: {method} {solution['status']}: {solution['reason']}"
                 )
-            else:
-                flat_weights = fixed_weights_integrated(
-                    flat_measure,
-                    flat_variance,
-                    pixel=pixel,
-                    signal=signal,
-                    alias=alias,
-                    updates=iterations,
-                )
-
-            if iterations is None:
-                if solution["status"] != "converged":
-                    raise ValueError(
-                        f"{field.id}: {method} {solution['status']}: "
-                        f"{solution['reason']}"
-                    )
-                flat_weights = solution["weights"]
-                convergence = dict(solution)
-            else:
-                convergence = dict(status="fixed_count", updates=iterations)
+            flat_weights = solution["weights"]
+            convergence = dict(solution)
 
             # Normalize moments only after the weights have been determined.
             (
@@ -989,16 +897,14 @@ def prepare_integrated_forest_weights(
         ) from error
 
     weights = _immutable(weights)
-    if iterations is None:
-        # Share the read-only (n_pixel, n_magnitude) array instead of keeping a
-        # second flattened copy of the converged weights.
-        convergence["weights"] = weights
+    # Share the read-only (n_pixel, n_magnitude) array instead of keeping a
+    # second flattened copy of the converged weights.
+    convergence["weights"] = weights
 
     result = object.__new__(IntegratedForestWeights)
     values = dict(
         context=context,
         method=method,
-        iterations=iterations,
         auxiliary=auxiliary,
         signal=signal,
         alias=alias,

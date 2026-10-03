@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from test_weights import FIELD, RESPONSE, geometry, prepare
+from test_weights import FIELD, RESPONSE, geometry, inject_forest_weights, prepare
 
 from fishhighz.fields import ObservedField, PairSelection
 from fishhighz.noise import (
@@ -15,7 +15,6 @@ from fishhighz.noise import (
     prepare_noise,
 )
 from fishhighz.response import InstrumentResponse
-from fishhighz.weights import prepare_forest_weights
 
 
 @pytest.mark.parametrize("v", [0, 7])
@@ -34,18 +33,14 @@ def test_single_noise_and_h_units(v, h):
     """
     bin_geometry = geometry(h=h)
     response = InstrumentResponse(100, 0)
-    forest_weights = prepare_forest_weights(
-        FIELD,
-        bin_geometry,
-        response,
-        z_source=3,
+    forest_weights = inject_forest_weights(
+        [0.07],
+        bin_geometry=bin_geometry,
+        response=response,
         magnitudes=[20],
         quadrature=[0.2],
         rho=[15],
         variance=[v],
-        length_velocity=10,
-        method="supplied",
-        weights=[0.07],
     )
     velocity_k = np.array([0, 2 * np.pi / 100, 3 * np.pi / 100, 0.002])
     noise = forest_noise(
@@ -189,11 +184,9 @@ def test_bad_p1d(p1d):
         forest_noise(prepare(), FIELD, geometry(), RESPONSE, [0.1], [0.5], p1d)
 
 
-def test_zero_p1d_and_supplied_zero_weights():
-    """Check zero p1d and supplied zero weights."""
-    forest_weights = prepare(
-        method="supplied", weights=[0, 1, 0], iterations=None, signal=None, alias=None
-    )
+def test_zero_p1d_and_prescribed_zero_weights():
+    """Check zero P1D with prescribed weights vanishing outside one magnitude."""
+    forest_weights = inject_forest_weights([0, 1, 0])
     noise = forest_noise(forest_weights, FIELD, geometry(), RESPONSE, [0.1], [0], [0])
     assert noise.aliasing[0] == 0
     assert noise.total[0] == noise.pixel[0]

@@ -23,13 +23,6 @@ NATIVE_REVISION = "early-lyaforecast-2026-10-01"
 # slice, instead of using one representative source redshift. Selected by
 # [input policies] forest_source_integration = integrated or by this revision.
 INTEGRATED_REVISION = "early-lyaforecast-integrated-2026-10-02"
-ADAPTIVE = ("early_lyaforecast", "mcdonald")
-STOPPING = {"rtol": 1e-4, "min_updates": 3, "stable_steps": 3, "max_updates": 96}
-REFERENCE = {
-    "k_t_deg": 2.4,
-    "k_p_velocity": 0.00035,
-    "convention": "fiducial_auto_p3d_and_p1d_times_response_squared",
-}
 CONTROLS = {
     "k_intervals": 128,
     "k_order": 4,
@@ -40,11 +33,6 @@ CONTROLS = {
     "magnitude_order": 16,
     "ap_step": 2.5e-4,
     "weight_rtol": 1e-5,
-}
-FIXED_REFERENCE = {
-    "convention": "intrinsic_p1d_times_field_response_squared",
-    "q_star": 0.00035,
-    "q_star_units": "s/km",
 }
 
 
@@ -145,38 +133,11 @@ INTEGRATED_DEFAULTS = {
 }
 
 
-def accuracy_settings():
-    """Return independent copies of the adopted accuracy settings.
-
-    Returns
-    -------
-    settings : dict
-        Historical validation recipe revision (``REVISION``), weighting
-        controls, reference modes and quadrature settings for provenance. The
-        native-INI prescription revision is ``NATIVE_REVISION`` and is recorded
-        by ``parse_survey_ini``, not here.
-    """
-
-    return {
-        "revision": REVISION,
-        "adaptive_methods": list(ADAPTIVE),
-        "stopping": dict(STOPPING),
-        "reference": dict(REFERENCE),
-        "controls": dict(CONTROLS),
-        "fixed_reference": dict(FIXED_REFERENCE),
-    }
-
-
 __all__ = [
-    "ADAPTIVE",
     "CONTROLS",
-    "FIXED_REFERENCE",
     "INTEGRATED_DEFAULTS",
     "INTEGRATED_REVISION",
     "NATIVE_REVISION",
-    "REFERENCE",
     "REVISION",
     "REVISION_DENSITY_INTERPOLATION",
-    "STOPPING",
-    "accuracy_settings",
 ]

@@ -137,18 +137,22 @@ def test_homogeneous_quadratic_fixed_point_and_zero_noise():
     assert solve(weight_inputs, "sum_historical", max_updates=3)["status"] == "capped"
 
 
-def test_strict_public_methods_and_cap():
-    """Check strict public methods and cap."""
-    for method in ("early_lyaforecast", "mcdonald"):
-        result = prepare(method=method, iterations=None)
-        assert result.convergence["status"] == "converged"
-        assert result.convergence["updates"] >= 6
-        with pytest.raises(ValueError, match="capped"):
-            prepare(method=method, iterations=None, max_updates=3)
-        with pytest.raises(ValueError, match="nonnegative"):
-            prepare(method=method, iterations=None, rho=[1, -1, 1])
-        fixed = prepare(method=method, iterations=3)
-        assert fixed.convergence["status"] == "fixed_count"
+@pytest.mark.parametrize("method", ["early_lyaforecast", "mcdonald"])
+def test_strict_public_methods_and_cap(method):
+    """Check confirmed convergence, the update cap and density validation.
+
+    Parameters
+    ----------
+    method : str
+        Adaptive weighting prescription, supplied by pytest parametrization.
+    """
+    result = prepare(method=method)
+    assert result.convergence["status"] == "converged"
+    assert result.convergence["updates"] >= 6
+    with pytest.raises(ValueError, match="capped"):
+        prepare(method=method, max_updates=3)
+    with pytest.raises(ValueError, match="nonnegative"):
+        prepare(method=method, rho=[1, -1, 1])
 
 
 def test_auxiliary_units_field_reuse_and_frozen_derivatives():

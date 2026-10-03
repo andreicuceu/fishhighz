@@ -1,12 +1,18 @@
-"""Independent scalar checks of finite cumulative weighting and input contracts."""
+"""Scalar checks of adaptive forest weighting, noise moments and input contracts."""
 
 import numpy as np
 import pytest
 
 from fishhighz.fields import ObservedField
-from fishhighz.geometry import prepare_geometry
+from fishhighz.geometry import _immutable, prepare_geometry
+from fishhighz.kernels.full_sum_weights import _integrals
 from fishhighz.response import InstrumentResponse
-from fishhighz.weights import density_per_velocity, prepare_forest_weights
+from fishhighz.weights import (
+    ForestWeights,
+    _context,
+    density_per_velocity,
+    prepare_forest_weights,
+)
 
 
 def geometry(h=0.7, area=100):
@@ -43,17 +49,20 @@ RESPONSE = InstrumentResponse(0.5, 0)
 
 
 def prepare(**kwargs):
-    """Prepare the standard three-magnitude legacy-weight fixture.
+    """Prepare the standard three-magnitude adaptive early-lyaforecast fixture.
 
     Parameters
     ----------
     **kwargs : dict
-        Overrides to prepare_forest_weights, including source samples, quadrature, variance, length, method, iteration count, and fixed auxiliary spectra.
+        Overrides to prepare_forest_weights, including source samples,
+        quadrature, variance, length, method, stopping controls, and the fixed
+        reference spectra S (signal) and B (alias).
 
     Returns
     -------
     weights : ForestWeights
-        Source weights, cumulative integrals, and iteration diagnostics.
+        Converged source weights, cumulative integrals, noise coefficients and
+        convergence record.
     """
     args = dict(
         z_source=3,
@@ -62,8 +71,7 @@ def prepare(**kwargs):
         rho=np.array([1, 2, 4]) / [0.2, 0.5, 1.3],
         variance=[1, 4, 9],
         length_velocity=10,
-        method="legacy",
-        iterations=3,
+        method="early_lyaforecast",
         signal=3,
         alias=2,
     )
@@ -71,146 +79,165 @@ def prepare(**kwargs):
     return prepare_forest_weights(FIELD, geometry(), RESPONSE, **args)
 
 
-def oracle(r, v, count):
-    """Evaluate the cumulative legacy recurrence with explicit scalar sums.
+def inject_forest_weights(
+    weights,
+    *,
+    field=FIELD,
+    bin_geometry=None,
+    response=RESPONSE,
+    z_source=3,
+    magnitudes=(20, 21, 23),
+    quadrature=(0.2, 0.5, 1.3),
+    rho=None,
+    variance=(1, 4, 9),
+    length_velocity=10,
+):
+    """Construct ForestWeights from prescribed weights, bypassing the solver.
+
+    Downstream noise and forecast tests use this to impose exactly known
+    weights. The moments and noise coefficients are evaluated with the same
+    kernel as prepare_forest_weights; no convergence record is attached.
 
     Parameters
     ----------
-    r : array_like of shape (n_magnitudes,)
-        Source density times magnitude quadrature, in deg^-2 (km/s)^-1.
-    v : array_like of shape (n_magnitudes,)
-        Dimensionless pixel-noise variance for each magnitude sample.
-    count : int
-        Number of cumulative weight updates.
+    weights : array_like of shape (n_magnitude,)
+        Dimensionless prescribed forest weights.
+    field : ObservedField, optional
+        Forest field identity. Default is the module FIELD.
+    bin_geometry : BinGeometry, optional
+        Forest evaluation geometry. Default None uses ``geometry()``.
+    response : InstrumentResponse, optional
+        Instrumental response with positive pixel width. Default is RESPONSE.
+    z_source : float, optional
+        Dimensionless source redshift. Default is 3.
+    magnitudes, quadrature : array_like of shape (n_magnitude,), optional
+        Source magnitudes and positive magnitude quadrature weights.
+    rho : array_like of shape (n_magnitude,), optional
+        Source density in deg^-2 (km/s)^-1 mag^-1. Default None gives the
+        standard fixture density [1, 2, 4] / quadrature.
+    variance : array_like of shape (n_magnitude,), optional
+        Dimensionless pixel-noise variance.
+    length_velocity : float, optional
+        Forest length in km/s. Default is 10.
 
     Returns
     -------
-    reference : tuple
-        Final weights, three cumulative integrals, and maximum changes after
-        each update.
+    prepared : ForestWeights
+        Immutable weights with cumulative I1, I2, I3 in deg^-2 (km/s)^-1, A in
+        deg^2 and P_pixel in deg^2 km/s.
     """
-    source_weights = [2 / (2 + 0.5 * x) if mass else 0 for mass, x in zip(r, v)]
-    changes = []
-    for _ in range(count):
-        next_w = []
-        for m in range(len(r)):
-            prefix = sum(r[j] * source_weights[j] for j in range(m + 1))
-            next_w.append(3 / (3 + v[m] / (prefix * 10 / 0.5)) if r[m] else 0)
-        changes.append(max(abs(a - b) for a, b in zip(source_weights, next_w)))
-        source_weights = next_w
-    integrals = [
-        [
-            sum(
-                r[j] * source_weights[j] ** power * (v[j] if power == 3 else 1)
-                for j in range(m + 1)
-            )
-            for m in range(len(r))
-        ]
-        for power in (1, 2)
-    ]
-    integrals.append(
-        [
-            sum(r[j] * source_weights[j] ** 2 * v[j] for j in range(m + 1))
-            for m in range(len(r))
-        ]
-    )
-    return source_weights, integrals, changes
+    if bin_geometry is None:
+        bin_geometry = geometry()
+    quadrature = np.asarray(quadrature, dtype=float)
+    if rho is None:
+        rho = np.array([1, 2, 4]) / quadrature
+    rho = np.asarray(rho, dtype=float)
+    variance = np.asarray(variance, dtype=float)
+    weights = np.asarray(weights, dtype=float)
 
-
-@pytest.mark.parametrize("count", [0, 1, 2, 3, 6])
-def test_scalar_prefix_oracle(count):
-    """Check scalar prefix oracle.
-
-    Parameters
-    ----------
-    count : int
-        Number of iterations, samples, or records selected by this case,
-        supplied by pytest parametrization.
-    """
-    result = prepare(iterations=count)
-    source_weights, integrals, changes = oracle([1, 2, 4], [1, 4, 9], count)
-    np.testing.assert_allclose(result.weights, source_weights, rtol=5e-15)
-    np.testing.assert_allclose([result.I1, result.I2, result.I3], integrals, rtol=5e-15)
-    np.testing.assert_allclose(result.weight_changes, changes, rtol=5e-14, atol=2e-16)
-    assert result.A == pytest.approx(
-        integrals[1][-1] / integrals[0][-1] ** 2 / 10, rel=5e-15
-    )
-    assert result.P_pixel == pytest.approx(
-        integrals[2][-1] * 0.5 / integrals[0][-1] ** 2 / 10, rel=5e-15
-    )
-
-
-def test_distinguishes_wrong_iterations():
-    """Check distinguishes wrong iterations."""
-    source_weights = np.array(oracle([1, 2, 4], [1, 4, 9], 0)[0])
-    total = 3 / (3 + np.array([1, 4, 9]) / (sum(source_weights * [1, 2, 4]) * 20))
-    sweep = source_weights.copy()
-    for m in range(3):
-        sweep[m] = 3 / (
-            3 + [1, 4, 9][m] / (sum(sweep[: m + 1] * np.array([1, 2, 4])[: m + 1]) * 20)
+    masses = rho * quadrature
+    first_moment, second_moment, noise_moment, aliasing_coefficient, pixel_power = (
+        _integrals(
+            masses, weights, variance, length_velocity, response.pixel_width_velocity
         )
-    assert not np.allclose(prepare(iterations=1).weights, total)
-    assert not np.allclose(prepare(iterations=1).weights, sweep)
+    )
+
+    result = object.__new__(ForestWeights)
+    values = dict(
+        context=_context(field, bin_geometry, response),
+        z_source=float(z_source),
+        magnitudes=np.asarray(magnitudes, dtype=float),
+        quadrature=quadrature,
+        rho=rho,
+        variance=variance,
+        length_velocity=float(length_velocity),
+        method="prescribed",
+        auxiliary=None,
+        signal=None,
+        alias=None,
+        weights=weights,
+        I1=first_moment,
+        I2=second_moment,
+        I3=noise_moment,
+        A=float(aliasing_coefficient),
+        P_pixel=float(pixel_power),
+        convergence=None,
+    )
+    for name, value in values.items():
+        object.__setattr__(
+            result, name, _immutable(value) if isinstance(value, np.ndarray) else value
+        )
+    return result
 
 
+@pytest.mark.parametrize("method", ["early_lyaforecast", "mcdonald"])
 @pytest.mark.parametrize("variance", [0, 7])
-@pytest.mark.parametrize("weight", [0.01, 1, 19])
-def test_single_population(variance, weight):
-    """Check single population.
+def test_single_population(variance, method):
+    """Check that one source population gives weight-independent A and P_pixel.
+
+    For a single magnitude sample A = 1/(rho dm L) and
+    P_pixel = variance pixel/(rho dm L), whatever the converged weight.
 
     Parameters
     ----------
     variance : int
         Pixel-noise variance test input, supplied by pytest parametrization.
-    weight : int or float
-        Source weight, supplied by pytest parametrization.
+    method : str
+        Adaptive weighting prescription, supplied by pytest parametrization.
     """
     forest_weights = prepare(
         magnitudes=[21],
         quadrature=[0.3],
         rho=[10],
         variance=[variance],
-        method="supplied",
-        weights=[weight],
-        iterations=None,
-        signal=None,
-        alias=None,
+        method=method,
     )
+    assert forest_weights.convergence["status"] == "converged"
     assert forest_weights.A == pytest.approx(1 / 30, rel=5e-15)
     assert forest_weights.P_pixel == pytest.approx(variance * 0.5 / 30, rel=5e-15)
 
 
-def test_scaling_and_immutable():
-    """Check scaling and immutable."""
-    weight_options = dict(
-        method="supplied",
-        weights=[0.3, 0.7, 2],
-        iterations=None,
-        signal=None,
-        alias=None,
+def test_moment_scaling():
+    """Check weight-amplitude invariance and density/length scaling of A and P_pixel."""
+    masses = np.array([1.0, 2.0, 4.0])
+    variance = np.array([1.0, 4.0, 9.0])
+    source_weights = np.array([0.3, 0.7, 2.0])
+    length, pixel = 10.0, 0.5
+    *_, aliasing, pixel_power = _integrals(
+        masses, source_weights, variance, length, pixel
     )
-    forest_weights = prepare(**weight_options)
+
+    # A and P_pixel are invariant under a global rescaling of the weights.
     for scale in [0.001, 100]:
-        other = prepare(
-            **dict(weight_options, weights=np.array(weight_options["weights"]) * scale)
+        *_, other_aliasing, other_pixel_power = _integrals(
+            masses, source_weights * scale, variance, length, pixel
         )
         np.testing.assert_allclose(
-            [forest_weights.A, forest_weights.P_pixel],
-            [other.A, other.P_pixel],
+            [aliasing, pixel_power], [other_aliasing, other_pixel_power], rtol=5e-15
+        )
+
+    # Both scale inversely with the source density and with the forest length.
+    for doubled_masses, doubled_length in [(2 * masses, length), (masses, 2 * length)]:
+        *_, other_aliasing, other_pixel_power = _integrals(
+            doubled_masses, source_weights, variance, doubled_length, pixel
+        )
+        np.testing.assert_allclose(
+            [aliasing, pixel_power],
+            2 * np.array([other_aliasing, other_pixel_power]),
             rtol=5e-15,
         )
-    other = prepare(**weight_options, rho=np.array([1, 2, 4]) / [0.2, 0.5, 1.3] * 2)
-    np.testing.assert_allclose(
-        [forest_weights.A, forest_weights.P_pixel],
-        2 * np.array([other.A, other.P_pixel]),
-        rtol=5e-15,
+
+    # Uniform weights and variance: A = 1/(sum(rho dm) L), P_pixel/A = v pixel.
+    *_, uniform_aliasing, uniform_pixel_power = _integrals(
+        masses, np.ones(3), np.full(3, 2.0), length, pixel
     )
-    other = prepare(**weight_options, length_velocity=20)
-    np.testing.assert_allclose(
-        [forest_weights.A, forest_weights.P_pixel],
-        2 * np.array([other.A, other.P_pixel]),
-        rtol=5e-15,
-    )
+    assert uniform_aliasing == pytest.approx(1 / 70, rel=5e-15)
+    assert uniform_pixel_power / uniform_aliasing == pytest.approx(1, rel=5e-15)
+
+
+def test_immutable():
+    """Check that the prepared arrays are read-only."""
+    forest_weights = prepare()
     for name in (
         "weights",
         "I1",
@@ -220,18 +247,15 @@ def test_scaling_and_immutable():
         "variance",
         "magnitudes",
         "quadrature",
-        "weight_changes",
     ):
         with pytest.raises(ValueError):
             getattr(forest_weights, name).flags.writeable = True
-    uniform = prepare(**dict(weight_options, weights=[1, 1, 1]), variance=[2, 2, 2])
-    assert uniform.A == pytest.approx(1 / 70, rel=5e-15)
-    assert uniform.P_pixel / uniform.A == pytest.approx(1, rel=5e-15)
 
 
+@pytest.mark.parametrize("method", ["early_lyaforecast", "mcdonald"])
 @pytest.mark.parametrize("r,v", [([0, 2, 4], [9, 0, 1]), ([1, 0, 4], [0, 9, 1])])
-def test_zero_support_prefixes(r, v):
-    """Check zero support prefixes.
+def test_zero_density_samples_do_not_contribute(r, v, method):
+    """Check that zero-density magnitudes leave weights and coefficients unchanged.
 
     Parameters
     ----------
@@ -239,14 +263,32 @@ def test_zero_support_prefixes(r, v):
         Density times magnitude quadrature in deg^-2 (km/s)^-1.
     v : list
         Dimensionless pixel-noise variance at the same magnitude samples.
+    method : str
+        Adaptive weighting prescription, supplied by pytest parametrization.
     """
-    forest_weights = prepare(rho=np.array(r) / [0.2, 0.5, 1.3], variance=v)
-    source_weights, ints, _ = oracle(r, v, 3)
-    np.testing.assert_allclose(forest_weights.weights, source_weights, rtol=5e-15)
-    np.testing.assert_allclose(
-        [forest_weights.I1, forest_weights.I2, forest_weights.I3], ints, rtol=5e-15
+    quadrature = np.array([0.2, 0.5, 1.3])
+    forest_weights = prepare(rho=np.array(r) / quadrature, variance=v, method=method)
+    support_mask = np.array(r) > 0
+    supported = prepare(
+        magnitudes=np.array([20, 21, 23])[support_mask],
+        quadrature=quadrature[support_mask],
+        rho=(np.array(r) / quadrature)[support_mask],
+        variance=np.array(v)[support_mask],
+        method=method,
     )
-    assert np.all(forest_weights.weights[np.array(r) == 0] == 0)
+    np.testing.assert_allclose(
+        forest_weights.weights[support_mask], supported.weights, rtol=5e-15
+    )
+    np.testing.assert_allclose(
+        [m[-1] for m in (forest_weights.I1, forest_weights.I2, forest_weights.I3)],
+        [m[-1] for m in (supported.I1, supported.I2, supported.I3)],
+        rtol=5e-15,
+    )
+    np.testing.assert_allclose(
+        [forest_weights.A, forest_weights.P_pixel],
+        [supported.A, supported.P_pixel],
+        rtol=5e-15,
+    )
 
 
 @pytest.mark.parametrize(
@@ -259,28 +301,15 @@ def test_zero_support_prefixes(r, v):
         dict(rho=[0, 0, 0]),
         dict(rho=[-1, 1, 1]),
         dict(variance=[1, np.nan, 1]),
-        dict(iterations=True),
-        dict(iterations=-1),
-        dict(iterations=1.2),
         dict(signal=0),
         dict(alias=-1),
-        dict(weights=[1, 1, 1]),
+        dict(signal=None),
         dict(method="guess"),
+        dict(method="legacy"),
+        dict(method="inverse_variance"),
+        dict(method="supplied"),
+        dict(max_updates=3),
         dict(rho=[1e308] * 3),
-        dict(
-            method="supplied",
-            iterations=None,
-            signal=None,
-            alias=None,
-            weights=[0, 0, 0],
-        ),
-        dict(
-            method="supplied",
-            iterations=None,
-            signal=None,
-            alias=None,
-            weights=[1e200] * 3,
-        ),
     ],
 )
 def test_invalid(change):
@@ -349,24 +378,6 @@ def test_density_invalid(row, z):
         dict(magnitudes=[1, np.inf, 3]),
         dict(alias=np.inf),
         dict(signal=np.nan),
-        dict(method="supplied", weights=[1, 1, 1]),
-        dict(
-            method="supplied",
-            weights=[1e-300] * 3,
-            iterations=None,
-            signal=None,
-            alias=None,
-        ),
-        dict(
-            method="supplied",
-            weights=[-1, 1, 1],
-            iterations=None,
-            signal=None,
-            alias=None,
-        ),
-        dict(
-            method="supplied", weights=[1, 1], iterations=None, signal=None, alias=None
-        ),
     ],
 )
 def test_additional_invalid_boundaries(change):

@@ -50,12 +50,12 @@ for b,s,r in zip(bins,[1,-1],result.bins):
 np.testing.assert_allclose(result.combined.data_fisher,expected,rtol=5e-13,atol=0)
 np.testing.assert_array_equal(result.combined.prior_fisher,prior)
 assert result.combined.diagnostics.rank==2
-# A normalized forest goes through independent external P1D and fixed weights.
+# A normalized forest goes through independent external P1D and adaptive weights.
 f=ObservedField('f','forest','lya','qso')
 selection=PairSelection([f])
 p3d=PreparedP3D(registry,selection,[P3DProvider('forest',model,binding,[(0,0)])])
 source=ForestInput(dict(z_source=5,magnitudes=[20,21],quadrature=[1,1],rho=[.01,.02],variance=[1,2],
-    length_velocity=10000,method='supplied',weights=[1,1]),lambda t,z,k:np.ones_like(k),BoundParameters(registry,(),{}),registry.fiducials)
+    length_velocity=10000,method='early_lyaforecast',signal=1.,alias=1.),lambda t,z,k:np.ones_like(k),BoundParameters(registry,(),{}),registry.fiducials)
 b=prepare_bin(BinSpec('forest',geometry,grid,p3d,{'f':InstrumentResponse(30,10)},forests={'f':source},independent_sampling=True))
 assert run_forecast([b]).combined.diagnostics.rank==1
 assert not {'astropy','vega','lyaforecast','camb'} & set(sys.modules)

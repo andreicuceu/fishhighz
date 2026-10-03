@@ -274,9 +274,7 @@ def test_missing_or_conflicting_width_policy(tmp_path, kwargs):
         density(path, **kwargs)
 
 
-@pytest.mark.parametrize(
-    "field", ["magnitudes", "quadrature", "rho", "variance", "weights"]
-)
+@pytest.mark.parametrize("field", ["magnitudes", "quadrature", "rho", "variance"])
 @pytest.mark.parametrize(
     "kind,container",
     [
@@ -299,7 +297,7 @@ def test_scientific_dtype_rejection(field, kind, container):
     container : str
         Input representation, either array or list.
     """
-    spec, _ = forest_spec(method="supplied")
+    spec, _ = forest_spec(auxiliary=False)
     source = spec.forests["f"]
     options = dict(source.weight_options)
     original = np.asarray(options[field])
@@ -339,7 +337,7 @@ def test_valid_scientific_ownership(dtype, container):
     container : str
         Input container constructor, supplied by pytest parametrization.
     """
-    spec, _ = forest_spec(method="supplied")
+    spec, _ = forest_spec(auxiliary=False)
     source = spec.forests["f"]
     options = dict(source.weight_options)
     values = dict(
@@ -347,7 +345,6 @@ def test_valid_scientific_ownership(dtype, container):
         quadrature=[1, 2],
         rho=[0, 2],
         variance=[0, 0],
-        weights=[0, 1],
     )
     arrays = {k: np.array(v, dtype=dtype) for k, v in values.items()}
     options.update(
@@ -361,7 +358,7 @@ def test_valid_scientific_ownership(dtype, container):
         if isinstance(value, np.ndarray):
             value[:] = 999
     prepared_bin = prepare_bin(replace(spec, forests={"f": source}))
-    for name in values:
+    for name in [*values, "weights"]:
         weight_array = getattr(prepared_bin.weights["f"], name)
         np.testing.assert_array_equal(weight_array, getattr(direct, name))
         assert weight_array.dtype == np.float64
@@ -504,7 +501,7 @@ def test_explicit_evaluation_redshift_spies(monkeypatch):
     model_calls = []
     p1d_calls = []
     bins = []
-    spec, _ = forest_spec(method="supplied")
+    spec, _ = forest_spec(auxiliary=False)
 
     def model(t, z, k, mu, p):
         """Evaluate the synthetic spectrum used by the enclosing regression test.

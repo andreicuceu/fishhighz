@@ -476,17 +476,17 @@ def test_error_global_slice_and_schedule():
             run_bin(prepared_bin, steps=steps)
 
 
-def forest_spec(method="legacy", auxiliary=True):
-    """Construct a forest bin with either computed or supplied weights.
+def forest_spec(method="early_lyaforecast", auxiliary=True):
+    """Construct a forest bin with adaptive full-sample weights.
 
     Parameters
     ----------
-    method : str, optional
-        Forest-weight prescription passed through to preparation. Default is
-        'legacy'.
+    method : {'early_lyaforecast', 'mcdonald'}, optional
+        Adaptive forest-weight prescription passed through to preparation.
+        Default is 'early_lyaforecast'.
     auxiliary : bool, optional
-        Whether to sample auxiliary P3D/P1D rather than supply their values.
-        Default is True.
+        Whether to sample the auxiliary P3D/P1D references S and B rather than
+        supply their values. Default is True.
 
     Returns
     -------
@@ -531,20 +531,14 @@ def forest_spec(method="legacy", auxiliary=True):
         length_velocity=10000,
         method=method,
     )
-    if method == "supplied":
-        options["weights"] = [1, 1]
-    else:
-        options["iterations"] = 3
-        if not auxiliary:
-            options.update(signal=0.5, alias=2)
+    if not auxiliary:
+        options.update(signal=0.5, alias=2)
     source = ForestInput(
         options,
         p1d,
         BoundParameters(spec.p3d.registry, (), {}),
         spec.p3d.registry.fiducials,
-        auxiliary_coordinates=(24, 0.00035)
-        if auxiliary and method == "legacy"
-        else None,
+        auxiliary_coordinates=(24, 0.00035) if auxiliary else None,
     )
     return replace(
         spec,
@@ -560,19 +554,26 @@ def forest_spec(method="legacy", auxiliary=True):
     ), counts
 
 
-@pytest.mark.parametrize("method", ["legacy", "supplied"])
-def test_generated_spies(method):
-    """Check generated spies.
+# The McDonald recurrence does not converge with the small auxiliary signal of
+# this fixture (k_t = 24 deg^-1): its weights decay towards zero.
+@pytest.mark.parametrize(
+    "method,auxiliary",
+    [("early_lyaforecast", True), ("early_lyaforecast", False), ("mcdonald", False)],
+)
+def test_generated_spies(method, auxiliary):
+    """Check that P1D queries happen once per preparation, never during runs.
 
     Parameters
     ----------
     method : str
-        Weighting or evaluation prescription, supplied by pytest
-        parametrization.
+        Adaptive weighting prescription, supplied by pytest parametrization.
+    auxiliary : bool
+        Whether the S/B references are sampled (one extra P1D query) or given,
+        supplied by pytest parametrization.
     """
-    spec, calls = forest_spec(method)
+    spec, calls = forest_spec(method, auxiliary=auxiliary)
     prepared_bin = prepare_bin(spec)
-    assert len(calls) == (2 if method == "legacy" else 1)
+    assert len(calls) == (2 if auxiliary else 1)
     assert set(prepared_bin.weights) == {"f"}
     assert prepared_bin.diagnostics["p1d_calls"]["f"] == len(calls)
     assert prepared_bin.diagnostics["p3d_calls"]["scalar"] == len(calls)
@@ -580,7 +581,7 @@ def test_generated_spies(method):
     run_bin(prepared_bin, batch_size=1)
     run_bin(prepared_bin, step_scale=0.5)
     assert len(calls) == before
-    if method == "legacy":
+    if auxiliary:
         assert (
             prepared_bin.weights["f"].auxiliary.k > spec.grid.k_max
             or prepared_bin.weights["f"].auxiliary.k < spec.grid.k_min

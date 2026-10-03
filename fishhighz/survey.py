@@ -8,6 +8,7 @@ import numpy as np
 from ._arrays import label, real_array
 from .geometry import BinGeometry, _immutable
 from .grids import IntegrationGrid
+from .kernels.full_sum_weights import METHODS
 from .models.external import BoundParameters, PreparedP3D, _state
 
 
@@ -54,12 +55,12 @@ def freeze(value):
 class ForestInput:
     """Explicit normalized weight kwargs and independent P1D state.
 
-    weight_options are the keyword arguments of prepare_forest_weights. Optional
+    weight_options are the keyword arguments of prepare_forest_weights, whose
+    method is 'early_lyaforecast' or 'mcdonald'. Optional
     auxiliary_coordinates=(k_t_deg,k_p_velocity) selects one matching auto-P3D
-    and P1D query for method='legacy', 'early_lyaforecast' or 'mcdonald'; omit it
-    for direct scalar S/B, inverse-variance or supplied weights. Adaptive methods
-    raise during bin preparation unless convergence is confirmed within their
-    explicit stopping controls. Reader provenance is plain metadata, never a
+    and P1D query supplying the S/B references; omit it for direct scalar S/B.
+    Both adaptive methods raise during bin preparation unless convergence is
+    confirmed within their explicit stopping controls. Reader provenance is plain metadata, never a
     live interpolator.
 
     ``integrated`` optionally holds an integrated forest source (duck-typed;
@@ -67,7 +68,7 @@ class ForestInput:
     single representative source redshift by an integral over source redshift
     and forest pixel inside the bin. Bin preparation then calls
     prepare_integrated_forest_weights, and weight_options may only hold its
-    keywords: method='early_lyaforecast', iterations, signal, alias, auxiliary,
+    keywords: method='early_lyaforecast', signal, alias, auxiliary,
     rtol, min_updates, stable_steps and max_updates. The source is retained by
     reference, not frozen.
     """
@@ -113,11 +114,10 @@ class ForestInput:
             auxiliary_coordinates = tuple(self.auxiliary_coordinates)
             if (
                 len(auxiliary_coordinates) != 2
-                or self.weight_options.get("method")
-                not in ("legacy", "early_lyaforecast", "mcdonald")
+                or self.weight_options.get("method") not in METHODS
                 or any(
                     self.weight_options.get(k) is not None
-                    for k in ("signal", "alias", "auxiliary", "weights")
+                    for k in ("signal", "alias", "auxiliary")
                 )
             ):
                 raise ValueError("auxiliary coordinates conflict with weight settings")

@@ -737,17 +737,24 @@ def _bundled_density_sources(order):
         variance,
         RESPONSE.pixel_width_velocity,
     )
-    prepared = prepare_integrated_forest_weights(
-        FIELD,
-        geometry(),
-        RESPONSE,
-        source,
-        method="early_lyaforecast",
-        signal=3.0,
-        alias=2.0,
-        iterations=4,
+    # Fix the weights at four 'sum_historical' updates from the seed, so that
+    # only the quadrature changes along the ladder (an adaptive stopping count
+    # could change between refinements). Every state is w = c / (c + v) with
+    # c = (S + B / N1) N1 / pixel, starting from c = B / pixel.
+    signal, alias, pixel = 3.0, 2.0, RESPONSE.pixel_width_velocity
+    measure, pixel_variance = source.measure.ravel(), source.variance.ravel()
+    coefficient = alias / pixel
+    for _ in range(4):
+        first_moment = np.sum(measure * coefficient / (coefficient + pixel_variance))
+        coefficient = (signal + alias / first_moment) * first_moment / pixel
+    forest_weights = coefficient / (coefficient + pixel_variance)
+    return np.array(
+        [
+            np.sum(measure * forest_weights),
+            np.sum(measure * forest_weights**2),
+            np.sum(measure * forest_weights**2 * pixel_variance),
+        ]
     )
-    return np.array([prepared.N1, prepared.N2, prepared.N3])
 
 
 def test_synthetic_refinement_ladder_converges():

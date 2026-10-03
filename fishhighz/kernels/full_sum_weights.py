@@ -2,7 +2,8 @@
 
 Arithmetic adapted from lyaforecast weights.py (GPLv3). Signed compatibility
 preparation is separate from strict public preparation. No normalization occurs
-inside the nonlinear update.
+inside the nonlinear update. ``_integrals`` normalizes the moments of the
+final weights into forest-noise coefficients.
 """
 
 import numpy as np
@@ -104,18 +105,17 @@ def update(inputs, weights, variant):
 
     Notes
     -----
-    Full-sample sums use the same cumulative reduction as prefix controls.
-    Floating-point failures propagate so the caller can retain the last finite
+    The full-sample totals are the last elements of the cumulative reductions
+    of ``moments``. Floating-point failures propagate so the caller can retain the last finite
     state; there is no positivity replacement or weight normalization.
     """
     if variant not in VARIANTS:
         raise ValueError(f"unknown compatibility weighting variant: {variant}")
     with np.errstate(divide="raise", invalid="raise", over="raise"):
         first_moment, second_moment, _ = moments(inputs, weights)
-        if variant.startswith("sum_"):
-            first_moment, second_moment = first_moment[-1], second_moment[-1]
+        first_moment, second_moment = first_moment[-1], second_moment[-1]
         signal = inputs.signal
-        if variant.endswith("aliasing"):
+        if variant == "sum_aliasing":
             signal = signal + inputs.p1d * second_moment / (
                 first_moment**2 * inputs.length
             )
@@ -173,44 +173,6 @@ def coefficients(inputs, weights):
     if not np.all(np.isfinite(result)):
         raise FloatingPointError("nonfinite final moments or coefficients")
     return result
-
-
-def fixed_weights(inputs, variant="prefix_intrinsic", updates=3):
-    """Return weights after a prescribed number of updates from the seed.
-
-    Parameters
-    ----------
-    inputs : WeightInputs
-        Prepared one-dimensional magnitude arrays: density in deg^-2 mag^-1
-        (km/s)^-1, quadrature in mag, and dimensionless pixel variance; length
-        and pixel in km/s, signal in deg^2 km/s, and p1d in km/s.
-    variant : str, default='prefix_intrinsic'
-        Recurrence name. The retained historical default is not in VARIANTS and
-        raises ValueError; callers must select a supported full-sample variant.
-    updates : int, default=3
-        Nonnegative number of simultaneous updates after the seed.
-
-    Returns
-    -------
-    weights : ndarray of shape (n_magnitude,)
-        Dimensionless weights after exactly the requested number of updates.
-
-    Raises
-    ------
-    ValueError
-        If the update count or variant is invalid.
-    FloatingPointError
-        If the controlled division, invalid, or overflow arithmetic fails, or
-        checked output is nonfinite.
-    """
-    if isinstance(updates, bool) or not isinstance(updates, int) or updates < 0:
-        raise ValueError("updates must be a nonnegative integer")
-    if variant not in VARIANTS:
-        raise ValueError("unknown compatibility weighting variant")
-    weights = seed(inputs)
-    for _ in range(updates):
-        weights = update(inputs, weights, variant)
-    return weights
 
 
 def relative_change(new, old):
@@ -295,7 +257,6 @@ def solve(
     inputs,
     variant,
     *,
-    eligible=True,
     rtol=1e-4,
     min_updates=3,
     stable_steps=3,
@@ -311,8 +272,6 @@ def solve(
         and pixel in km/s, signal in deg^2 km/s, and p1d in km/s.
     variant : {'sum_historical', 'sum_aliasing'}
         Full-sample recurrence prescription.
-    eligible : bool, default=True
-        Whether the physical spectrum permits this stopping prescription.
     rtol : float, default=1e-4
         Positive dimensionless tolerance for all five relative-change metrics.
     min_updates : int, default=3
@@ -336,9 +295,8 @@ def solve(
 
     Notes
     -----
-    Only the named forest autos with positive intrinsic signal and the two
-    full-sum variants are eligible. Eligibility does not imply convergence.
-    Three stable transitions nominate a candidate by default. Every subsequent
+    Only inputs with finite positive intrinsic signal and P1D reference are
+    eligible; eligibility does not imply convergence. Three stable transitions nominate a candidate by default. Every subsequent
     transition and every candidate-to-current comparison must remain within rtol
     through twice the candidate count. Return that actually computed state.
 
@@ -367,9 +325,6 @@ def solve(
         confirmation=None,
         forward_residual=None,
     )
-    if not eligible or variant not in ("sum_historical", "sum_aliasing"):
-        result["reason"] = "adaptive stopping requires a full-sum forest-auto context"
-        return result
     if (
         not np.isfinite(inputs.signal)
         or inputs.signal <= 0
@@ -438,3 +393,56 @@ def solve(
         status="capped", reason="no confirmed finite nonzero convergence within cap"
     )
     return result
+
+
+def _integrals(r, w, variance, length, pixel):
+    """Integrate cumulative weight moments and normalize forest-noise terms.
+
+    Parameters
+    ----------
+    r : ndarray of shape (n_magnitude,)
+        Source density times magnitude quadrature, in deg^-2 (km/s)^-1.
+    w : ndarray of shape (n_magnitude,)
+        Dimensionless forest weights; the argument name is retained for
+        keyword compatibility.
+    variance : ndarray of shape (n_magnitude,)
+        Dimensionless pixel-noise variance.
+    length, pixel : float
+        Forest length and pixel width, respectively, in km/s.
+
+    Returns
+    -------
+    first_moment, second_moment, noise_moment : ndarray of shape (n_magnitude,)
+        Cumulative density times weight, weight squared, and weight squared
+        times variance; each has units deg^-2 (km/s)^-1.
+    aliasing_coefficient : float
+        Coefficient multiplying one-dimensional forest power, in deg^2.
+    pixel_power : float
+        Pixel-noise power, in deg^2 km/s.
+
+    Raises
+    ------
+    FloatingPointError
+        If an intermediate weighted density underflows inexactly. Other
+        arithmetic errors follow the caller's NumPy error policy.
+    """
+    # Trap individual inexact underflows before a later large multiplier or
+    # another positive sample can conceal the lost contribution. Exact zeros
+    # do not signal underflow. The host adds field context and raises ValueError.
+    with np.errstate(under="raise"):
+        weighted_density = r * w
+        squared_weight_density = weighted_density * w
+        noise_weighted_density = squared_weight_density * variance
+
+    first_moment = np.cumsum(weighted_density)
+    second_moment = np.cumsum(squared_weight_density)
+    noise_moment = np.cumsum(noise_weighted_density)
+
+    # Sequential divisions avoid squaring the total density.
+    aliasing_coefficient = (
+        second_moment[-1] / first_moment[-1] / first_moment[-1] / length
+    )
+    pixel_power = (
+        noise_moment[-1] / first_moment[-1] / first_moment[-1] * pixel / length
+    )
+    return first_moment, second_moment, noise_moment, aliasing_coefficient, pixel_power

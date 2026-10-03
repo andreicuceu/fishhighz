@@ -249,7 +249,7 @@ def prepare_template(k, pk, pksb, *, z_ref, h_template, h_fid, metadata=None):
     Raises
     ------
     ImportError
-        If the optional SciPy spline-preparation dependency is unavailable.
+        If the SciPy spline-preparation dependency is unavailable.
     ValueError
         If source samples, metadata, h-unit conversion, or spline coefficients
         are invalid or unrepresentable.
@@ -299,7 +299,8 @@ def prepare_template(k, pk, pksb, *, z_ref, h_template, h_fid, metadata=None):
         from scipy.interpolate import CubicSpline
     except ImportError as error:
         raise ImportError(
-            "template preparation requires SciPy; install 'fishhighz[templates]'"
+            "template preparation requires SciPy, a core dependency of fishhighz; "
+            "reinstall fishhighz"
         ) from error
     try:
         with np.errstate(over="ignore", invalid="ignore", divide="ignore"):

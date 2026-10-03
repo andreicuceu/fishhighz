@@ -2,7 +2,7 @@
 
 import numpy as np
 import pytest
-from test_weights import FIELD, RESPONSE, geometry
+from test_weights import FIELD, RESPONSE, geometry, inject_forest_weights
 
 from fishhighz.fields import ObservedField, PairSelection
 from fishhighz.models.external import (
@@ -124,20 +124,16 @@ def test_external_calls_and_independent_substitution():
         variance=[1, 4, 9],
         length_velocity=10,
     )
-    for count in [0, 1, 3, 6]:
+    # Reusing the auxiliary samples queries neither model again.
+    for method in ("early_lyaforecast", "mcdonald"):
         prepare_forest_weights(
             FIELD,
             bin_geometry,
             RESPONSE,
             **args,
-            method="legacy",
-            iterations=count,
+            method=method,
             auxiliary=original_auxiliary,
         )
-    assert len(calls) == len(p1d_calls) == 1
-    supplied = prepare_forest_weights(
-        FIELD, bin_geometry, RESPONSE, **args, method="supplied", weights=[1, 2, 3]
-    )
     assert len(calls) == len(p1d_calls) == 1
     changed_p1d_auxiliary = sample_auxiliary(
         FIELD,
@@ -153,13 +149,13 @@ def test_external_calls_and_independent_substitution():
     )
     assert changed_p1d_auxiliary.signal == original_auxiliary.signal
     assert changed_p1d_auxiliary.alias == 2 * original_auxiliary.alias
+    # A larger aliased P1D raises every converged weight relative to pixel noise.
     old = prepare_forest_weights(
         FIELD,
         bin_geometry,
         RESPONSE,
         **args,
-        method="legacy",
-        iterations=0,
+        method="early_lyaforecast",
         auxiliary=original_auxiliary,
     )
     new = prepare_forest_weights(
@@ -167,12 +163,10 @@ def test_external_calls_and_independent_substitution():
         bin_geometry,
         RESPONSE,
         **args,
-        method="legacy",
-        iterations=0,
+        method="early_lyaforecast",
         auxiliary=changed_p1d_auxiliary,
     )
     assert np.all(new.weights > old.weights)
-    assert not np.allclose(new.weights, supplied.weights)
     intrinsic_power = evaluate_p3d(prepared, [2], 2.4, [0.1], [0.5])
     assert intrinsic_power[0, 1] < 0
     for state in (original_auxiliary.theta_p3d, original_auxiliary.theta_p1d):
@@ -184,8 +178,7 @@ def test_external_calls_and_independent_substitution():
             geometry(h=0.8),
             RESPONSE,
             **args,
-            method="legacy",
-            iterations=3,
+            method="early_lyaforecast",
             auxiliary=original_auxiliary,
         )
 
@@ -349,8 +342,7 @@ def test_auxiliary_outside_cuts_and_substituted_noise():
             bin_geometry,
             RESPONSE,
             **args,
-            method="legacy",
-            iterations=0,
+            method="early_lyaforecast",
             auxiliary=aux,
         )
         forest_noise_result = forest_noise(
@@ -363,13 +355,9 @@ def test_auxiliary_outside_cuts_and_substituted_noise():
             np.full(4, p),
         )
         results.append((weights, forest_noise_result))
-    fixed = prepare_forest_weights(
-        FIELD,
-        bin_geometry,
-        RESPONSE,
-        **args,
-        method="supplied",
-        weights=results[0][0].weights,
+    # Keep the P1D=2 weights fixed while substituting P1D=20 in the noise.
+    fixed = inject_forest_weights(
+        results[0][0].weights, bin_geometry=bin_geometry, **args
     )
     substituted = forest_noise(
         fixed, FIELD, bin_geometry, RESPONSE, grid.k_flat, grid.mu_flat, np.full(4, 20)

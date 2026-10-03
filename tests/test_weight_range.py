@@ -4,14 +4,13 @@ from decimal import Decimal, localcontext
 
 import numpy as np
 import pytest
-from test_weights import FIELD, geometry
+from test_weights import inject_forest_weights
 
 from fishhighz.response import InstrumentResponse
-from fishhighz.weights import prepare_forest_weights
 
 
 def prepare(rho, weights, variance):
-    """Prepare supplied weights over extreme numerical ranges.
+    """Evaluate the moments of prescribed weights over extreme numerical ranges.
 
     Parameters
     ----------
@@ -26,20 +25,23 @@ def prepare(rho, weights, variance):
     -------
     weights : ForestWeights
         Fixed source weights, integrals, and noise coefficients.
+
+    Raises
+    ------
+    FloatingPointError
+        If an individual weighted product underflows inexactly, under the
+        floating-point policy of prepare_forest_weights.
     """
-    return prepare_forest_weights(
-        FIELD,
-        geometry(),
-        InstrumentResponse(1, 0),
-        z_source=3,
-        magnitudes=[20, 21],
-        quadrature=[1, 1],
-        rho=rho,
-        variance=variance,
-        length_velocity=1,
-        method="supplied",
-        weights=weights,
-    )
+    with np.errstate(over="raise", invalid="raise", divide="raise", under="ignore"):
+        return inject_forest_weights(
+            weights,
+            response=InstrumentResponse(1, 0),
+            magnitudes=[20, 21],
+            quadrature=[1, 1],
+            rho=rho,
+            variance=variance,
+            length_velocity=1,
+        )
 
 
 def oracle(rho, weights, variance):
@@ -104,9 +106,7 @@ def test_r1_mixed_underflow_and_normalization(reverse):
         prefixes, coefficients = oracle([1, 1], source_weights, pixel_variance)
         assert coefficients[1] == pytest.approx(1e-100, rel=5e-13, abs=0)
         if scale == 1:
-            with pytest.raises(
-                ValueError, match="forest.*not representable.*underflow"
-            ):
+            with pytest.raises(FloatingPointError, match="underflow"):
                 prepare([1, 1], source_weights, pixel_variance)
         else:
             result = prepare([1, 1], source_weights, pixel_variance)
@@ -180,5 +180,5 @@ def test_individual_loss_at_other_product_boundaries(rho, w, v):
         Parametrized numeric input, including invalid values where specified,
         supplied by pytest parametrization.
     """
-    with pytest.raises(ValueError, match="not representable.*underflow"):
+    with pytest.raises(FloatingPointError, match="underflow"):
         prepare(rho, w, v)

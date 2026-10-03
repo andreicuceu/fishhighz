@@ -517,8 +517,7 @@ def test_reader_weight_boundary(tmp_path):
         magnitudes=magnitude_grid,
         quadrature=[0.5, 1, 0.5],
         length_velocity=10000,
-        method="legacy",
-        iterations=3,
+        method="early_lyaforecast",
         signal=0.5,
         alias=2,
     )

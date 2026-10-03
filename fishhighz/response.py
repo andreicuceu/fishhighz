@@ -175,33 +175,6 @@ def resolving_power_fwhm_to_sigma(resolving_power_fwhm):
     return _positive((SPEED_LIGHT_KMS / resolving) / _FWHM_PER_SIGMA, "sigma_velocity")
 
 
-def legacy_resolving_power_to_sigma(resolving_power_legacy):
-    """Convert legacy resolving power using the explicit sigma=c/R convention.
-
-    Parameters
-    ----------
-    resolving_power_legacy : float
-        Positive dimensionless legacy resolving power.
-
-    Returns
-    -------
-    sigma : float
-        Gaussian standard deviation in km/s.
-
-    Raises
-    ------
-    ValueError
-        If resolving power or the converted dispersion is invalid.
-
-    Notes
-    -----
-    The legacy reference treats res_kms as sigma. This function retains that
-    interpretation but uses c=299792.458 km/s instead of 299800 km/s.
-    """
-    resolving = _positive(resolving_power_legacy, "resolving_power_legacy")
-    return _positive(SPEED_LIGHT_KMS / resolving, "legacy sigma_velocity")
-
-
 @dataclass(frozen=True)
 class InstrumentResponse:
     """Explicit full pixel width and Gaussian one-sigma in km/s per field/bin.

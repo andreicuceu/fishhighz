@@ -888,7 +888,13 @@ def test_missing_extras_actionable(tmp_path, monkeypatch, missing):
         return original(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", blocked)
-    with pytest.raises(ImportError, match=r"install 'fishhighz\[templates\]'"):
+    # Astropy is the optional templates extra; SciPy is a core dependency.
+    expected = (
+        r"install 'fishhighz\[templates\]'"
+        if missing == "astropy"
+        else "core dependency.*reinstall fishhighz"
+    )
+    with pytest.raises(ImportError, match=expected):
         if missing == "astropy":
             load_template(path, h_fid=0.7)
         else:

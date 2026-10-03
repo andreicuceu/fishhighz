@@ -60,7 +60,7 @@ def _moments_chunk(measure, weights, variance, work):
     -------
     n1, n2, n3 : float
         Partial sums of mu w, mu w^2 and mu w^2 v, formed by the sequential
-        products of ``kernels.weights._integrals``.
+        products of ``kernels.full_sum_weights._integrals``.
     """
     np.multiply(measure, weights, out=work)
     n1 = np.add.reduce(work)
@@ -336,50 +336,6 @@ def _update_coefficient(first_moment, pixel, signal, alias):
     return coefficient
 
 
-def fixed_weights_integrated(measure, variance, *, pixel, signal, alias, updates):
-    """Return the weights after a prescribed number of updates from the seed.
-
-    Parameters
-    ----------
-    measure, variance : ndarray of shape (n,)
-        Flattened C-order float64 measure in deg^-2 and dimensionless pixel
-        variance.
-    pixel : float
-        Pixel width in km/s.
-    signal : float
-        Reference S in deg^2 km/s.
-    alias : float
-        Reference B in km/s.
-    updates : int
-        Nonnegative number of updates after the seed.
-
-    Returns
-    -------
-    weights : ndarray of shape (n,)
-        Dimensionless weights, equal to ``full_sum_weights.fixed_weights`` for
-        'sum_historical' on the flattened inputs up to the rounding of the
-        update and the summation order of N1.
-
-    Raises
-    ------
-    ValueError
-        If the update count is invalid.
-    FloatingPointError
-        If the controlled arithmetic fails or the weights are nonfinite.
-    """
-    if isinstance(updates, bool) or not isinstance(updates, int) or updates < 0:
-        raise ValueError("updates must be a nonnegative integer")
-    passes = _CompiledPasses()
-    with np.errstate(divide="raise", invalid="raise", over="raise"):
-        coefficient = alias / pixel
-        for _ in range(updates):
-            n1, *_ = passes.moments(measure, variance, coefficient)
-            coefficient = _update_coefficient(n1, pixel, signal, alias)
-        weights = np.empty_like(measure)
-        passes.fill(variance, coefficient, weights)
-    return weights
-
-
 def integrated_moments(measure, weights, variance, pixel):
     """Normalize the full-sum moments of final weights, trapping underflow.
 
@@ -403,13 +359,13 @@ def integrated_moments(measure, weights, variance, pixel):
     ------
     FloatingPointError
         If an individual weighted product underflows inexactly (as
-        ``kernels.weights._integrals``), or the arithmetic is invalid.
+        ``kernels.full_sum_weights._integrals``), or the arithmetic is invalid.
     """
     n_total = len(measure)
     work = np.empty(min(CHUNK, n_total))
     n1 = n2 = n3 = 0.0
     # Trap individual inexact underflows before a later positive sample can
-    # conceal the lost contribution, as in kernels.weights._integrals.
+    # conceal the lost contribution, as in kernels.full_sum_weights._integrals.
     with np.errstate(under="raise"):
         for start in range(0, n_total, CHUNK):
             stop = min(start + CHUNK, n_total)

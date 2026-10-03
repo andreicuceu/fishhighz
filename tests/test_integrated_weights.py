@@ -171,29 +171,24 @@ def assert_matches_central(prepared, reference, n_pixel):
         )
 
 
-@pytest.mark.parametrize("iterations", [None, 4])
-def test_single_pixel_equals_central(iterations):
+def test_single_pixel_equals_central():
     """A single pixel with measure L rho q reproduces the central weights."""
     measure = (LENGTH * RHO * QUADRATURE)[None, :]
     source = synthetic_source(measure, VARIANCE[None, :], [2.4])
-    prepared = integrated(source, iterations=iterations)
-    reference = central(iterations=iterations)
+    prepared = integrated(source)
+    reference = central()
     assert_matches_central(prepared, reference, 1)
     np.testing.assert_allclose(prepared.z_eff, 2.4, rtol=1e-12)
-    assert prepared.iterations == iterations
 
 
-@pytest.mark.parametrize("iterations", [None, 3])
-def test_identical_pixels_equal_central(iterations):
+def test_identical_pixels_equal_central():
     """Pixel copies whose measures sum to L rho q reproduce the central weights."""
     fractions = np.array([0.2, 0.3, 0.5])
     z_pix = np.array([2.2, 2.4, 2.6])
     measure = fractions[:, None] * (LENGTH * RHO * QUADRATURE)[None, :]
     variance = np.tile(VARIANCE, (3, 1))
-    prepared = integrated(
-        synthetic_source(measure, variance, z_pix), iterations=iterations
-    )
-    assert_matches_central(prepared, central(iterations=iterations), 3)
+    prepared = integrated(synthetic_source(measure, variance, z_pix))
+    assert_matches_central(prepared, central(), 3)
     np.testing.assert_allclose(prepared.z_eff, np.sum(fractions * z_pix), rtol=1e-12)
 
 
@@ -264,18 +259,10 @@ def random_source(seed=3, n_pixel=4, n_magnitude=3):
     return synthetic_source(measure, variance, np.linspace(2.1, 2.7, n_pixel))
 
 
-def test_dense_loop_oracle_fixed_and_adaptive():
+def test_dense_loop_oracle_adaptive():
     """The kernels match an explicit double loop on a random (n_p, n_m) source."""
     source = random_source()
     pixel = RESPONSE.pixel_width_velocity
-
-    fixed = integrated(source, iterations=5)
-    weights, (n1, n2, n3) = dense_reference(source.measure, source.variance, pixel, 5)
-    np.testing.assert_allclose(fixed.weights, weights, rtol=1e-12)
-    np.testing.assert_allclose([fixed.N1, fixed.N2, fixed.N3], [n1, n2, n3], rtol=1e-12)
-    np.testing.assert_allclose(fixed.A, n2 / n1**2, rtol=1e-12)
-    np.testing.assert_allclose(fixed.P_pixel, pixel * n3 / n1**2, rtol=1e-12)
-    assert fixed.convergence == dict(status="fixed_count", updates=5)
 
     adaptive = integrated(source)
     assert adaptive.convergence["status"] == "converged"
@@ -283,7 +270,11 @@ def test_dense_loop_oracle_fixed_and_adaptive():
         source.measure, source.variance, pixel, adaptive.convergence["updates"]
     )
     np.testing.assert_allclose(adaptive.weights, weights, rtol=1e-12)
+    np.testing.assert_allclose(
+        [adaptive.N1, adaptive.N2, adaptive.N3], [n1, n2, n3], rtol=1e-12
+    )
     np.testing.assert_allclose(adaptive.A, n2 / n1**2, rtol=1e-12)
+    np.testing.assert_allclose(adaptive.P_pixel, pixel * n3 / n1**2, rtol=1e-12)
     np.testing.assert_allclose(
         adaptive.z_eff,
         np.sum(source.nodes.z_pix[:, None] * source.measure * weights) / n1,
@@ -299,22 +290,22 @@ def test_dense_loop_oracle_fixed_and_adaptive():
 def test_only_early_lyaforecast(method):
     """Any method other than early_lyaforecast raises."""
     with pytest.raises(ValueError, match="early_lyaforecast"):
-        integrated(random_source(), method=method, iterations=3)
+        integrated(random_source(), method=method)
 
 
 def test_invalid_inputs():
     """Invalid sources, pixel widths and S/B inputs raise ValueError."""
     source = random_source()
     with pytest.raises(ValueError, match="pixel width"):
-        integrated(replace_source(source, pixel_width_velocity=0.6), iterations=2)
+        integrated(replace_source(source, pixel_width_velocity=0.6))
     with pytest.raises(ValueError, match="lacks attributes"):
-        integrated(SimpleNamespace(measure=source.measure), iterations=2)
+        integrated(SimpleNamespace(measure=source.measure))
     with pytest.raises(ValueError, match="measure support"):
         integrated(replace_source(source, measure=np.zeros_like(source.measure)))
     with pytest.raises(ValueError):
-        integrated(source, signal=None, iterations=2)
+        integrated(source, signal=None)
     with pytest.raises(ValueError):
-        integrated(replace_source(source, variance=-source.variance), iterations=2)
+        integrated(replace_source(source, variance=-source.variance))
 
 
 def replace_source(source, **changes):
@@ -337,7 +328,7 @@ def replace_source(source, **changes):
 
 def test_noise_context_and_immutability():
     """forest_noise accepts both classes, rejects context mismatch; arrays frozen."""
-    prepared = integrated(random_source(), iterations=4)
+    prepared = integrated(random_source())
     assert isinstance(prepared, IntegratedForestWeights)
     k, mu, p1d = [0.1, 0.2], [0.3, 0.6], [1.0, 2.0]
 
@@ -363,8 +354,7 @@ def test_noise_context_and_immutability():
     with pytest.raises(FrozenInstanceError):
         prepared.A = 1.0
     assert isinstance(prepared.convergence, dict)
-    assert prepared.convergence["status"] == "fixed_count"
-    assert isinstance(integrated(random_source()).convergence, dict)
+    assert prepared.convergence["status"] == "converged"
 
 
 def _central_like(prepared):
@@ -399,7 +389,7 @@ def integrated_forest_spec(integrated_source):
     spec : BinSpec
         Synthetic one-forest bin; its pixel width is 30 km/s.
     """
-    spec, _ = forest_spec("legacy", auxiliary=True)
+    spec, _ = forest_spec(auxiliary=True)
     old = spec.forests["f"]
     options = dict(method="early_lyaforecast", rtol=1e-6)
     if integrated_source is None:
