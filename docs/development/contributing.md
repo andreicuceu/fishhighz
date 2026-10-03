@@ -17,6 +17,17 @@ length. Numba kernels under `fishhighz/kernels/` define the reference
 arithmetic of the forecast; changes to them need an accompanying comparison of
 saved results (see `AGENTS.md`).
 
+Continuous integration (`.github/workflows/ci.yml`) runs the same Ruff checks
+and the test suite on Python 3.11, 3.12 and 3.13, with the `dev` and
+`templates` extras. Coverage of the Python code is uploaded to Codecov; the
+Numba-compiled kernels are omitted from the measurement, since coverage.py cannot
+trace compiled code, and are exercised through their Python callers. To
+reproduce the coverage report locally:
+
+```bash
+python -m pytest --cov=fishhighz --cov-report=term
+```
+
 The environment variables `FISHHIGHZ_CAMB_CACHE` (set to `0` to disable the CAMB
 background cache) and `FISHHIGHZ_CACHE_DIR` (cache location) control caching.
 

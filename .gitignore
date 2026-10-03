@@ -10,3 +10,6 @@ __pycache__/
 AGENTS.md
 
 /docs/_build/
+/.coverage
+/.coverage.*
+/coverage.xml

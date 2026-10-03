@@ -1,0 +1,18 @@
+# Coverage is reported for information; it does not fail pull requests.
+coverage:
+  status:
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true
+
+comment:
+  layout: "condensed_header, condensed_files, condensed_footer"
+  require_changes: true
+
+# One upload per Python version; wait for all before reporting.
+codecov:
+  notify:
+    after_n_builds: 3

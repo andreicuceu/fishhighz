@@ -1,5 +1,9 @@
 # FishHighz
 
+[![CI](https://github.com/andreicuceu/fishhighz/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/andreicuceu/fishhighz/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/andreicuceu/fishhighz/graph/badge.svg?branch=main)](https://codecov.io/gh/andreicuceu/fishhighz)
+[![Documentation](https://readthedocs.org/projects/fishhighz/badge/?version=latest)](https://fishhighz.readthedocs.io/en/latest/)
+
 Fourier-space Gaussian covariances and Fisher forecasts for Lyman-alpha forest
 and galaxy clustering. FishHighz retains the full covariance between selected
 auto- and cross-power spectra of the tracers in a redshift bin, with survey
@@ -22,7 +26,7 @@ python -m pip install -e '.[camb,templates]'   # bundled DESI-2 recipe
 | `camb` | CAMB background, sigma8(z) and f(z) |
 | `templates` | Astropy, to read the FITS power templates |
 | `cosmology` | Astropy cosmology as an alternative background (Python API) |
-| `dev` | pytest, Ruff, build |
+| `dev` | pytest, pytest-cov, Ruff, build |
 | `docs` | Sphinx documentation build |
 
 The CAMB transfer solve is cached in `$FISHHIGHZ_CACHE_DIR/camb` (default
@@ -95,6 +99,13 @@ python -m pip install -e '.[dev,docs,templates,camb,cosmology]'
 ./scripts/check.sh                 # pytest, ruff check, ruff format --check
 make -C docs html                  # strict Sphinx build, then scripts/check_docs.py
 ```
+
+GitHub Actions runs the Ruff checks and the test suite with coverage on Python
+3.11–3.13 for every push to `main` and every pull request
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml)); coverage is reported
+to Codecov. The documentation is built strictly by
+[`.github/workflows/docs.yml`](.github/workflows/docs.yml) and published on
+Read the Docs.
 
 Contributor notes are in [`AGENTS.md`](AGENTS.md) and
 `docs/development/contributing.md`; the HTML manual is written to
