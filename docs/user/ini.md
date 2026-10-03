@@ -43,7 +43,9 @@ qualification of altered inputs. Two revisions are accepted:
 cells) and the historical `early-lyaforecast-2026-09-18` (quadratic spline,
 `RectBivariateSpline_kx2_ky2_s0`). They differ only in the default
 `density_interpolation` and its paired `magnitude_partition`; neither changes the
-bundled density tables or redshift edges. Other revision strings are rejected.
+bundled density tables or redshift edges. The opt-in integrated forest-source
+mode ([below](#integrated-forest-sources)) adds the revision
+`early-lyaforecast-integrated-2026-10-02`. Other revision strings are rejected.
 
 ## `[schema]`
 
@@ -280,6 +282,74 @@ requested limits and effective quadrature; see the [results guide](results.md).
 :language: ini
 :lines: 402-403
 ```
+
+## Integrated forest sources
+
+By default each forest field is represented by one background-source redshift per
+bin (`z_source = lambda_Lya(1+z_eval)/sqrt(lambda_r,min lambda_r,max) - 1`), with
+density and S/N sampled there. The opt-in *integrated* mode instead integrates
+every forest field over all source redshifts `z_q` whose forest overlaps the bin
+and over the pixels inside the bin's observed-wavelength slice, with S/N taken at
+each `(m, z_q, lambda_pix)`; see the [survey](../methods/survey.md) and
+[weights](../methods/weights.md) method pages for the formalism. The mode keys
+are not part of the prescription defaults: an INI without them is the central
+mode, and its parsed values, provenance and numerical results are unchanged.
+
+```ini
+[prescription]
+name = accuracy
+
+[input policies]
+forest_source_integration = integrated
+
+[numerical]
+# optional; defaults 16, 16 and 4
+forest_zq_order = 16
+forest_lambda_order = 16
+forest_lambda_panels = 4
+
+[field lya(qso)]
+# optional; forest fields only
+min_zq_forest = 2.1
+max_zq_forest = 4.0
+```
+
+- `[input policies] forest_source_integration = central|integrated` selects the
+  mode; absent means `central`.
+- `[numerical] forest_zq_order` (Gauss-Legendre order per panel in
+  `ln(1+z_q)`), `forest_lambda_order` (order per wavelength panel) and
+  `forest_lambda_panels` (equal wavelength panels per source redshift) are
+  positive integers with provisional defaults 16, 16 and 4.
+- `[field X] min_zq_forest`, `max_zq_forest` limit the source redshifts of a
+  forest field. Defaults: the field's `z_norm_min` if set, otherwise the lowest
+  density-table redshift edge, and the highest density-table edge. Limits are
+  clipped to the table; the resolved values are recorded in the survey
+  provenance (`forest_source_integration.resolved_zq_limits`).
+
+Resolution rules, all violations raising `ValueError`:
+
+- Absent key: central mode, with no new key in any provenance record.
+- `integrated` without `[prescription] revision` implies
+  `early-lyaforecast-integrated-2026-10-02`; naming that revision without the key
+  implies `integrated`. Both together are accepted.
+- `central` with the integrated revision, or `integrated` with another explicit
+  revision, is a conflict. The integrated mode requires a `[prescription]` section.
+- The integrated mode requires piecewise-constant density cells, so
+  `density_interpolation` must not be the spline.
+- `forest_zq_order`, `forest_lambda_order`, `forest_lambda_panels`,
+  `min_zq_forest` and `max_zq_forest` are rejected in the central mode, and the
+  two limits on galaxy fields.
+- A bin and forest field with no source overlapping the slice inside the density
+  table raises an error naming the field and bin; no density floor is applied.
+
+Provenance. The parsed provenance gains a `forest_source_integration` block (mode,
+revision, orders and requested limits) only in the integrated mode.
+`PreparedForecast.provenance["bins"][i]["forest_source_integration"]` (also
+`result.prepared.provenance`) holds, per forest field ID, `z_eff` (weight-averaged
+pixel redshift), `N1`, `A`, `P_pixel`, the node counts `n_zq_nodes` and `n_pixel`,
+the source-redshift limits and window, and the fallback counts of the legacy grid
+queries. The numerical cost scales with the number of pixel nodes times the
+magnitude nodes; the weight solve dominates preparation.
 
 ## Compact installed recipe
 

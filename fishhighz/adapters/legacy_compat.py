@@ -15,7 +15,16 @@ from ..geometry import LYA_REST_ANGSTROM, _positive
 from ..response import pixel_width_angstrom_to_velocity
 from ..survey import freeze
 from ..weights import density_per_velocity
-from .legacy_inputs import CellHistogram2D, DensityReader, SNRReader, _scipy
+from .legacy_inputs import (
+    CellHistogram2D,
+    DensityReader,
+    SNRReader,
+    _grid_vector,
+    _paired_points,
+    _row_chunks,
+    _scipy,
+    snr_grid_values,
+)
 
 DENSITY_FLOOR = 1e-20
 
@@ -276,6 +285,80 @@ class LegacyDensity:
             reader.provenance,
         )
 
+    def sample_grid(self, z, magnitudes):
+        """Evaluate the cell density on a redshift-magnitude grid with floors.
+
+        Parameters
+        ----------
+        z : array_like
+            Nonnegative dimensionless source redshifts, shape (n_z,). Redshifts
+            outside the cell edges receive 1e-20, as in sample.
+        magnitudes : array_like
+            Magnitude nodes, shape (n_magnitude,), in requested order.
+
+        Returns
+        -------
+        record : mappingproxy
+            values and raw densities in deg^-2 redshift^-1 mag^-1, shape
+            (n_z, n_magnitude); element [i, j] equals sample(z[i],
+            magnitudes)["values"][j]. Provenance counts are in grid elements.
+
+        Raises
+        ------
+        ValueError
+            If the reader uses spline interpolation (integrated forest sources
+            support piecewise-constant cells only), or a redshift is negative.
+        """
+        if self._histogram is None:
+            raise ValueError(
+                "sample_grid supports piecewise_constant interpolation only"
+            )
+        z = _grid_vector(z, "redshift")
+        magnitude_grid = _mags(magnitudes)
+        if np.any(z < 0):
+            raise ValueError("redshift must be nonnegative")
+        reader, histogram = self.reader, self._histogram
+        z_edges, magnitude_edges = histogram.z_edges, histogram.magnitude_edges
+
+        # Same exterior-floor policy as the scalar cell sampling.
+        magnitude_outside = (magnitude_grid < magnitude_edges[0]) | (
+            magnitude_grid > magnitude_edges[-1]
+        )
+        redshift_outside = (z < z_edges[0]) | (z > z_edges[-1])
+        outside_mask = redshift_outside[:, None] | magnitude_outside[None, :]
+        raw = real_array(histogram(z[:, None], magnitude_grid[None, :]), "raw density")
+        values = raw.copy()
+        values[outside_mask] = DENSITY_FLOOR
+        return freeze(
+            dict(
+                values=values,
+                raw=raw,
+                provenance=dict(
+                    compatibility=True,
+                    policies=dict(
+                        magnitude_domain="legacy_floor_outside_cell_edges",
+                        density_floor=DENSITY_FLOOR,
+                        redshift="floor_outside_cells",
+                        interpolation="piecewise_constant_cells",
+                        negative=self.negative_policy,
+                        negative_is_reference_extension=False,
+                        compatibility_normalization_measure=self._normalization_measure,
+                    ),
+                    counts=dict(
+                        density_floor=int(np.count_nonzero(outside_mask)),
+                        negative_density=0,
+                        redshift_extension=0,
+                        redshift_outside_cells=int(
+                            np.count_nonzero(
+                                np.broadcast_to(redshift_outside[:, None], values.shape)
+                            )
+                        ),
+                    ),
+                    source=reader.provenance,
+                ),
+            )
+        )
+
     def _sample_cells(self, z, magnitude_grid):
         """Evaluate the piecewise-constant density with exterior floors.
 
@@ -508,6 +591,159 @@ class LegacySNR:
             reader.provenance,
         )
         return result
+
+    def variance_grid(
+        self,
+        *,
+        z_source,
+        wavelength,
+        magnitudes,
+        pixel_width_angstrom,
+        exposure_count,
+        exposure_time=None,
+    ):
+        """Evaluate pixel variance on paired points times magnitudes (legacy policy).
+
+        Parameters
+        ----------
+        z_source : array_like
+            Nonnegative dimensionless source redshifts, shape (n_point,).
+        wavelength : array_like
+            Observed wavelengths in angstrom, shape (n_point,), paired with
+            z_source.
+        magnitudes : array_like
+            Magnitude nodes, shape (n_magnitude,), in requested order.
+        pixel_width_angstrom : array_like
+            Positive observed pixel widths in angstrom, shape (n_point,).
+        exposure_count : float
+            Positive number of exposures.
+        exposure_time : float or None, optional
+            Per-exposure duration in seconds; None uses the table duration, and an
+            explicit value must match it.
+
+        Returns
+        -------
+        record : mappingproxy
+            Dimensionless variance values, shape (n_point, n_magnitude), and
+            provenance. Element [p, j] equals sample(...)["values"][j] at point p.
+            Fallback counts (bright_clamp, out_of_range, snr_floor) count grid
+            elements.
+
+        Raises
+        ------
+        ValueError
+            If coordinates or exposure settings are invalid, a raw interpolated
+            SNR is negative or nonfinite, or a scaled variance is not
+            representable.
+
+        Notes
+        -----
+        Reproduces the scalar policy per element: out-of-range magnitude (faint),
+        redshift or wavelength gives the 1e20 sentinel independently of exposure;
+        bright magnitudes clamp to the brightest node; in-domain SNR is scaled by
+        sqrt(pixel width) and sqrt(n_exposure/table exposures) before the 1e-10
+        floor. The interpolator is called once per chunk of at most 2**20 points.
+        """
+        reader = self.reader
+        z_source, observed_wavelength, pixel_width = _paired_points(
+            z_source, wavelength, pixel_width_angstrom
+        )
+        magnitude_grid = _mags(magnitudes)
+        if np.any(z_source < 0):
+            raise ValueError("source redshift must be nonnegative")
+        n_exposures = _positive(exposure_count, "exposure_count")
+        if (
+            exposure_time is not None
+            and _positive(exposure_time, "exposure_time")
+            != reader.provenance["exposure_time"]
+        ):
+            raise ValueError("incompatible per-exposure EXPTIME")
+
+        # Sentinel selections factorize into a per-point and a per-magnitude part.
+        point_inside = (
+            (z_source >= reader.z[0])
+            & (z_source <= reader.z[-1])
+            & (observed_wavelength >= reader.wavelength[0])
+            & (observed_wavelength <= reader.wavelength[-1])
+        )
+        magnitude_inside = magnitude_grid <= reader.magnitudes[-1]
+        inside_mask = point_inside[:, None] & magnitude_inside[None, :]
+        bright_mask = (magnitude_grid < reader.magnitudes[0]) & magnitude_inside
+        effective_magnitudes = np.maximum(magnitude_grid, reader.magnitudes[0])
+
+        # Sentinel variance outside the table domain; the inside block is
+        # overwritten below, so only the outside rows and columns are filled.
+        values = np.empty(inside_mask.shape)
+        values[~point_inside, :] = 1e20
+        values[:, ~magnitude_inside] = 1e20
+        floor_count = 0
+        point_rows = np.flatnonzero(point_inside)
+        magnitude_columns = np.flatnonzero(magnitude_inside)
+        exposure_ratio = np.float64(n_exposures) / reader.provenance["exposure_count"]
+        if len(point_rows) and len(magnitude_columns):
+            for rows in _row_chunks(len(point_rows), len(magnitude_columns)):
+                chunk = point_rows[rows]
+                # Fresh array owned here, so the scaling below is done in place
+                # (same operations and order as the elementwise expressions).
+                raw_snr = snr_grid_values(
+                    self._interpolator,
+                    z_source[chunk],
+                    observed_wavelength[chunk],
+                    effective_magnitudes[magnitude_columns],
+                )
+                if (
+                    raw_snr.dtype != np.float64
+                    or not raw_snr.flags.owndata
+                    or not raw_snr.flags.writeable
+                ):
+                    # Not a fresh float64 array of ours: copy before scaling.
+                    raw_snr = real_array(raw_snr, "interpolated SNR")
+                if not np.all(np.isfinite(raw_snr)):
+                    raise ValueError("interpolated SNR must be finite")
+                if raw_snr.min() < 0:
+                    raise ValueError("negative interpolated SNR")
+                try:
+                    with np.errstate(
+                        over="raise", under="raise", invalid="raise", divide="raise"
+                    ):
+                        # Apply pixel/exposure scaling before the reference SNR floor.
+                        scaled_snr = np.multiply(
+                            raw_snr, np.sqrt(pixel_width[chunk, None]), out=raw_snr
+                        )
+                        np.multiply(scaled_snr, np.sqrt(exposure_ratio), out=scaled_snr)
+                        floor_count += int(np.count_nonzero(scaled_snr < 1e-10))
+                        np.maximum(scaled_snr, 1e-10, out=scaled_snr)
+                        np.square(scaled_snr, out=scaled_snr)
+                        variance_block = np.divide(1, scaled_snr, out=scaled_snr)
+                except FloatingPointError as error:
+                    raise ValueError("scaled SNR/variance not representable") from error
+                if len(magnitude_columns) == values.shape[1]:
+                    values[chunk] = variance_block
+                else:
+                    values[np.ix_(chunk, magnitude_columns)] = variance_block
+        return freeze(
+            dict(
+                values=values,
+                provenance=dict(
+                    compatibility=True,
+                    policies=dict(
+                        snr="legacy_floor_clamp",
+                        snr_floor=1e-10,
+                        sentinel_variance=1e20,
+                        exposure_count=n_exposures,
+                    ),
+                    counts=dict(
+                        bright_clamp=int(
+                            np.count_nonzero(point_inside)
+                            * np.count_nonzero(bright_mask)
+                        ),
+                        out_of_range=int(np.count_nonzero(~inside_mask)),
+                        snr_floor=floor_count,
+                    ),
+                    source=reader.provenance,
+                ),
+            )
+        )
 
 
 def sample_legacy_forest(

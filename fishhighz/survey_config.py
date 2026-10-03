@@ -22,10 +22,17 @@ from .accuracy import (
     CONTROLS,
     DENSITY_INTERPOLATION_POLICIES,
     INI_DEFAULTS,
+    INTEGRATED_DEFAULTS,
+    INTEGRATED_REVISION,
     NATIVE_REVISION,
     REVISION_DENSITY_INTERPOLATION,
 )
 from .fields import ObservedField, PairSelection
+from .forest_integration import (
+    integrated_forest_source,
+    integration_nodes,
+    pixel_width_angstrom,
+)
 from .geometry import SPEED_LIGHT_KMS, prepare_geometry
 from .grids import gauss_legendre_grid
 from .magnitude import breakpoints, composite
@@ -213,6 +220,7 @@ class SurveyConfig:
     bins: tuple[BinConfig, ...]
     prescription: object = None
     source_identity: object = None
+    forest_integration: object = None
 
     @property
     def observed_fields(self):
@@ -233,45 +241,50 @@ class SurveyConfig:
         -------
         provenance : mappingproxy
             Immutable schema, input identity, model, field and bin metadata.
+            A ``forest_source_integration`` block (mode, revision, quadrature
+            orders and requested per-field source-redshift limits) is present
+            only for the integrated forest-source mode; central-mode provenance
+            has no such key.
         """
-        return freeze(
-            {
-                "schema": {"name": self.schema_name, "version": self.schema_version},
-                "prescription": (
-                    None if self.prescription is None else dict(self.prescription)
-                ),
-                "ini_input": self.source_identity,
-                "ini_path": None if self.path is None else str(self.path),
-                "cosmology": dict(self.cosmology),
-                "survey": dict(self.survey),
-                "model": dict(self.model),
-                "input_policies": dict(self.input_policies),
-                "numerical": dict(self.numerical),
-                "fields": [
-                    {
-                        "id": field.observed.id,
-                        "kind": field.observed.kind,
-                        "physical_model": field.observed.physical_model,
-                        "background": field.observed.background,
-                        **{
-                            attribute.name: getattr(field, attribute.name)
-                            for attribute in dataclass_fields(field)
-                            if attribute.name != "observed"
-                        },
-                    }
-                    for field in self.fields
-                ],
-                "bins": [
-                    {
-                        "index": item.index,
-                        "bounds": [item.z_min, item.z_max],
-                        "z_eval": item.z_eval,
-                        "selected_pairs": [list(pair) for pair in item.selected_pairs],
-                    }
-                    for item in self.bins
-                ],
-            }
-        )
+        record = {
+            "schema": {"name": self.schema_name, "version": self.schema_version},
+            "prescription": (
+                None if self.prescription is None else dict(self.prescription)
+            ),
+            "ini_input": self.source_identity,
+            "ini_path": None if self.path is None else str(self.path),
+            "cosmology": dict(self.cosmology),
+            "survey": dict(self.survey),
+            "model": dict(self.model),
+            "input_policies": dict(self.input_policies),
+            "numerical": dict(self.numerical),
+            "fields": [
+                {
+                    "id": field.observed.id,
+                    "kind": field.observed.kind,
+                    "physical_model": field.observed.physical_model,
+                    "background": field.observed.background,
+                    **{
+                        attribute.name: getattr(field, attribute.name)
+                        for attribute in dataclass_fields(field)
+                        if attribute.name != "observed"
+                    },
+                }
+                for field in self.fields
+            ],
+            "bins": [
+                {
+                    "index": item.index,
+                    "bounds": [item.z_min, item.z_max],
+                    "z_eval": item.z_eval,
+                    "selected_pairs": [list(pair) for pair in item.selected_pairs],
+                }
+                for item in self.bins
+            ],
+        }
+        if self.forest_integration is not None:
+            record["forest_source_integration"] = self.forest_integration
+        return freeze(record)
 
 
 @dataclass(frozen=True)
@@ -373,6 +386,208 @@ def _density_partition(density_interpolation):
     return DENSITY_INTERPOLATION_POLICIES[density_interpolation][1]
 
 
+_INTEGRATION_MODES = ("central", "integrated")
+_INTEGRATION_NUMERICAL_KEYS = tuple(INTEGRATED_DEFAULTS)
+_INTEGRATION_FIELD_KEYS = ("min_zq_forest", "max_zq_forest")
+
+
+def _pop_integration_keys(parser):
+    """Remove the integrated forest-source keys from a parsed INI.
+
+    Parameters
+    ----------
+    parser : configparser.ConfigParser
+        Parsed INI; modified in place.
+
+    Returns
+    -------
+    request : dict
+        ``mode`` (raw ``[input policies] forest_source_integration`` string or
+        None), ``numerical`` (raw ``[numerical] forest_*`` strings present) and
+        ``fields`` (raw ``min_zq_forest``/``max_zq_forest`` strings present,
+        keyed by field section name).
+
+    Notes
+    -----
+    The keys are removed so that the central-mode option validation, the
+    expanded policy mappings and all existing provenance are exactly those of an
+    INI that never mentioned the integrated mode.
+    """
+    request = {"mode": None, "numerical": {}, "fields": {}}
+    if parser.has_option("input policies", "forest_source_integration"):
+        request["mode"] = parser.get("input policies", "forest_source_integration")
+        parser.remove_option("input policies", "forest_source_integration")
+    for key in _INTEGRATION_NUMERICAL_KEYS:
+        if parser.has_option("numerical", key):
+            request["numerical"][key] = parser.get("numerical", key)
+            parser.remove_option("numerical", key)
+    for section in parser.sections():
+        if not section.startswith("field "):
+            continue
+        for key in _INTEGRATION_FIELD_KEYS:
+            if parser.has_option(section, key):
+                request["fields"].setdefault(section, {})[key] = parser.get(
+                    section, key
+                )
+                parser.remove_option(section, key)
+    return request
+
+
+def _resolve_integration_mode(request, explicit_revision, has_prescription):
+    """Resolve the forest-source mode and prescription revision.
+
+    Parameters
+    ----------
+    request : dict
+        Output of ``_pop_integration_keys``.
+    explicit_revision : str or None
+        ``[prescription] revision`` as written, or None when absent.
+    has_prescription : bool
+        Whether the INI has a ``[prescription]`` section.
+
+    Returns
+    -------
+    integrated : bool
+        True for the integrated forest-source mode.
+    revision : str or None
+        Revision to use: ``INTEGRATED_REVISION`` in integrated mode, else the
+        explicit revision (None when absent).
+
+    Raises
+    ------
+    ValueError
+        If the mode key is unknown, the key and the revision disagree
+        (central with the integrated revision, integrated with any other
+        explicit revision), integrated mode lacks a ``[prescription]``, or an
+        integrated-only key appears in central mode.
+
+    Notes
+    -----
+    An absent key selects the central mode unless the integrated revision is
+    named; the integrated key without a revision implies the integrated
+    revision.
+    """
+    mode = request["mode"]
+    if mode is not None and mode not in _INTEGRATION_MODES:
+        raise ValueError(
+            f"[input policies] forest_source_integration={mode!r} is unsupported; "
+            f"choose from {_INTEGRATION_MODES}"
+        )
+    if explicit_revision == INTEGRATED_REVISION:
+        if mode == "central":
+            raise ValueError(
+                f"[prescription] revision={INTEGRATED_REVISION!r} conflicts with "
+                "forest_source_integration=central"
+            )
+        integrated = True
+    elif mode == "integrated":
+        if explicit_revision is not None:
+            raise ValueError(
+                "forest_source_integration=integrated requires the revision "
+                f"{INTEGRATED_REVISION!r} or none, not {explicit_revision!r}"
+            )
+        integrated = True
+    else:
+        integrated = False
+    if integrated:
+        if not has_prescription:
+            raise ValueError(
+                "the integrated forest-source mode requires a [prescription] section"
+            )
+        return True, INTEGRATED_REVISION
+    if request["numerical"] or request["fields"]:
+        keys = sorted(
+            [f"[numerical] {key}" for key in request["numerical"]]
+            + [
+                f"[{section}] {key}"
+                for section, values in request["fields"].items()
+                for key in values
+            ]
+        )
+        raise ValueError(
+            "integrated-only option(s) require forest_source_integration=integrated: "
+            + ", ".join(keys)
+        )
+    return False, explicit_revision
+
+
+def _integration_settings(request, fields):
+    """Parse the integrated-mode numerical orders and source-redshift limits.
+
+    Parameters
+    ----------
+    request : dict
+        Output of ``_pop_integration_keys``.
+    fields : sequence of FieldConfig
+        Parsed fields, in configured order.
+
+    Returns
+    -------
+    settings : mappingproxy
+        ``mode``, ``revision``, the three quadrature controls (defaults from
+        ``INTEGRATED_DEFAULTS``) and ``fields``: requested ``min_zq_forest`` and
+        ``max_zq_forest`` of every forest field (None selects the density-table
+        default at preparation).
+
+    Raises
+    ------
+    ValueError
+        If an order is not a positive integer, a limit is not finite and
+        nonnegative, the limits are not ordered, or a limit is set on a
+        galaxy field.
+    """
+    orders = {}
+    for key, default in INTEGRATED_DEFAULTS.items():
+        text = request["numerical"].get(key)
+        try:
+            value = default if text is None else int(text)
+        except ValueError as error:
+            raise ValueError(f"[numerical] {key} must be a positive integer") from error
+        if value < 1:
+            raise ValueError(f"[numerical] {key} must be a positive integer")
+        orders[key] = value
+
+    by_section = request["fields"]
+    forest_limits = {}
+    for field in fields:
+        section = f"field {field.observed.id}"
+        values = by_section.get(section, {})
+        if field.observed.kind != "forest":
+            if values:
+                raise ValueError(
+                    f"[{section}] {', '.join(sorted(values))} apply to forest "
+                    "fields only"
+                )
+            continue
+        limits = {}
+        for key in _INTEGRATION_FIELD_KEYS:
+            if key not in values:
+                limits[key] = None
+                continue
+            try:
+                value = float(values[key])
+            except ValueError as error:
+                raise ValueError(f"[{section}] {key} must be numeric") from error
+            if not np.isfinite(value) or value < 0:
+                raise ValueError(f"[{section}] {key} must be finite and nonnegative")
+            limits[key] = value
+        if (
+            limits["min_zq_forest"] is not None
+            and limits["max_zq_forest"] is not None
+            and limits["max_zq_forest"] <= limits["min_zq_forest"]
+        ):
+            raise ValueError(f"[{section}] max_zq_forest must exceed min_zq_forest")
+        forest_limits[field.observed.id] = _plain_mapping(limits)
+    return _plain_mapping(
+        {
+            "mode": "integrated",
+            "revision": INTEGRATED_REVISION,
+            **orders,
+            "fields": _plain_mapping(forest_limits),
+        }
+    )
+
+
 def parse_survey_ini(source=None):
     """Parse and strictly validate a native FishHighz survey INI.
 
@@ -399,6 +614,14 @@ def parse_survey_ini(source=None):
     Notes
     -----
     The parser expands the selected accuracy prescription and checks supported model, input and numerical conventions. The ``[prescription] revision`` (default ``early-lyaforecast-2026-10-01``; the historical ``early-lyaforecast-2026-09-18`` is also accepted) sets the default source-density interpolation: piecewise-constant cells for the native revision, the quadratic ``RectBivariateSpline_kx2_ky2_s0`` for the historical one. An explicit ``[input policies] density_interpolation`` overrides it, and the revision and effective policies are recorded in the provenance. It reads no survey tables and invokes no CAMB calculation.
+
+    The opt-in integrated forest-source mode (``[input policies]
+    forest_source_integration = integrated``, or ``[prescription] revision =
+    early-lyaforecast-integrated-2026-10-02``) integrates every forest field
+    over source redshift and forest pixel; its keys are parsed here, kept out of
+    the expanded policy and numerical mappings, and recorded only in the
+    ``forest_source_integration`` provenance block. Without them the parsed
+    configuration and provenance are those of the central mode.
     """
 
     parser, path, source_identity = _read_parser(source)
@@ -469,6 +692,16 @@ def parse_survey_ini(source=None):
     prescription = None
     if parser.defaults():
         raise ValueError("[DEFAULT] options are unsupported; use explicit sections")
+
+    # Integrated forest-source keys are resolved first and removed, so the
+    # remaining validation and the recorded mappings are those of the central
+    # mode unless the integrated mode was requested.
+    integration_request = _pop_integration_keys(parser)
+    integrated, resolved_revision = _resolve_integration_mode(
+        integration_request,
+        parser["prescription"].get("revision") if "prescription" in parser else None,
+        "prescription" in parser,
+    )
     explicit_rtol = {
         section: parser.get(section, key)
         for section, key in (
@@ -481,7 +714,9 @@ def parse_survey_ini(source=None):
         _section_options(parser, "prescription", ("name", "revision"), ("name",))
         if parser["prescription"]["name"] != "accuracy":
             raise ValueError("[prescription] name must be accuracy")
-        revision = parser["prescription"].get("revision", NATIVE_REVISION)
+        revision = (
+            resolved_revision if resolved_revision is not None else NATIVE_REVISION
+        )
         if revision not in REVISION_DENSITY_INTERPOLATION:
             raise ValueError(
                 f"[prescription] unsupported revision {revision!r}; "
@@ -802,6 +1037,15 @@ def parse_survey_ini(source=None):
             )
     density_interpolation = parser["input policies"]["density_interpolation"]
     partition = _density_partition(density_interpolation)
+    if (
+        integrated
+        and DENSITY_INTERPOLATION_POLICIES[density_interpolation][0]
+        != "piecewise_constant"
+    ):
+        raise ValueError(
+            "the integrated forest-source mode requires piecewise-constant density "
+            f"cells, not density_interpolation={density_interpolation!r}"
+        )
     if parser["input policies"]["magnitude_partition"] != partition:
         raise ValueError(
             f"[input policies] magnitude_partition="
@@ -1093,6 +1337,10 @@ def parse_survey_ini(source=None):
             )
         )
 
+    forest_integration = (
+        _integration_settings(integration_request, fields) if integrated else None
+    )
+
     # Preserve each bin selection in canonical observed-field order.
     bins = []
     ids = {field.observed.id for field in fields}
@@ -1155,6 +1403,7 @@ def parse_survey_ini(source=None):
         tuple(bins),
         prescription,
         source_identity,
+        forest_integration,
     )
 
 
@@ -1288,6 +1537,242 @@ def _reader_samples(field, density, snr, z_source, magnitudes, wavelength):
                 f"{field.observed.id}: SNR reader has no sample/variance method"
             )
     return result
+
+
+def _grid_result(result):
+    """Split a grid-query result into values and fallback counts.
+
+    Parameters
+    ----------
+    result : mapping or array_like
+        Legacy adapters return a mapping with ``values`` and ``provenance``;
+        strict readers return the array itself.
+
+    Returns
+    -------
+    values : ndarray
+        Query values.
+    provenance : dict
+        Adapter provenance (empty for strict readers).
+    """
+    if hasattr(result, "items"):
+        return np.asarray(result["values"]), dict(result["provenance"])
+    return np.asarray(result), {}
+
+
+def _integrated_zq_limits(item, density, limits):
+    """Resolve the source-redshift limits of one integrated forest field.
+
+    Parameters
+    ----------
+    item : FieldConfig
+        Forest field.
+    density : object
+        Density adapter exposing the cell edges ``z_edges`` (directly or through
+        ``reader``).
+    limits : mapping
+        Requested ``min_zq_forest`` and ``max_zq_forest`` (None for the default).
+
+    Returns
+    -------
+    zq_min, zq_max : float
+        Source-redshift limits. The defaults are ``z_norm_min`` (else the lowest
+        density-table redshift edge) and the highest edge; every limit is
+        clipped to the table, outside which the density is not tabulated.
+
+    Raises
+    ------
+    ValueError
+        If the density has no redshift cell edges (spline density) or the
+        limits leave an empty interval.
+    """
+    edges = getattr(getattr(density, "reader", density), "z_edges", None)
+    if edges is None:
+        raise ValueError(
+            f"{item.observed.id}: the integrated forest-source mode requires a "
+            "piecewise-constant density exposing z_edges"
+        )
+    table_min, table_max = float(edges[0]), float(edges[-1])
+    requested_min, requested_max = limits["min_zq_forest"], limits["max_zq_forest"]
+    if requested_min is None:
+        requested_min = table_min if item.z_norm_min is None else item.z_norm_min
+    if requested_max is None:
+        requested_max = table_max
+    zq_min, zq_max = max(requested_min, table_min), min(requested_max, table_max)
+    if not zq_max > zq_min:
+        raise ValueError(
+            f"{item.observed.id}: source-redshift limits [{requested_min}, "
+            f"{requested_max}] do not overlap the density table [{table_min}, "
+            f"{table_max}]"
+        )
+    return zq_min, zq_max
+
+
+def _integrated_source(
+    item,
+    density,
+    snr,
+    response,
+    bin_config,
+    *,
+    integration,
+    zq_limits,
+    magnitudes,
+    quadrature,
+    lya_rest,
+):
+    """Build the integrated forest source of one field in one redshift bin.
+
+    Parameters
+    ----------
+    item : FieldConfig
+        Forest field (rest-frame forest limits, exposures).
+    density : object
+        Density adapter with ``sample_grid`` (legacy) or ``query_grid`` (strict).
+    snr : object
+        SNR adapter with ``variance_grid``.
+    response : InstrumentResponse
+        Bin response; its pixel width is the fixed velocity pixel width l_pix.
+    bin_config : BinConfig
+        Redshift bin; its actual bounds set the observed-wavelength slice.
+    integration : mapping
+        Resolved ``SurveyConfig.forest_integration`` (quadrature orders).
+    zq_limits : tuple of float
+        Resolved (zq_min, zq_max) of the field.
+    magnitudes, quadrature : ndarray of shape (n_magnitude,)
+        Shared magnitude nodes and weights.
+    lya_rest : float
+        Lyman-alpha rest wavelength in angstrom.
+
+    Returns
+    -------
+    source : IntegratedForestSource
+        Nodes, density (n_y, n_m), variance (n_p, n_m) and provenance info.
+    density_provenance, snr_provenance : dict
+        Adapter provenance of the grid queries (empty for strict readers).
+
+    Raises
+    ------
+    ValueError
+        If the bin has no forest coverage for this field, a reader lacks the
+        vectorised grid queries, or a query leaves its table domain under a
+        strict reader.
+
+    Notes
+    -----
+    The slice is [lya_rest (1+z_min), lya_rest (1+z_max)] of the bin bounds, not
+    the evaluation redshift. Breakpoints in ln(1+z_q) are the density-table
+    redshift cell edges and the S/N-table source redshifts. The pixel variance
+    is queried at (z_q, lambda, pixel width l_pix lambda/c in angstrom) with
+    the field's exposure count, the arguments of the central path except for
+    the coordinates.
+    """
+    label = f"field {item.observed.id}, bin {bin_config.index}"
+    density_axis = getattr(getattr(density, "reader", density), "z_edges", None)
+    snr_axis = getattr(getattr(snr, "reader", snr), "z", None)
+    breaks = np.concatenate(
+        [
+            np.asarray(axis, dtype=float).ravel()
+            for axis in (density_axis, snr_axis)
+            if axis is not None
+        ]
+    )
+    nodes = integration_nodes(
+        lambda_min=lya_rest * (1 + bin_config.z_min),
+        lambda_max=lya_rest * (1 + bin_config.z_max),
+        rest_min=item.min_rest_frame_lya,
+        rest_max=item.max_rest_frame_lya,
+        zq_min=zq_limits[0],
+        zq_max=zq_limits[1],
+        zq_breaks=breaks,
+        zq_order=integration["forest_zq_order"],
+        lambda_order=integration["forest_lambda_order"],
+        lambda_panels=integration["forest_lambda_panels"],
+        lya_rest_angstrom=lya_rest,
+        label=label,
+    )
+    for reader, method in (
+        (density, ("sample_grid", "query_grid")),
+        (snr, ("variance_grid",)),
+    ):
+        if not any(hasattr(reader, name) for name in method):
+            raise ValueError(
+                f"{label}: the integrated forest-source mode needs a reader with "
+                f"{' or '.join(method)}"
+            )
+    grid_density = (
+        density.sample_grid if hasattr(density, "sample_grid") else density.query_grid
+    )
+    density_values, density_provenance = _grid_result(
+        grid_density(nodes.zq_nodes, magnitudes)
+    )
+
+    # Fixed velocity pixel width of the bin, converted to angstrom at each pixel.
+    variance_values, snr_provenance = _grid_result(
+        snr.variance_grid(
+            z_source=nodes.z_q,
+            wavelength=nodes.lam_obs,
+            magnitudes=magnitudes,
+            pixel_width_angstrom=pixel_width_angstrom(
+                nodes, response.pixel_width_velocity
+            ),
+            exposure_count=item.num_exposures,
+        )
+    )
+    info = {
+        "zq_limits": [float(zq_limits[0]), float(zq_limits[1])],
+        "n_zq_nodes": int(len(nodes.zq_nodes)),
+        "n_pixel": int(len(nodes.lam_obs)),
+        "nodes": dict(nodes.info),
+        "fallback_counts": {
+            "density": dict(density_provenance.get("counts", {})),
+            "snr": dict(snr_provenance.get("counts", {})),
+        },
+    }
+    source = integrated_forest_source(
+        nodes,
+        density_values,
+        magnitudes,
+        quadrature,
+        variance_values,
+        response.pixel_width_velocity,
+        label=label,
+        info=info,
+    )
+    return source, density_provenance, snr_provenance
+
+
+def _integration_bin_record(spec_id, integration_record):
+    """Collect per-field integrated-source metadata of one bin.
+
+    Parameters
+    ----------
+    spec_id : str
+        Identifier of the bin specification (the prepared bin carries the same).
+    integration_record : mapping
+        Source ``info`` of each active integrated forest field.
+
+    Returns
+    -------
+    record : dict
+        ``spec_id`` and, per quantity, a mapping from field ID to value:
+        ``n_zq_nodes``, ``n_pixel``, ``zq_limits``, ``zq_window`` and
+        ``fallback_counts`` of the legacy grid queries. The effective redshift,
+        ``N1``, ``A`` and ``P_pixel`` are added by
+        ``PreparedForecast.provenance`` once the weights exist.
+    """
+    return {
+        "spec_id": spec_id,
+        "n_zq_nodes": {k: v["n_zq_nodes"] for k, v in integration_record.items()},
+        "n_pixel": {k: v["n_pixel"] for k, v in integration_record.items()},
+        "zq_limits": {k: v["zq_limits"] for k, v in integration_record.items()},
+        "zq_window": {
+            k: v["nodes"]["window_zq"] for k, v in integration_record.items()
+        },
+        "fallback_counts": {
+            k: v["fallback_counts"] for k, v in integration_record.items()
+        },
+    }
 
 
 def _background_values(background, z):
@@ -1638,6 +2123,8 @@ def prepare_survey(config, *, background, template, readers=None, prepare=False)
         }
         specs = []
         bin_provenance = []
+        integrated = config.forest_integration is not None
+        zq_limits = {}
         for bin_config in config.bins:
             if (full_shape or bao_marginalized) and not bin_config.selected_pairs:
                 bin_provenance.append(
@@ -1802,7 +2289,10 @@ def prepare_survey(config, *, background, template, readers=None, prepare=False)
                 for item in config.fields
             }
 
-            # Forest density and SNR use the representative background-source redshift.
+            # Central mode: forest density and SNR use the representative
+            # background-source redshift. Integrated mode keeps it only for the
+            # (unchanged) magnitude partition and integrates the forest sources
+            # inside the bin below.
             z_sources = {
                 item.observed.id: (
                     wavelength
@@ -1825,8 +2315,63 @@ def prepare_survey(config, *, background, template, readers=None, prepare=False)
             # Sample active populations once on the shared magnitude quadrature.
             active = set(np.unique(selection.selected_pairs).tolist())
             forests, galaxies = {}, {}
+            integration_record = {}
             for field_index, item in enumerate(config.fields):
                 if field_index not in active:
+                    continue
+                if item.observed.kind == "forest" and integrated:
+                    field_id = item.observed.id
+                    if field_id not in zq_limits:
+                        zq_limits[field_id] = _integrated_zq_limits(
+                            item,
+                            densities[field_id],
+                            config.forest_integration["fields"][field_id],
+                        )
+                    source, density_provenance, snr_provenance = _integrated_source(
+                        item,
+                        densities[field_id],
+                        snrs.get(field_id),
+                        responses[field_id],
+                        bin_config,
+                        integration=config.forest_integration,
+                        zq_limits=zq_limits[field_id],
+                        magnitudes=magnitudes,
+                        quadrature=quadrature,
+                        lya_rest=float(config.survey["lya_rest_angstrom"]),
+                    )
+                    options = dict(
+                        method=config.input_policies["weighting_method"],
+                        rtol=float(config.numerical["weight_rtol"]),
+                        min_updates=int(config.input_policies["weighting_min_updates"]),
+                        stable_steps=int(
+                            config.input_policies["weighting_stable_steps"]
+                        ),
+                        max_updates=int(config.input_policies["weighting_max_updates"]),
+                    )
+                    forests[field_id] = ForestInput(
+                        options,
+                        default_p1d,
+                        BoundParameters(registry, (), {}),
+                        registry.fiducials,
+                        auxiliary_coordinates=(
+                            float(config.input_policies["weighting_reference_k_t_deg"]),
+                            float(
+                                config.input_policies[
+                                    "weighting_reference_k_p_velocity"
+                                ]
+                            ),
+                        ),
+                        provenance={
+                            "density_policy": density_provenance,
+                            "snr_policy": snr_provenance,
+                            "input_policies": dict(config.input_policies),
+                            "weighting_status": "pending_bin_preparation",
+                            "magnitude_bounds": [magnitude_min, magnitude_max],
+                            "forest_source_integration": source.info,
+                        },
+                        integrated=source,
+                    )
+                    integration_record[field_id] = source.info
                     continue
                 sample = _reader_samples(
                     item,
@@ -1905,16 +2450,26 @@ def prepare_survey(config, *, background, template, readers=None, prepare=False)
                     "field_ids": [field.id for field in fields],
                 }
             )
-        provenance = freeze(
-            {
-                "config": config.provenance,
-                "registry_ids": list(registry.ids),
-                "fields": [field.id for field in fields],
-                "bins": bin_provenance,
-                "background": type(background).__name__,
-                "template": type(template).__name__,
+            if integrated:
+                bin_provenance[-1]["forest_source_integration"] = (
+                    _integration_bin_record(specs[-1].id, integration_record)
+                )
+        provenance_record = {
+            "config": config.provenance,
+            "registry_ids": list(registry.ids),
+            "fields": [field.id for field in fields],
+            "bins": bin_provenance,
+            "background": type(background).__name__,
+            "template": type(template).__name__,
+        }
+        if integrated:
+            provenance_record["forest_source_integration"] = {
+                **dict(config.forest_integration),
+                "resolved_zq_limits": {
+                    field_id: list(limits) for field_id, limits in zq_limits.items()
+                },
             }
-        )
+        provenance = freeze(provenance_record)
     return PreparedSurvey(config, fields, registry, tuple(specs), provenance)
 
 

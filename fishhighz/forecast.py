@@ -19,7 +19,11 @@ from .noise import forest_noise, galaxy_noise, prepare_noise
 from .response import InstrumentResponse, pair_response, prepare_response
 from .results import FisherResult, combine_results
 from .survey import BinSpec, ForestInput, PreparedBin, freeze, snapshot_p3d
-from .weights import prepare_forest_weights, sample_auxiliary
+from .weights import (
+    prepare_forest_weights,
+    prepare_integrated_forest_weights,
+    sample_auxiliary,
+)
 
 
 def _validate_spec(spec):
@@ -175,9 +179,19 @@ def prepare_bin(spec):
                                 model_counts[route.provider.label] += 1
                         p1d_counts[field.id] += 1
 
-                    forest_weights = prepare_forest_weights(
-                        field, geometry, spec.responses[field.id], **options
-                    )
+                    if source.integrated is None:
+                        forest_weights = prepare_forest_weights(
+                            field, geometry, spec.responses[field.id], **options
+                        )
+                    else:
+                        # Integrated source: same method and stopping options.
+                        forest_weights = prepare_integrated_forest_weights(
+                            field,
+                            geometry,
+                            spec.responses[field.id],
+                            source.integrated,
+                            **options,
+                        )
                     power1d = evaluate_p1d(
                         source.p1d_model,
                         source.p1d_parameters,

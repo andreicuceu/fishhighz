@@ -45,7 +45,12 @@ Optional extras are selected by the operation being performed:
 | `dev` | Tests, Ruff checks, and distribution builds |
 
 With `compiled` installed, Fisher contractions use the Numba kernel;
-`FISHHIGHZ_FISHER_BACKEND=numpy` forces the NumPy reference loop. The CAMB
+`FISHHIGHZ_FISHER_BACKEND=numpy` forces the NumPy reference loop. The
+integrated forest-source mode (about 1e7 pixel-magnitude nodes per forest field
+and bin at the default orders) uses a dedicated weight recurrence with Numba
+streaming passes; `FISHHIGHZ_INTEGRATED_BACKEND=numpy` selects its NumPy
+implementation, and `FISHHIGHZ_SNR_GRID=interpolator` the generic SciPy S/N
+grid query in place of the separable one. The CAMB
 transfer solve (about a minute on one thread for the bundled Planck18 ini) is
 only needed for sigma8(z) and f(z)sigma8(z); these are cached in
 `$FISHHIGHZ_CACHE_DIR/camb` (default `~/.cache/fishhighz/camb`), keyed by the

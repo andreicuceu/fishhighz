@@ -15,6 +15,14 @@ REVISION = "early-lyaforecast-2026-09-18"
 # density tables and redshift edges are survey inputs set by the INI, not by the
 # revision (the bundled INI switched to the SRD v2 inputs on the same date).
 NATIVE_REVISION = "early-lyaforecast-2026-10-01"
+
+# Integrated forest-source prescription identity from 2026-10-02: the native
+# recipe (same weighting, response, magnitude quadrature and piecewise-constant
+# density cells), but every forest field integrates over the source redshifts
+# z_q whose forest overlaps the bin and over the forest pixels inside the bin
+# slice, instead of using one representative source redshift. Selected by
+# [input policies] forest_source_integration = integrated or by this revision.
+INTEGRATED_REVISION = "early-lyaforecast-integrated-2026-10-02"
 ADAPTIVE = ("early_lyaforecast", "mcdonald")
 STOPPING = {"rtol": 1e-4, "min_updates": 3, "stable_steps": 3, "max_updates": 96}
 REFERENCE = {
@@ -59,6 +67,7 @@ DENSITY_INTERPOLATION_POLICIES = {
 # the source densities; the native revision uses piecewise-constant cells.
 REVISION_DENSITY_INTERPOLATION = {
     NATIVE_REVISION: "piecewise_constant_cells",
+    INTEGRATED_REVISION: "piecewise_constant_cells",
     REVISION: "RectBivariateSpline_kx2_ky2_s0",
 }
 
@@ -118,6 +127,23 @@ INI_DEFAULTS = {
     },
 }
 
+# Gauss-Legendre orders of the integrated forest-source quadrature, used when the
+# [numerical] forest_* keys are absent in integrated mode. They are deliberately
+# not part of INI_DEFAULTS: the central mode must expand to exactly the same
+# values as before, so compact and expanded INIs and all existing provenance stay
+# unchanged. The orders are provisional until the refinement study fixes them; on
+# the DESI-2 QSO and LBG S/N tables (16, 16, 4) with breakpoints at the S/N source
+# redshifts is within 3.5e-5 of a (64, 64, 8) reference for N1 and N3/N1^2, whereas
+# (16, 16, 1) leaves 0.15-0.22 per cent.
+#   forest_zq_order      : order per panel in ln(1+z_q)
+#   forest_lambda_order  : order per wavelength panel inside the bin slice
+#   forest_lambda_panels : number of equal wavelength panels per source redshift
+INTEGRATED_DEFAULTS = {
+    "forest_zq_order": 16,
+    "forest_lambda_order": 16,
+    "forest_lambda_panels": 4,
+}
+
 
 def accuracy_settings():
     """Return independent copies of the adopted accuracy settings.
@@ -145,6 +171,8 @@ __all__ = [
     "ADAPTIVE",
     "CONTROLS",
     "FIXED_REFERENCE",
+    "INTEGRATED_DEFAULTS",
+    "INTEGRATED_REVISION",
     "NATIVE_REVISION",
     "REFERENCE",
     "REVISION",

@@ -162,6 +162,40 @@ class PreparedForecast:
         """
         return self.survey.bins
 
+    @property
+    def provenance(self):
+        """Return the survey provenance completed with the fixed forest weights.
+
+        Returns
+        -------
+        provenance : mappingproxy
+            ``survey.provenance`` unchanged for the central forest-source mode.
+            In the integrated mode, ``bins[i]["forest_source_integration"]``
+            additionally holds, per forest field ID, the weight-averaged pixel
+            redshift ``z_eff``, the first moment ``N1`` (deg^-2, the
+            integrated analogue of L*I1), ``A`` (deg^2) and ``P_pixel``
+            (deg^2 km/s) of the prepared weights, next to the node counts.
+        """
+        base = self.survey.provenance
+        if "forest_source_integration" not in base:
+            return base
+        by_id = {item.id: item for item in self.bins}
+        bins = []
+        for record in base["bins"]:
+            record = dict(record)
+            block = record.get("forest_source_integration")
+            if block is not None:
+                block = dict(block)
+                weights = by_id[block["spec_id"]].weights
+                for name in ("z_eff", "N1", "A", "P_pixel"):
+                    block[name] = {
+                        field_id: float(getattr(weight, name))
+                        for field_id, weight in weights.items()
+                    }
+                record["forest_source_integration"] = block
+            bins.append(record)
+        return freeze({**dict(base), "bins": bins})
+
 
 @dataclass(frozen=True)
 class SurveyResult:
@@ -589,12 +623,32 @@ def _convergence(prepared_bins):
             return _plain(vars(convergence))
         return {"status": str(convergence)}
 
+    def summary(weight):
+        """Convert one forest-weight convergence record to plain metadata.
+
+        Parameters
+        ----------
+        weight : ForestWeights or IntegratedForestWeights
+            Prepared forest weights.
+
+        Returns
+        -------
+        record : dict
+            Plain convergence diagnostics. For integrated weights, the
+            (n_pixel, n_magnitude) weight array is omitted and its shape is
+            recorded as ``weights_shape``.
+        """
+        convergence = weight.convergence
+        if hasattr(weight, "N1") and hasattr(convergence, "items"):
+            # Avoid converting the large weight array to nested Python lists.
+            convergence = {k: v for k, v in convergence.items() if k != "weights"}
+            if "weights" in weight.convergence:
+                convergence["weights_shape"] = tuple(weight.weights.shape)
+        return record(convergence)
+
     return freeze(
         {
-            item.id: {
-                name: record(weight.convergence)
-                for name, weight in item.weights.items()
-            }
+            item.id: {name: summary(weight) for name, weight in item.weights.items()}
             for item in prepared_bins
         }
     )

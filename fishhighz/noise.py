@@ -13,7 +13,12 @@ from .covariance import _validate_field_power
 from .fields import PairSelection
 from .geometry import BinGeometry, _immutable, _positive
 from .response import velocity_response
-from .weights import ForestWeights, _nonnegative, density_per_velocity
+from .weights import (
+    ForestWeights,
+    IntegratedForestWeights,
+    _nonnegative,
+    density_per_velocity,
+)
 
 
 def local_galaxy_density(dndzdm, quadrature, geometry):
@@ -94,8 +99,9 @@ def forest_noise(prepared, field, geometry, response, k, mu, p1d):
 
     Parameters
     ----------
-    prepared : ForestWeights
-        Fixed magnitude weights and integrated noise coefficients.
+    prepared : ForestWeights or IntegratedForestWeights
+        Fixed weights and noise coefficients A (deg^2) and P_pixel (deg^2 km/s);
+        only these and the preparation context are used.
     field : ObservedField
         Forest identity matching the weight preparation.
     geometry : BinGeometry
@@ -127,8 +133,8 @@ def forest_noise(prepared, field, geometry, response, k, mu, p1d):
     squared instrumental response; supplied pixel noise is not smoothed.
     Zero P1D and sinc-null aliasing are valid.
     """
-    if not isinstance(prepared, ForestWeights):
-        raise ValueError("require ForestWeights")
+    if not isinstance(prepared, (ForestWeights, IntegratedForestWeights)):
+        raise ValueError("require ForestWeights or IntegratedForestWeights")
     prepared.validate_context(field, geometry, response)
     k, mu = _nonnegative(k, "k"), _nonnegative(mu, "mu")
     p1d = _nonnegative(p1d, "P1D")

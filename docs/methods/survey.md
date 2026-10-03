@@ -120,3 +120,56 @@ retain their dtype (including indices and Boolean flags). Object arrays cannot b
 frozen as immutable byte-backed values and are rejected; use typed arrays or
 plain nested metadata instead.
 
+## Integrated forest-source mode
+
+The default central mode samples density and S/N of each forest field at a single
+source redshift per bin, `z_s = lambda_Lya(1+z_eval)/sqrt(lambda_r,min lambda_r,max) - 1`.
+`[input policies] forest_source_integration = integrated` (see the
+[INI reference](../user/ini.md#integrated-forest-sources)) replaces it by an
+integral over the background sources and forest pixels contributing to the bin.
+Galaxy fields, `z_eval`, the response, the auxiliary reference mode and the
+magnitude partition (nodes and weights) are unchanged.
+
+Geometry. With `u = ln(lambda)`, `y = ln(1+z_q)`, the bin slice
+`[u1, u2] = ln[lambda_Lya(1+z_min), lambda_Lya(1+z_max)]` (the actual bin bounds,
+not `z_eval`), `L_bin = c(u2-u1)` and the forest `[a,b] = ln[lambda_r,min,
+lambda_r,max]`, a source at `y` contributes pixels `u in [max(u1, y+a),
+min(u2, y+b)]`. The source window is `y in [u1-b, u2-a]` intersected with
+`[ln(1+min_zq_forest), ln(1+max_zq_forest)]`. The measure in deg^-2 is
+
+`mu = (1+z_q) c w_y w_u (dn/dz_q dm) w_m / L_bin`,
+
+so that the sums of the central mode, `L*I1` etc., become `N1 = sum(mu w)`, `N2`,
+`N3` ([weights](weights.md#integrated-forest-sources)). For an untruncated window
+and constant `dn/dv_q`, `N1` equals `(b-a) K` and the central `L*I1`.
+
+Quadrature. Composite Gauss-Legendre in `y` with panel boundaries at the window
+ends, the overlap kinks `u1-a` and `u2-b`, all density-table redshift cell edges
+and all S/N-table source-redshift nodes inside the window (boundaries closer than
+64 eps are merged); the overlap length is piecewise linear and integrated exactly,
+and the piecewise-constant density and piecewise-linear S/N are smooth inside each
+panel. Within each overlap, `forest_lambda_panels` equal wavelength panels each
+carry a `forest_lambda_order` rule; `forest_zq_order` is the order per `y` panel.
+The geometry identity `sum(w_y overlap) = (b-a)(u2-u1)` holds to roundoff.
+Refinement of the orders is tested by the order ladder in
+`scripts/check_integrated_forest_refinement.py`, which also compares N1-N3 with a
+high-resolution midpoint rule; the 0.1 per cent BAO-error target applies.
+
+Inputs. Density is the piecewise-constant table (the spline is rejected) queried
+on the `y` nodes by `LegacyDensity.sample_grid` or `DensityReader.query_grid`;
+the pixel variance is queried on (z_q, lambda, magnitude) by
+`LegacySNR.variance_grid` or `SNRReader.variance_grid` (legacy sentinel, bright
+clamp and floor, or strict domain errors, as for the scalar queries, with fallback
+counts recorded in the provenance). Queries are chunked to at most 2**20 points.
+The pixel width in angstrom is `Delta_v lambda/c` with the fixed velocity width of
+the bin response.
+
+No coverage. If no source redshift in the window has density above the legacy
+floor (for example the density table ends below the window), preparation raises
+`ValueError` naming the field and bin; no floor is applied. If the density covers
+the window but all pixels fall outside the S/N table, the legacy adapter's sentinel
+variance gives `N1 ~ 0` instead of an error, as in the central legacy path.
+
+Cost. The weight solve runs on `n_pixel * n_magnitude` nodes (about 11 million for
+the default orders of one DESI-2 bin), roughly 1.5 minutes per field and bin on one
+login-node thread; reduce the orders for quick tests.

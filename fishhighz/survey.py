@@ -61,6 +61,15 @@ class ForestInput:
     raise during bin preparation unless convergence is confirmed within their
     explicit stopping controls. Reader provenance is plain metadata, never a
     live interpolator.
+
+    ``integrated`` optionally holds an integrated forest source (duck-typed;
+    see fishhighz.forest_integration.IntegratedForestSource) that replaces the
+    single representative source redshift by an integral over source redshift
+    and forest pixel inside the bin. Bin preparation then calls
+    prepare_integrated_forest_weights, and weight_options may only hold its
+    keywords: method='early_lyaforecast', iterations, signal, alias, auxiliary,
+    rtol, min_updates, stable_steps and max_updates. The source is retained by
+    reference, not frozen.
     """
 
     weight_options: object
@@ -69,6 +78,7 @@ class ForestInput:
     theta_p1d: np.ndarray
     auxiliary_coordinates: tuple | None = None
     provenance: object = None
+    integrated: object = None
 
     def __post_init__(self):
         """Validate and freeze independent P1D and weighting inputs.
@@ -112,6 +122,17 @@ class ForestInput:
             ):
                 raise ValueError("auxiliary coordinates conflict with weight settings")
             object.__setattr__(self, "auxiliary_coordinates", auxiliary_coordinates)
+        if self.integrated is not None:
+            from .weights import INTEGRATED_WEIGHT_OPTIONS, _require_integrated_source
+
+            _require_integrated_source(self.integrated)
+            unexpected = sorted(set(self.weight_options) - INTEGRATED_WEIGHT_OPTIONS)
+            if unexpected or self.weight_options.get("method") != "early_lyaforecast":
+                raise ValueError(
+                    "integrated forest weight_options require method="
+                    f"'early_lyaforecast' and only {sorted(INTEGRATED_WEIGHT_OPTIONS)}"
+                    f"; unexpected keys {unexpected}"
+                )
 
 
 @dataclass(frozen=True)

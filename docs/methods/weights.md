@@ -140,3 +140,50 @@ this is not a physical DESI-2 forecast. Raw readers and overlap-derived noise
 remain outside these array APIs. The cumulative formulas retain
 lyaforecast GPLv3/McDonald & Eisenstein (2007) provenance in the source.
 
+## Integrated forest sources
+
+`prepare_integrated_forest_weights(field, geometry, response, source, *, method,
+...)` generalizes the single-source-redshift weights to a forest field whose
+background sources and pixels are integrated inside a redshift bin (see the
+[survey page](survey.md) for the geometry). `source` is an
+`IntegratedForestSource`; only `method='early_lyaforecast'` is supported, with the
+same `rtol`, `min_updates`, `stable_steps`, `max_updates`, `iterations`,
+`signal`, `alias` and `auxiliary` options and the same convergence requirement.
+
+The quadrature measure of pixel node `p` and magnitude node `j` is
+`mu_pj = (1+z_q,p) w_y,p c w_u,p dn/(dz dm)(z_q,p, m_j) w_m,j / L_bin` in deg^-2,
+with `L_bin = c(u2-u1)`. The unchanged full-sum kernels run on the flattened
+arrays with `density := mu`, `quadrature := 1` and `length := 1`, so the central
+moments `L*sum(rho q w)` become
+
+- `N1 = sum(mu w)`, replacing `L*I1[-1]`,
+- `N2 = sum(mu w^2)` and `N3 = sum(mu w^2 v)`, replacing `L*I2[-1]`, `L*I3[-1]`
+  (`N1`, `N2` in deg^-2 and `N3` in deg^-2 times the dimensionless variance `v`),
+
+and the recurrences use `S = P + B/N1` with per-pixel noise `v*Delta_v/N1`, where
+`Delta_v` is the bin's fixed velocity pixel width. The coefficients are
+`A = N2/N1^2` (deg^2) and `P_pixel = Delta_v N3/N1^2` (deg^2 km/s), so
+`forest_noise` consumes `IntegratedForestWeights` exactly as `ForestWeights`. The
+weights have shape `(n_pixel, n_magnitude)`; `z_eff = sum(z_pix mu w)/N1` is a
+diagnostic and does not enter the forecast.
+
+Exact limit. If `(1+z_q) dn/dz_q` is independent of `z_q` (constant `dn/dv_q`)
+and the variance depends on magnitude only, the integrals over `y` and `ln(lambda)`
+of the overlap factor give `N1 = K (b-a)` for the untruncated window, with
+`K = (1+z) dn/dz`, `[a,b] = ln[lambda_r,min, lambda_r,max]`, which equals
+`L*I1` of the central weights with `rho = K/c`. All weights, `A` and `P_pixel`
+then coincide with the central results (measured relative differences 6e-14;
+asserted at 1e-12 in the tests). The pixel width convention below is what
+separates the two modes otherwise.
+
+Pixel width. The S/N tables are per angstrom. The pixel variance is queried at
+`Delta_lambda(lambda) = Delta_v lambda/c`, with `Delta_v` the same fixed velocity
+width as the response (converted at the evaluation wavelength). Then
+`v*Delta_v = c/(lambda SNR_A^2 N_exp/N_file)` is the noise power per unit velocity
+and does not depend on the angstrom width; at `lambda_c` it equals the central
+value.
+
+If the density covers the window but every pixel lies outside the S/N table, the
+legacy adapter's `1e20` sentinel variance gives `N1 ~ 0` and a huge noise instead
+of an error, as in the central legacy path; this cannot occur for the DESI-2
+tables. The error for an absent coverage is raised at the source construction.

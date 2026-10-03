@@ -4,6 +4,7 @@ Cumulative formulas adapted from lyaforecast/weights.py, GPLv3, implementing
 McDonald & Eisenstein (2007). No raw assets or normalization policies are copied.
 """
 
+import os
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -13,6 +14,11 @@ from ._arrays import integer, real_array, scalar
 from .fields import ObservedField, PairSelection
 from .geometry import SPEED_LIGHT_KMS, BinGeometry, _immutable, _positive
 from .kernels.full_sum_weights import METHODS, fixed_weights, solve
+from .kernels.integrated_weights import (
+    fixed_weights_integrated,
+    integrated_moments,
+    solve_integrated,
+)
 from .kernels.weights import _integrals, _iterate
 from .models.external import P3DProvider, PreparedP3D, evaluate_p1d, evaluate_p3d
 from .response import InstrumentResponse, velocity_response
@@ -42,6 +48,43 @@ def _nonnegative(value, name):
     if np.any(array < 0):
         raise ValueError(f"{name} must be nonnegative")
     return array
+
+
+def _nonnegative_transient(value, name):
+    """Validate finite nonnegative real array values for use within one call.
+
+    Parameters
+    ----------
+    value : array_like
+        Numeric input of arbitrary shape, in the named quantity's units.
+    name : str
+        Quantity name used in diagnostics.
+
+    Returns
+    -------
+    array : ndarray
+        The input itself when it is a C-contiguous float64 array (the
+        (n_pixel, n_magnitude) arrays of an integrated source hold 1e7
+        elements and the result is only read, never stored), otherwise an
+        owned float64 copy; unchanged shape and units.
+
+    Raises
+    ------
+    ValueError
+        If values are nonnumeric, nonfinite, complex, Boolean, or negative.
+    """
+    if (
+        isinstance(value, np.ndarray)
+        and value.dtype == np.float64
+        and value.flags.c_contiguous
+        and value.size
+    ):
+        if not np.all(np.isfinite(value)):
+            raise ValueError(f"{name} must be finite")
+        if value.min() < 0:
+            raise ValueError(f"{name} must be nonnegative")
+        return value
+    return _nonnegative(value, name)
 
 
 def _redshift(value, name):
@@ -291,8 +334,38 @@ def sample_auxiliary(
     return result
 
 
+class _ForestContextMixin:
+    """Shared reuse check for prepared forest weights carrying ``context``."""
+
+    def validate_context(self, field, geometry, response):
+        """Reject reuse with a different field, evaluation geometry, or response.
+
+        Parameters
+        ----------
+        field : ObservedField
+            Forest sample identity, including its physical tracer and background
+            population.
+        geometry : BinGeometry
+            Fixed forest evaluation geometry and fiducial coordinate conversion.
+        response : InstrumentResponse
+            Fixed instrumental widths in km/s, with positive forest pixel width.
+
+        Returns
+        -------
+        None
+            Validate exact equality with the stored preparation context.
+
+        Raises
+        ------
+        ValueError
+            If the field, fiducial units, local geometry, or response differs.
+        """
+        if self.context != _context(field, geometry, response):
+            raise ValueError("forest preparation field/geometry/response mismatch")
+
+
 @dataclass(frozen=True, init=False, eq=False)
-class ForestWeights:
+class ForestWeights(_ForestContextMixin):
     """Fixed immutable input arrays, prefix integrals and noise coefficients.
 
     A is deg²; P_pixel is deg² km/s. I1/I2 are density per source velocity;
@@ -320,32 +393,6 @@ class ForestWeights:
     A: float
     P_pixel: float
     convergence: object
-
-    def validate_context(self, field, geometry, response):
-        """Reject reuse with a different field, evaluation geometry, or response.
-
-        Parameters
-        ----------
-        field : ObservedField
-            Forest sample identity, including its physical tracer and background
-            population.
-        geometry : BinGeometry
-            Fixed forest evaluation geometry and fiducial coordinate conversion.
-        response : InstrumentResponse
-            Fixed instrumental widths in km/s, with positive forest pixel width.
-
-        Returns
-        -------
-        None
-            Validate exact equality with the stored preparation context.
-
-        Raises
-        ------
-        ValueError
-            If the field, fiducial units, local geometry, or response differs.
-        """
-        if self.context != _context(field, geometry, response):
-            raise ValueError("forest preparation field/geometry/response mismatch")
 
 
 def prepare_forest_weights(
@@ -630,4 +677,397 @@ def prepare_forest_weights(
         object.__setattr__(
             result, name, _immutable(value) if isinstance(value, np.ndarray) else value
         )
+    return result
+
+
+# Attributes an integrated forest source must expose (duck-typed so that this
+# module does not import fishhighz.forest_integration).
+_INTEGRATED_SOURCE_ATTRIBUTES = (
+    "nodes",
+    "density",
+    "magnitudes",
+    "quadrature",
+    "variance",
+    "pixel_width_velocity",
+    "info",
+    "measure",
+)
+INTEGRATED_WEIGHT_OPTIONS = frozenset(
+    {
+        "method",
+        "iterations",
+        "signal",
+        "alias",
+        "auxiliary",
+        "rtol",
+        "min_updates",
+        "stable_steps",
+        "max_updates",
+    }
+)
+_INTEGRATED_NODE_ATTRIBUTES = (
+    "geom",
+    "y_index",
+    "z_q",
+    "lam_obs",
+    "z_pix",
+    "zq_nodes",
+    "info",
+)
+
+
+def _require_integrated_source(source):
+    """Check that an object exposes the integrated forest-source attributes.
+
+    Parameters
+    ----------
+    source : object
+        Candidate integrated forest source, such as
+        ``fishhighz.forest_integration.IntegratedForestSource``.
+
+    Returns
+    -------
+    source : object
+        The unchanged input.
+
+    Raises
+    ------
+    ValueError
+        If a required attribute of the source or of ``source.nodes`` is absent.
+    """
+    missing = [a for a in _INTEGRATED_SOURCE_ATTRIBUTES if not hasattr(source, a)]
+    if not missing:
+        missing = [
+            f"nodes.{a}"
+            for a in _INTEGRATED_NODE_ATTRIBUTES
+            if not hasattr(source.nodes, a)
+        ]
+    if missing:
+        raise ValueError(f"integrated forest source lacks attributes {missing}")
+    return source
+
+
+@dataclass(frozen=True, init=False, eq=False)
+class IntegratedForestWeights(_ForestContextMixin):
+    """Fixed weights and noise coefficients of an integrated forest source.
+
+    The source redshift z_q and forest pixel are integrated inside the bin with
+    measure mu (n_pixel, n_magnitude) in deg^-2. N1 = sum(mu w) and
+    N2 = sum(mu w^2) are in deg^-2, and N3 = sum(mu w^2 v) is in deg^-2 times
+    the dimensionless pixel variance v (the weights w are dimensionless);
+    A = N2/N1^2 is in deg^2 and P_pixel = pixel_width N3/N1^2 in deg^2 km/s, so
+    ``forest_noise`` consumes them exactly as for ForestWeights. z_eff = sum(z_pix mu w)/N1 is the
+    weight-averaged pixel redshift. ``weights`` is dimensionless with shape
+    (n_pixel, n_magnitude); ``convergence`` has the same keys as the central
+    solver record, with its 'weights' entry being the same (n_pixel,
+    n_magnitude) array. Construct with prepare_integrated_forest_weights.
+    """
+
+    context: tuple
+    method: str
+    iterations: int | None
+    auxiliary: AuxiliarySamples | None
+    signal: float
+    alias: float
+    convergence: object
+    A: float
+    P_pixel: float
+    N1: float
+    N2: float
+    N3: float
+    z_eff: float
+    weights: np.ndarray
+
+
+def prepare_integrated_forest_weights(
+    field,
+    geometry,
+    response,
+    source,
+    *,
+    method,
+    rtol=1e-4,
+    min_updates=3,
+    stable_steps=3,
+    max_updates=96,
+    auxiliary=None,
+    signal=None,
+    alias=None,
+    iterations=None,
+    backend=None,
+):
+    """Prepare early-lyaforecast weights for a source integrated in z_q and pixel.
+
+    Parameters
+    ----------
+    field : ObservedField
+        Forest sample identity, including its physical tracer and background
+        population.
+    geometry : BinGeometry
+        Fixed forest evaluation geometry and fiducial coordinate conversion.
+    response : InstrumentResponse
+        Fixed instrumental widths in km/s, with positive forest pixel width.
+    source : IntegratedForestSource
+        Duck-typed integrated source exposing ``measure`` (n_pixel,
+        n_magnitude) in deg^-2, ``variance`` (n_pixel, n_magnitude) of the
+        dimensionless pixel noise, ``magnitudes`` and ``quadrature``
+        (n_magnitude,), ``nodes.z_pix`` (n_pixel,) and ``pixel_width_velocity``
+        in km/s, which must equal the response pixel width.
+    method : str
+        Must be 'early_lyaforecast'.
+    rtol : float, default=1e-4
+        Relative tolerance for adaptive weight and noise-coefficient changes.
+    min_updates : int, default=3
+        Minimum adaptive update count before nomination of convergence.
+    stable_steps : int, default=3
+        Consecutive stable updates required before confirmation.
+    max_updates : int, default=96
+        Maximum adaptive update count.
+    auxiliary : AuxiliarySamples, optional
+        Matching fiducial samples supplying S/B instead of explicit signal and
+        alias. Default None.
+    signal : float, optional
+        Positive response-smoothed reference S in deg^2 km/s. Default None.
+    alias : float, optional
+        Positive response-smoothed reference B in km/s. Default None.
+    iterations : int, optional
+        Nonnegative fixed update count. Default None requests adaptive stopping
+        with confirmed convergence.
+    backend : {'reference', 'numpy', 'numba'}, optional
+        Implementation of the recurrence. Default None reads
+        ``FISHHIGHZ_INTEGRATED_BACKEND`` and falls back to 'numba' (which
+        itself falls back to 'numpy' when Numba is unavailable). 'reference'
+        runs the central kernels ``full_sum_weights.solve``/``fixed_weights``
+        unchanged on the flattened arrays; 'numpy' and 'numba' run the
+        dedicated streaming recurrence of ``kernels.integrated_weights``, which
+        reproduces it to floating-point summation order (relative 1e-12) with
+        identical update counts and stopping decisions, except when ``rtol``
+        coincides with a stopping metric to within its rounding (~1e-16
+        absolute), where the backends may stop at a different state that is
+        still within ``rtol``.
+
+    Returns
+    -------
+    prepared : IntegratedForestWeights
+        Immutable weights (n_pixel, n_magnitude), N1, N2, N3, A in deg^2,
+        pixel power in deg^2 km/s, z_eff and convergence metadata.
+
+    Raises
+    ------
+    ValueError
+        If the method is not 'early_lyaforecast', the source or the S/B inputs
+        are invalid, arithmetic is unrepresentable, weighted support is absent,
+        or adaptive convergence is not confirmed.
+
+    Notes
+    -----
+    The 'sum_historical' recurrence of ``kernels.full_sum_weights`` is applied
+    to the flattened arrays with density := measure, quadrature := 1,
+    length := 1 and variance := variance. The central moments L*sum(rho q w)
+    then become N1 = sum(mu w), so that S = P + B/N1, the per-pixel noise is
+    pixel_width v/N1, A = N2/N1^2 and P_pixel = pixel_width N3/N1^2. The
+    recurrence uses only full sums, never magnitude prefixes, so the (pixel,
+    magnitude) ordering of the flattened arrays affects only floating-point
+    summation. Arrays are flattened explicitly (C order, as views) and weights
+    are reshaped afterwards.
+
+    The default backends run the dedicated streaming recurrence of
+    ``kernels.integrated_weights``, which reproduces the central kernel
+    (same update count, candidate, stopping decisions and record keys) with
+    full sums that are more accurate than the central kernel's cumulative
+    prefix sums (about 1e-16 against n*eps relative, i.e. up to about 1e-12
+    at the 1e7 nodes of a production source); ``backend='reference'`` runs the
+    central kernels themselves.
+    """
+    if method != "early_lyaforecast":
+        raise ValueError(
+            "integrated forest weights support only method='early_lyaforecast'"
+        )
+    context = _context(field, geometry, response)
+    _require_integrated_source(source)
+
+    measure = _nonnegative_transient(source.measure, "integrated measure")
+    pixel_variance = _nonnegative_transient(source.variance, "integrated variance")
+    magnitude_grid = real_array(source.magnitudes, "magnitudes")
+    magnitude_weights = _nonnegative(source.quadrature, "quadrature")
+    pixel_redshift = real_array(source.nodes.z_pix, "z_pix")
+    if (
+        measure.ndim != 2
+        or not measure.size
+        or pixel_variance.shape != measure.shape
+        or magnitude_grid.shape != (measure.shape[1],)
+        or magnitude_weights.shape != magnitude_grid.shape
+        or pixel_redshift.shape != (measure.shape[0],)
+        or np.any(magnitude_grid[1:] <= magnitude_grid[:-1])
+        or np.any(magnitude_weights <= 0)
+        or not np.any(measure > 0)
+    ):
+        raise ValueError(
+            "require 2D measure/variance of shape (n_pixel, n_magnitude), "
+            "ordered magnitudes, positive quadrature and measure support"
+        )
+    pixel = _positive(source.pixel_width_velocity, "integrated pixel width")
+    if not np.isclose(pixel, response.pixel_width_velocity, rtol=1e-12, atol=0):
+        raise ValueError("source pixel width differs from the response pixel width")
+
+    if iterations is not None:
+        iterations = integer(iterations, "iterations")
+    if auxiliary is not None:
+        if (
+            not isinstance(auxiliary, AuxiliarySamples)
+            or auxiliary.context != context
+            or signal is not None
+            or alias is not None
+        ):
+            raise ValueError("auxiliary context/settings mismatch")
+        signal, alias = auxiliary.signal, auxiliary.alias
+    signal, alias = _positive(signal, "S"), _positive(alias, "B")
+
+    if backend is None:
+        backend = os.environ.get("FISHHIGHZ_INTEGRATED_BACKEND", "numba")
+    if backend not in ("reference", "numpy", "numba"):
+        raise ValueError(
+            "FISHHIGHZ_INTEGRATED_BACKEND must be reference, numpy or numba"
+        )
+
+    # Explicit C-order flattening (views; the validated arrays are contiguous).
+    flat_measure = measure.reshape(-1)
+    flat_variance = pixel_variance.reshape(-1)
+
+    try:
+        with np.errstate(over="raise", invalid="raise", divide="raise", under="ignore"):
+            if backend == "reference":
+                # Central kernels, unchanged, on the flattened arrays.
+                inputs = SimpleNamespace(
+                    density=flat_measure,
+                    quadrature=np.ones_like(flat_measure),
+                    variance=flat_variance,
+                    length=1.0,  # N1 already carries the forest length
+                    pixel=pixel,
+                    signal=signal,
+                    p1d=alias,
+                )
+                if iterations is None:
+                    solution = solve(
+                        inputs,
+                        METHODS[method],
+                        rtol=rtol,
+                        min_updates=min_updates,
+                        stable_steps=stable_steps,
+                        max_updates=max_updates,
+                    )
+                else:
+                    flat_weights = fixed_weights(inputs, METHODS[method], iterations)
+            elif iterations is None:
+                solution = solve_integrated(
+                    flat_measure,
+                    flat_variance,
+                    pixel=pixel,
+                    signal=signal,
+                    alias=alias,
+                    rtol=rtol,
+                    min_updates=min_updates,
+                    stable_steps=stable_steps,
+                    max_updates=max_updates,
+                    backend=backend,
+                )
+            else:
+                flat_weights = fixed_weights_integrated(
+                    flat_measure,
+                    flat_variance,
+                    pixel=pixel,
+                    signal=signal,
+                    alias=alias,
+                    updates=iterations,
+                    backend=backend,
+                )
+
+            if iterations is None:
+                if solution["status"] != "converged":
+                    raise ValueError(
+                        f"{field.id}: {method} {solution['status']}: "
+                        f"{solution['reason']}"
+                    )
+                flat_weights = solution["weights"]
+                convergence = dict(solution)
+            else:
+                convergence = dict(status="fixed_count", updates=iterations)
+
+            # Normalize moments only after the weights have been determined.
+            if backend == "reference":
+                (
+                    first_moment,
+                    second_moment,
+                    noise_moment,
+                    aliasing_coefficient,
+                    pixel_power,
+                ) = _integrals(flat_measure, flat_weights, flat_variance, 1.0, pixel)
+                total_first, total_second, total_noise = (
+                    first_moment[-1],
+                    second_moment[-1],
+                    noise_moment[-1],
+                )
+            else:
+                (
+                    total_first,
+                    total_second,
+                    total_noise,
+                    aliasing_coefficient,
+                    pixel_power,
+                ) = integrated_moments(flat_measure, flat_weights, flat_variance, pixel)
+            if (
+                not np.isfinite(aliasing_coefficient)
+                or aliasing_coefficient <= 0
+                or not np.isfinite(pixel_power)
+                or pixel_power < 0
+                or (
+                    pixel_power == 0
+                    and np.any(
+                        (flat_measure > 0) & (flat_weights > 0) & (flat_variance > 0)
+                    )
+                )
+                or total_first <= 0
+                or total_second <= 0
+            ):
+                raise ValueError(
+                    "integrals/coefficients are not representable or lack weighted support"
+                )
+
+            weights = flat_weights.reshape(measure.shape)
+
+            # sum_p z_p sum_j mu_pj w_pj without a full-size temporary.
+            effective_redshift = (
+                np.einsum("pj,pj->p", measure, weights) @ pixel_redshift / total_first
+            )
+    except FloatingPointError as error:
+        raise ValueError(
+            f"{field.id}: weighting integrals/coefficients are not representable "
+            f"or lack support: {error}"
+        ) from error
+
+    weights = _immutable(weights)
+    if iterations is None:
+        # Share the read-only (n_pixel, n_magnitude) array instead of keeping a
+        # second flattened copy of the converged weights.
+        convergence["weights"] = weights
+
+    result = object.__new__(IntegratedForestWeights)
+    values = dict(
+        context=context,
+        method=method,
+        iterations=iterations,
+        auxiliary=auxiliary,
+        signal=signal,
+        alias=alias,
+        convergence=convergence,
+        A=float(aliasing_coefficient),
+        P_pixel=float(pixel_power),
+        N1=float(total_first),
+        N2=float(total_second),
+        N3=float(total_noise),
+        z_eff=float(effective_redshift),
+        weights=weights,
+    )
+    for name, value in values.items():
+        object.__setattr__(result, name, value)
     return result

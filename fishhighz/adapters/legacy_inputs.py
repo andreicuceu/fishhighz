@@ -8,6 +8,7 @@ not. No raw assets are distributed. SciPy is imported only on reader setup.
 
 import hashlib
 import io
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -143,6 +144,238 @@ def _query(axis, values, name, context):
             f"{context}: {name}={values.tolist()} outside closed domain [{axis[0]}, {axis[-1]}]"
         )
     return values
+
+
+GRID_CHUNK_POINTS = 1 << 20
+
+
+def _grid_vector(values, name):
+    """Validate a nonempty one-dimensional finite float64 vector.
+
+    Parameters
+    ----------
+    values : array_like
+        Real coordinates, shape (n_value,), in the units of the named quantity.
+    name : str
+        Quantity name used in validation errors.
+
+    Returns
+    -------
+    vector : ndarray
+        Owned float64 copy, shape (n_value,).
+
+    Raises
+    ------
+    ValueError
+        If the input is not nonempty, one dimensional and finite.
+    """
+    vector = real_array(values, name)
+    if vector.ndim != 1 or not len(vector):
+        raise ValueError(f"{name} must be nonempty 1D")
+    return vector
+
+
+def _paired_points(z_source, wavelength, pixel_width_angstrom):
+    """Validate paired source-redshift, wavelength and pixel-width vectors.
+
+    Parameters
+    ----------
+    z_source : array_like
+        Dimensionless source redshifts, shape (n_point,).
+    wavelength : array_like
+        Observed wavelengths in angstrom, shape (n_point,); strictly positive.
+    pixel_width_angstrom : array_like
+        Observed pixel widths in angstrom, shape (n_point,); strictly positive.
+
+    Returns
+    -------
+    z_source, wavelength, pixel_width_angstrom : ndarray
+        Owned float64 vectors, each of shape (n_point,).
+
+    Raises
+    ------
+    ValueError
+        If any vector is nonfinite, not one dimensional, of unequal length, or
+        if wavelengths or pixel widths are not strictly positive.
+    """
+    z_source = _grid_vector(z_source, "z_source")
+    wavelength = _grid_vector(wavelength, "wavelength")
+    pixel_width_angstrom = _grid_vector(pixel_width_angstrom, "pixel_width_angstrom")
+    if not len(z_source) == len(wavelength) == len(pixel_width_angstrom):
+        raise ValueError(
+            "z_source, wavelength and pixel_width_angstrom must have equal length"
+        )
+    if np.any(wavelength <= 0):
+        raise ValueError("wavelength must be positive and representable")
+    if np.any(pixel_width_angstrom <= 0):
+        raise ValueError("pixel_width_angstrom must be positive and representable")
+    return z_source, wavelength, pixel_width_angstrom
+
+
+def _grid_query(axis, values, name, context):
+    """Require every coordinate of a vector to lie in a closed domain.
+
+    Parameters
+    ----------
+    axis : ndarray
+        Ordered domain nodes, shape (n_node,).
+    values : ndarray
+        Validated query coordinates, any shape, in the units of axis.
+    name : str
+        Coordinate label for errors.
+    context : str
+        Reader identity for error messages.
+
+    Raises
+    ------
+    ValueError
+        If any coordinate lies outside [axis[0], axis[-1]]. The message reports
+        the number of violations and the extreme queries, not the full vector.
+    """
+    outside = (values < axis[0]) | (values > axis[-1])
+    if np.any(outside):
+        raise ValueError(
+            f"{context}: {int(np.count_nonzero(outside))} {name} queries outside "
+            f"closed domain [{axis[0]}, {axis[-1]}] "
+            f"(query range [{values.min()}, {values.max()}])"
+        )
+
+
+def _row_chunks(n_row, n_column):
+    """Split rows into slices holding at most GRID_CHUNK_POINTS points.
+
+    Parameters
+    ----------
+    n_row : int
+        Number of rows (paired points).
+    n_column : int
+        Number of columns (magnitude nodes) per row.
+
+    Yields
+    ------
+    rows : slice
+        Contiguous row selection bounding the interpolation memory.
+    """
+    step = max(1, GRID_CHUNK_POINTS // max(1, int(n_column)))
+    for start in range(0, n_row, step):
+        yield slice(start, min(start + step, n_row))
+
+
+def _axis_interval(axis, values):
+    """Locate coordinates in the intervals of a grid axis.
+
+    Parameters
+    ----------
+    axis : ndarray
+        Strictly increasing grid nodes, shape (n_node,), n_node >= 2.
+    values : ndarray
+        Coordinates inside the closed domain, shape (n,).
+
+    Returns
+    -------
+    index : ndarray of int, shape (n,)
+        Lower node of the interval holding each coordinate; coordinates at the
+        upper edge belong to the last interval.
+    fraction : ndarray, shape (n,)
+        (value - axis[index]) / (axis[index + 1] - axis[index]) in [0, 1], the
+        normalized distance used by SciPy's linear RegularGridInterpolator.
+    """
+    index = np.clip(np.searchsorted(axis, values, side="right") - 1, 0, len(axis) - 2)
+    lower = axis[index]
+    return index, (values - lower) / (axis[index + 1] - lower)
+
+
+def snr_grid_separable(interpolator, z_source, wavelength, magnitudes):
+    """Interpolate an SNR tensor on paired (z, wavelength) points times magnitudes.
+
+    Parameters
+    ----------
+    interpolator : scipy.interpolate.RegularGridInterpolator
+        Linear interpolator over (magnitude, source redshift, wavelength);
+        its grid and values define the table.
+    z_source, wavelength : ndarray of shape (n_point,)
+        Paired coordinates inside the closed table domains.
+    magnitudes : ndarray of shape (n_magnitude,)
+        Magnitude coordinates inside the closed table domain.
+
+    Returns
+    -------
+    snr : ndarray of shape (n_point, n_magnitude)
+        Trilinear interpolant at (magnitudes[j], z_source[p], wavelength[p]).
+
+    Notes
+    -----
+    The trilinear kernel factorizes: the four (z, wavelength) corner weights of
+    each point contract the table into one profile over the tabulated
+    magnitudes, which the per-magnitude linear weights then interpolate. This
+    equals the generic 3-D evaluation up to floating-point rounding (relative
+    ~1e-15) at a small fraction of its cost, since the corner search and
+    weights are formed per point and per magnitude rather than per element.
+    """
+    magnitude_axis, z_axis, wavelength_axis = interpolator.grid
+    table = np.ascontiguousarray(np.moveaxis(interpolator.values, 0, -1))
+    z_index, z_fraction = _axis_interval(z_axis, z_source)
+    wavelength_index, wavelength_fraction = _axis_interval(wavelength_axis, wavelength)
+    magnitude_index, magnitude_fraction = _axis_interval(magnitude_axis, magnitudes)
+
+    # Bilinear contraction over the (z, wavelength) cell: profile (n_point, n_table_mag).
+    z_low, z_high = 1 - z_fraction, z_fraction
+    wavelength_low, wavelength_high = 1 - wavelength_fraction, wavelength_fraction
+    profile = table[z_index, wavelength_index] * (z_low * wavelength_low)[:, None]
+    profile += table[z_index, wavelength_index + 1] * (z_low * wavelength_high)[:, None]
+    profile += table[z_index + 1, wavelength_index] * (z_high * wavelength_low)[:, None]
+    profile += (
+        table[z_index + 1, wavelength_index + 1] * (z_high * wavelength_high)[:, None]
+    )
+
+    # Linear interpolation over magnitude.
+    snr = np.take(profile, magnitude_index, axis=1)
+    snr *= (1 - magnitude_fraction)[None, :]
+    snr += np.take(profile, magnitude_index + 1, axis=1) * magnitude_fraction[None, :]
+    return snr
+
+
+def snr_grid_values(interpolator, z_source, wavelength, magnitudes):
+    """Interpolate the SNR grid with the selected implementation.
+
+    Parameters
+    ----------
+    interpolator : callable
+        The reader's 3-D linear interpolator over (magnitude, source redshift,
+        wavelength); a SciPy RegularGridInterpolator selects the separable path.
+    z_source, wavelength : ndarray of shape (n_point,)
+        Paired coordinates inside the closed table domains.
+    magnitudes : ndarray of shape (n_magnitude,)
+        Magnitude coordinates inside the closed table domain.
+
+    Returns
+    -------
+    snr : ndarray of shape (n_point, n_magnitude)
+        Interpolated SNR.
+
+    Notes
+    -----
+    ``FISHHIGHZ_SNR_GRID`` selects 'separable' (default) or 'interpolator',
+    the generic RegularGridInterpolator call kept as the reference. Any
+    interpolator that is not a SciPy RegularGridInterpolator with at least two
+    nodes per axis (a test double, say) is called directly.
+
+    Raises
+    ------
+    ValueError
+        If the environment selection is unknown.
+    """
+    mode = os.environ.get("FISHHIGHZ_SNR_GRID", "separable")
+    if mode not in ("separable", "interpolator"):
+        raise ValueError("FISHHIGHZ_SNR_GRID must be separable or interpolator")
+    if mode == "separable" and isinstance(interpolator, _scipy()[1]):
+        if all(len(axis) >= 2 for axis in interpolator.grid):
+            return snr_grid_separable(interpolator, z_source, wavelength, magnitudes)
+    points = np.empty((len(z_source), len(magnitudes), 3))
+    points[..., 0] = magnitudes[None, :]
+    points[..., 1] = z_source[:, None]
+    points[..., 2] = wavelength[:, None]
+    return interpolator(points)
 
 
 DENSITY_INTERPOLATIONS = ("piecewise_constant", "spline")
@@ -654,6 +887,48 @@ class DensityReader:
             )
         return _immutable(result)
 
+    def query_grid(self, z, magnitudes):
+        """Evaluate the piecewise-constant density on a redshift-magnitude grid.
+
+        Parameters
+        ----------
+        z : array_like
+            Dimensionless redshifts, shape (n_z,), inside the closed redshift
+            cell-edge range.
+        magnitudes : array_like
+            Magnitude nodes, shape (n_magnitude,), inside the closed magnitude
+            cell-edge range.
+
+        Returns
+        -------
+        density : ndarray
+            Immutable dN/(dz dm dOmega) in deg^-2 redshift^-1 mag^-1, shape
+            (n_z, n_magnitude); element [i, j] equals query(z[i], magnitudes)[j].
+
+        Raises
+        ------
+        ValueError
+            If the reader uses spline interpolation (the grid query supports
+            piecewise-constant cells only), a query lies outside the closed cell
+            edges, or a density is negative or nonfinite.
+        """
+        histogram = self._histogram
+        if histogram is None:
+            raise ValueError(
+                f"{self._context}: query_grid supports piecewise_constant "
+                "interpolation only"
+            )
+        z = _grid_vector(z, "redshift")
+        magnitude_grid = _grid_vector(magnitudes, "magnitude")
+        _grid_query(self.z_edges, z, "redshift", self._context)
+        _grid_query(self.magnitude_edges, magnitude_grid, "magnitude", self._context)
+        result = histogram(z[:, None], magnitude_grid[None, :])
+        if np.any(result < 0) or not np.all(np.isfinite(result)):
+            raise ValueError(
+                f"{self._context}: negative/nonfinite interpolated density on grid"
+            )
+        return _immutable(result)
+
     def local_galaxy_density(self, geometry, magnitudes, quadrature):
         """Convert the local density at z_eval into a comoving galaxy density.
 
@@ -995,6 +1270,95 @@ class SNRReader:
         except FloatingPointError as error:
             raise ValueError(f"{self._context}: variance not representable") from error
         return _immutable(result)
+
+    def variance_grid(
+        self,
+        *,
+        z_source,
+        magnitudes,
+        wavelength,
+        pixel_width_angstrom,
+        exposure_count,
+        exposure_time=None,
+    ):
+        """Convert table SNR to pixel variance on paired points times magnitudes.
+
+        Parameters
+        ----------
+        z_source : array_like
+            Dimensionless source redshifts, shape (n_point,).
+        magnitudes : array_like
+            Magnitude nodes, shape (n_magnitude,).
+        wavelength : array_like
+            Observed wavelengths in angstrom, shape (n_point,), paired with
+            z_source.
+        pixel_width_angstrom : array_like
+            Positive observed pixel widths in angstrom, shape (n_point,).
+        exposure_count : float
+            Positive number of exposures.
+        exposure_time : float or None, optional
+            Per-exposure duration in seconds; None uses the table duration, and an
+            explicit value must match it.
+
+        Returns
+        -------
+        variance : ndarray
+            Immutable dimensionless variance, shape (n_point, n_magnitude);
+            element [p, j] equals the scalar variance at (z_source[p],
+            magnitudes[j], wavelength[p], pixel_width_angstrom[p]).
+
+        Raises
+        ------
+        ValueError
+            If any point lies outside the closed table domains, the SNR is
+            nonfinite, negative or zero, exposure metadata disagree, or a
+            variance is not representable.
+
+        Notes
+        -----
+        Uses the arithmetic of variance: 1/(SNR^2 * pixel * n_exposure/table
+        exposures). Interpolation is one vectorised call per chunk of at most
+        2**20 points to bound memory.
+        """
+        z_source, wavelength, pixel = _paired_points(
+            z_source, wavelength, pixel_width_angstrom
+        )
+        n_exposures = _positive(exposure_count, "exposure_count")
+        if (
+            exposure_time is not None
+            and _positive(exposure_time, "exposure_time")
+            != self.provenance["exposure_time"]
+        ):
+            raise ValueError("incompatible per-exposure EXPTIME; no implicit rescaling")
+        magnitude_grid = _grid_vector(magnitudes, "magnitude")
+        _grid_query(self.z, z_source, "source redshift", self._context)
+        _grid_query(self.wavelength, wavelength, "wavelength", self._context)
+        _grid_query(self.magnitudes, magnitude_grid, "magnitude", self._context)
+
+        exposure_ratio = np.float64(n_exposures) / self.provenance["exposure_count"]
+        variance = np.empty((len(z_source), len(magnitude_grid)))
+        for rows in _row_chunks(len(z_source), len(magnitude_grid)):
+            snr = snr_grid_values(
+                self._interpolator, z_source[rows], wavelength[rows], magnitude_grid
+            )
+            if not np.all(np.isfinite(snr)) or np.any(snr < 0):
+                raise ValueError(
+                    f"{self._context}: nonfinite/negative interpolated SNR"
+                )
+            if np.any(snr <= 0):
+                raise ValueError(
+                    f"{self._context}: strictly positive SNR required for variance"
+                )
+            try:
+                with np.errstate(
+                    over="raise", under="raise", invalid="raise", divide="raise"
+                ):
+                    variance[rows] = 1 / (snr**2 * pixel[rows, None] * exposure_ratio)
+            except FloatingPointError as error:
+                raise ValueError(
+                    f"{self._context}: variance not representable"
+                ) from error
+        return _immutable(variance)
 
 
 def sample_forest_readers(

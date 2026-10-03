@@ -32,6 +32,45 @@ def real_array(value, name):
     return array
 
 
+def immutable_float_array(value, name):
+    """Return a finite float64 array, sharing memory that cannot change.
+
+    Parameters
+    ----------
+    value : array_like
+        Real numeric data of any shape; units are preserved.
+    name : str
+        Quantity name used in validation errors.
+
+    Returns
+    -------
+    array : ndarray
+        The input itself if it is a C-contiguous float64 array backed by
+        immutable bytes (as built by ``freeze`` and ``geometry._immutable``,
+        whose writeability cannot be re-enabled), after checking that it is
+        finite; otherwise an owned copy as ``real_array`` returns. Sharing
+        avoids copying the 1e7-element arrays of an integrated forest source.
+
+    Raises
+    ------
+    ValueError
+        If values are Boolean, complex, nonnumeric, or nonfinite.
+    """
+    base = value
+    while isinstance(base, np.ndarray) and not base.flags.writeable:
+        base = base.base
+    if (
+        isinstance(value, np.ndarray)
+        and isinstance(base, bytes)
+        and value.dtype == np.float64
+        and value.flags.c_contiguous
+    ):
+        if not np.all(np.isfinite(value)):
+            raise ValueError(f"{name} must be finite")
+        return value
+    return real_array(value, name)
+
+
 def readonly(value, dtype):
     """Copy an array and mark the owned C-contiguous data read-only.
 
