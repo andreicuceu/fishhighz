@@ -18,7 +18,6 @@ arrays
 models
 survey
 inference
-adapters
 ```
 
 ## Frequently used interfaces

@@ -38,8 +38,7 @@ scientific qualifications consistent with source and tests.
 
 Historical records belong in the archives. Preserve scientific claims and dated
 commands, distinguish historical proposals from current interfaces, and label
-local-only evidence rather than creating links to unavailable files. Update the
-[migration inventory](migration.md) when relocating a document.
+local-only evidence rather than creating links to unavailable files.
 
 ## Distributions and import checks
 
@@ -57,5 +56,4 @@ alone does not establish that the wheel is complete. Read package versions with
 `importlib.metadata.version("fishhighz")`; `pyproject.toml` is authoritative.
 
 Earlier distribution-validation commands and machine-local helper paths are
-preserved in the [development archive](../archive/index.md), not required for
-routine contributor checks.
+no longer maintained and not required for routine contributor checks.

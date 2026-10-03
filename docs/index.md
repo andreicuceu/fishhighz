@@ -15,5 +15,4 @@ methods/index
 api/index
 research/index
 development/index
-archive/index
 ```

@@ -118,6 +118,6 @@ written. Keep `OMP_NUM_THREADS=OPENBLAS_NUM_THREADS=MKL_NUM_THREADS=1` for bound
 login-node checks. External model callables retain their Python interface.
 
 Step 12 revision 4 timings and limitations are recorded in
-[the performance report](../archive/reviews/step-12-performance-r4.md). These synthetic
+the Step 12 revision 4 performance report (removed from the tree). These synthetic
 measurements do not establish real-forecast timing or forest convergence.
 

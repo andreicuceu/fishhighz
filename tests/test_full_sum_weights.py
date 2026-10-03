@@ -1,18 +1,26 @@
 """Independent scalar limits and revised selected-forecast contracts."""
 
-from dataclasses import replace
-from types import SimpleNamespace
+from dataclasses import dataclass, replace
 
 import numpy as np
 import pytest
 from test_weights import prepare
 
 from fishhighz.kernels.full_sum_weights import coefficients, seed, solve, update
-from fishhighz.validation import trials
-from fishhighz.validation.compatibility_weights import WeightInputs
-from fishhighz.validation.profile_definitions import REVISION, forecast_selection
-from fishhighz.validation.schema import request, validate_request
-from fishhighz.validation.study import study
+
+
+@dataclass(frozen=True)
+class WeightInputs:
+    """One pair context in angular/velocity units, as consumed by the solver."""
+
+    magnitudes: np.ndarray
+    density: np.ndarray
+    quadrature: np.ndarray
+    variance: np.ndarray
+    length: float
+    pixel: float
+    signal: float
+    p1d: float
 
 
 def inputs():
@@ -141,84 +149,6 @@ def test_strict_public_methods_and_cap():
             prepare(method=method, iterations=None, rho=[1, -1, 1])
         fixed = prepare(method=method, iterations=3)
         assert fixed.convergence["status"] == "fixed_count"
-
-
-def test_selected_bin1_and_historical_identity():
-    """Check selected bin1 and historical identity."""
-    case = "lya_qso_lbg_lae_15x2pt"
-    historical = request(case, 0, "accuracy")
-    revised = request(case, 0, "accuracy", recipe_revision=REVISION)
-    assert len(historical["selected_pairs"]) == 15
-    assert len(revised["selected_pairs"]) == len(revised["required_pairs"]) == 3
-    assert {
-        revised["fields"][i]["id"].lower() for p in revised["selected_pairs"] for i in p
-    } == {"lya(qso)", "qso"}
-    assert sum(len(forecast_selection(case, i).selected_pairs) for i in range(6)) == 78
-    validate_request(revised)
-
-
-class AdaptiveStudy:
-    weight_method = "early_lyaforecast"
-    selection = SimpleNamespace(
-        fields=[SimpleNamespace(kind="forest")], selected_pairs=np.array([[0, 0]])
-    )
-
-    def __init__(self):
-        """Initialize the synthetic AdaptiveStudy fixture.
-
-        Notes
-        -----
-        Sets the instance state used by the enclosing test; no scientific calculation is run.
-        """
-        self._prepared = {}
-
-    def evaluate(self, task, controls):
-        """Evaluate the synthetic Fisher trial for the supplied numerical controls.
-
-        Parameters
-        ----------
-        task : dict
-            Synthetic forecast request including case, redshift-bin index, profile,
-            and pair selection.
-        controls : dict
-            Numerical quadrature and weighting controls for this synthetic trial.
-
-        Returns
-        -------
-        payload : tuple
-            Synthetic numerical arrays and validation report, including the
-            requested test modification.
-
-        Notes
-        -----
-        Uses small analytic matrices to exercise validation control flow; it does not run a survey forecast.
-        """
-        fisher = np.diag([2.0, 1.0])
-        return dict(fisher=fisher, pair_fisher=fisher[None]), dict(
-            settings=dict(
-                controls=dict(controls),
-                grid=dict(
-                    volume=1.0,
-                    k_intervals=controls["k_intervals"],
-                    mu_order=controls["mu_order"],
-                    k_order=4,
-                ),
-                forest_weighting=dict(
-                    method=self.weight_method,
-                    forests={"forest": dict(result=dict(status="converged"))},
-                ),
-            )
-        )
-
-
-def test_adaptive_trial_v3_replays_and_tightens_tolerance():
-    """Check adaptive trial v3 replays and tightens tolerance."""
-    arrays, report = study(AdaptiveStudy(), {})
-    assert report["trial_contract"]["version"] == 3
-    assert report["actual_levels"]["weights"] == [1e-4, 1e-5]
-    assert report["final_controls"]["weight_rtol"] == 1e-5
-    assert all("iterations" not in c for c in report["study_controls"])
-    assert trials.validate(arrays, report)
 
 
 def test_auxiliary_units_field_reuse_and_frozen_derivatives():
@@ -382,169 +312,6 @@ def test_auxiliary_units_field_reuse_and_frozen_derivatives():
         (total_power[:, 0] * total_power[:, 2] + total_power[:, 1] ** 2)
         / prepared.modes,
         rtol=5e-15,
-    )
-
-
-def test_accuracy_recipe_records_own_auxiliary_and_stopping(monkeypatch):
-    """Check accuracy recipe records own auxiliary and stopping.
-
-    Parameters
-    ----------
-    monkeypatch : pytest.MonkeyPatch
-        Fixture that restores patched callables, attributes, and environment
-        variables after the test.
-    """
-    from test_weighting_w12 import profile_fixture
-
-    from fishhighz.forecast import prepare_bin
-    from fishhighz.validation import accuracy
-
-    recipe, _, calls = profile_fixture(monkeypatch)
-    monkeypatch.setattr(accuracy, "prepare_bin", prepare_bin)
-    recipe.weight_method = "early_lyaforecast"
-    controls = dict(
-        k_intervals=1,
-        mu_order=2,
-        z_order=2,
-        magnitude_order=2,
-        step=2.5e-4,
-        weight_rtol=1e-5,
-    )
-    prepared, settings = recipe.prepare(0, controls)
-    assert len(calls) == 3  # each auto auxiliary and the forecast grid
-    rows = settings["forest_weighting"]["forests"]
-    assert set(rows) == {"lya(qso)", "lya(lbg)"}
-    for name, row in rows.items():
-        assert row["result"]["status"] == "converged"
-        assert row["iterations"]["stopping"]["rtol"] == 1e-5
-        assert row["auxiliary"]["P"] == prepared.weights[name].signal
-        assert row["auxiliary"]["B"] == prepared.weights[name].alias
-        assert row["A"] == prepared.weights[name].A
-
-
-def test_revised_runner_dispatches_exact_selected_profiles(tmp_path, monkeypatch):
-    """Check revised runner dispatches exact selected profiles.
-
-    Parameters
-    ----------
-    tmp_path : pathlib.Path
-        Isolated temporary directory supplied by pytest; generated test files
-        are written here.
-    monkeypatch : pytest.MonkeyPatch
-        Fixture that restores patched callables, attributes, and environment
-        variables after the test.
-    """
-    from fishhighz.validation import profiles, revised_compatibility
-    from fishhighz.validation.evidence import modern_requests
-
-    source = tmp_path / "source"
-    source.write_text("fixture")
-    ident = {"resources": {}, "reference": {"sources": {}}}
-    monkeypatch.setattr(profiles, "verify_inventory", lambda *a: None)
-    monkeypatch.setattr(profiles, "provenance", lambda *a: ident)
-    monkeypatch.setattr(profiles, "background", lambda *a: (None, None))
-    seen = []
-    monkeypatch.setattr(
-        revised_compatibility,
-        "run",
-        lambda task, *a: (seen.append(task) or {}, {"passed": True}),
-    )
-
-    class Recipe:
-        def __init__(self, *a, **kw):
-            """Initialize the synthetic Recipe fixture.
-
-            Parameters
-            ----------
-            *a : tuple
-                Positional arguments forwarded to the original callable or accepted by
-                the test callback.
-            **kw : dict
-                Keyword options forwarded to the original callable or inspected by the
-                test callback.
-
-            Notes
-            -----
-            Sets the instance state used by the enclosing test; no scientific calculation is run.
-            """
-            assert kw == dict(
-                weight_method="early_lyaforecast", recipe_revision=REVISION
-            )
-            self._samples = {}
-            self._prepared = {}
-
-        def study(self, task):
-            """Record a synthetic task and return its fixed convergence result.
-
-            Parameters
-            ----------
-            task : dict
-                Synthetic forecast request including case, redshift-bin index, profile,
-                and pair selection.
-
-            Returns
-            -------
-            payload : tuple
-                Synthetic numerical arrays and validation report, including the
-                requested test modification.
-
-            Notes
-            -----
-            Appends to the enclosing test call log so provider dispatch can be checked.
-            """
-            seen.append(task)
-            return dict(
-                fisher=np.eye(2), pair_fisher=np.tile(np.eye(2), (3, 1, 1))
-            ), dict(passed=True, final_controls={})
-
-    monkeypatch.setattr(profiles, "AccuracyRecipe", Recipe)
-
-    def execute(out, **kw):
-        """Dispatch only the requested synthetic profile tasks.
-
-        Parameters
-        ----------
-        out : pathlib.Path
-            Directory containing the synthetic evidence bundle.
-        **kw : dict
-            Keyword options forwarded to the original callable or inspected by the
-            test callback.
-
-        Returns
-        -------
-        tasks : list of dict
-            Generated requests in dispatch order.
-        """
-        tasks = modern_requests(
-            kw["suite"],
-            kw["cases"],
-            kw["bin_indices"],
-            profiles=kw["profiles"],
-            recipe_revision=kw["recipe_revision"],
-        )
-        for task in tasks:
-            kw["worker"](task)
-        return tasks
-
-    monkeypatch.setattr(profiles, "execute", execute)
-    tasks = profiles.run(
-        tmp_path / "out",
-        reference=tmp_path,
-        template=source,
-        reference_bundle=tmp_path,
-        wheel=source,
-        compatibility_bundle=tmp_path,
-        bin_indices=[0],
-        suite="full",
-    )
-    assert [t["profile"] for t in tasks] == [
-        "full-compatibility",
-        "fixed-compatibility",
-        "accuracy",
-    ]
-    assert len(seen) == 3
-    assert all(
-        len(t["selected_pairs"]) == 3 and t["recipe_revision"] == REVISION for t in seen
     )
 
 

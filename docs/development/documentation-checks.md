@@ -6,7 +6,7 @@ constitute a new scientific qualification of the forecasts.
 
 ## Migration and preservation
 
-The [inventory](migration.md) accounts for 163 moved research/development
+The migration inventory (since removed) accounted for 163 moved research/development
 records and two derived README archive records. The README is now 116 lines;
 its scientific tutorials remain in the methods pages and its historical
 account remains in the archives.

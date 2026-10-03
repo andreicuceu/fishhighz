@@ -11,10 +11,8 @@ from dataclasses import dataclass
 import numpy as np
 
 from .._arrays import real_array, scalar
-from ..geometry import LYA_REST_ANGSTROM, _positive
-from ..response import pixel_width_angstrom_to_velocity
+from ..geometry import _positive
 from ..survey import freeze
-from ..weights import density_per_velocity
 from .legacy_inputs import (
     CellHistogram2D,
     DensityReader,
@@ -27,32 +25,6 @@ from .legacy_inputs import (
 )
 
 DENSITY_FLOOR = 1e-20
-
-
-def plain(value):
-    """Convert immutable provenance into plain serialization values.
-
-    Parameters
-    ----------
-    value : object
-        Nested immutable mappings, arrays, sequences or scalars.
-
-    Returns
-    -------
-    converted : object
-        Plain containers and scalar values preserving metadata.
-    """
-    from collections.abc import Mapping
-
-    if isinstance(value, Mapping):
-        return {k: plain(v) for k, v in value.items()}
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, (tuple, list)):
-        return [plain(v) for v in value]
-    if isinstance(value, np.generic):
-        return value.item()
-    return value
 
 
 def _mags(value):
@@ -744,89 +716,3 @@ class LegacySNR:
                 ),
             )
         )
-
-
-def sample_legacy_forest(
-    density,
-    snr,
-    geometry,
-    response,
-    *,
-    z_source,
-    magnitudes,
-    pixel_width_angstrom,
-    exposure_count,
-    exposure_time=None,
-):
-    """Sample source density and pixel variance with legacy provenance.
-
-    Parameters
-    ----------
-    density : object
-        Prepared source-density adapter.
-    snr : object
-        Prepared signal-to-noise adapter.
-    geometry : BinGeometry
-        Foreground geometry and evaluation redshift.
-    response : InstrumentResponse
-        Response with the independently specified velocity pixel width.
-    z_source : float
-        Dimensionless redshift of the background source.
-    magnitudes : array_like
-        Magnitude nodes, shape (n_magnitude,), in requested order.
-    pixel_width_angstrom : float
-        Positive observed pixel width in angstrom.
-    exposure_count : float
-        Positive number of exposures.
-    exposure_time : float or None, optional
-        Per-exposure duration in seconds; None uses the table duration, and an
-        explicit value must match it.
-
-    Returns
-    -------
-    sample : dict
-        rho in deg^-2 (km/s)^-1 mag^-1 and dimensionless variance arrays, shape
-        (n_magnitude,), plus plain reader/fallback provenance.
-
-    Raises
-    ------
-    ValueError
-        If source/foreground order or wavelength/velocity pixel widths disagree.
-
-    Notes
-    -----
-    Density and SNR use source redshift; observed wavelength uses the foreground evaluation redshift.
-    """
-    if scalar(z_source, "z_source") <= geometry.z_eval:
-        raise ValueError("z_source must exceed z_eval")
-    observed_wavelength = LYA_REST_ANGSTROM * (1 + geometry.z_eval)
-    pixel_width_velocity = pixel_width_angstrom_to_velocity(
-        pixel_width_angstrom, lambda_obs_angstrom=observed_wavelength
-    )
-    if not np.isclose(
-        pixel_width_velocity,
-        response.pixel_width_velocity,
-        rtol=8 * np.finfo(float).eps,
-        atol=0,
-    ):
-        raise ValueError("inconsistent pixel widths")
-    density_sample = density.sample(z_source, magnitudes)
-    snr_sample = snr.sample(
-        z_source=z_source,
-        magnitudes=magnitudes,
-        wavelength=observed_wavelength,
-        pixel_width_angstrom=pixel_width_angstrom,
-        exposure_count=exposure_count,
-        exposure_time=exposure_time,
-    )
-    return dict(
-        rho=density_per_velocity(density_sample["values"], z_source=z_source),
-        variance=snr_sample["values"],
-        provenance=plain(
-            dict(
-                compatibility=True,
-                density=density_sample["provenance"],
-                snr=snr_sample["provenance"],
-            )
-        ),
-    )
