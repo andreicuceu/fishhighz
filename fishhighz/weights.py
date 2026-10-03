@@ -360,10 +360,10 @@ class _ForestContextMixin:
 
 @dataclass(frozen=True, init=False, eq=False)
 class ForestWeights(_ForestContextMixin):
-    """Converged adaptive forest weights, cumulative moments and noise coefficients.
+    """Converged adaptive forest weights, full-sample moments and noise coefficients.
 
-    A is deg²; P_pixel is deg² km/s. I1/I2 are cumulative density per source
-    velocity; I3 adds dimensionless pixel variance. ``convergence`` is the
+    A is deg²; P_pixel is deg² km/s. I1/I2 are the full-sample totals of density per source
+    velocity (deg^-2 (km/s)^-1, scalars); I3 adds dimensionless pixel variance. ``convergence`` is the
     record of the adaptive full-sample solver. Construct with
     prepare_forest_weights.
     """
@@ -380,9 +380,9 @@ class ForestWeights(_ForestContextMixin):
     signal: float
     alias: float
     weights: np.ndarray
-    I1: np.ndarray
-    I2: np.ndarray
-    I3: np.ndarray
+    I1: float
+    I2: float
+    I3: float
     A: float
     P_pixel: float
     convergence: object
@@ -457,7 +457,7 @@ def prepare_forest_weights(
     Returns
     -------
     prepared : ForestWeights
-        Immutable input arrays, dimensionless weights, cumulative I1/I2/I3 in
+        Immutable input arrays, dimensionless weights, full-sample I1/I2/I3 in
         deg^-2 (km/s)^-1, A in deg^2, pixel power in deg^2 km/s, and convergence
         metadata.
 
@@ -570,8 +570,8 @@ def prepare_forest_weights(
                     np.any((masses > 0) & (forest_weights > 0) & (pixel_variance > 0))
                     and pixel_power == 0
                 )
-                or first_moment[-1] <= 0
-                or second_moment[-1] <= 0
+                or first_moment <= 0
+                or second_moment <= 0
             ):
                 raise ValueError(
                     "integrals/coefficients are not representable or lack weighted support"
@@ -596,9 +596,9 @@ def prepare_forest_weights(
         signal=signal,
         alias=alias,
         weights=forest_weights,
-        I1=first_moment,
-        I2=second_moment,
-        I3=noise_moment,
+        I1=float(first_moment),
+        I2=float(second_moment),
+        I3=float(noise_moment),
         A=float(aliasing_coefficient),
         P_pixel=float(pixel_power),
         convergence=convergence,
@@ -777,8 +777,7 @@ def prepare_integrated_forest_weights(
     length := 1 and variance := variance. The central moments L*sum(rho q w)
     then become N1 = sum(mu w), so that S = P + B/N1, the per-pixel noise is
     pixel_width v/N1, A = N2/N1^2 and P_pixel = pixel_width N3/N1^2. The
-    recurrence uses only full sums, never magnitude prefixes, so the (pixel,
-    magnitude) ordering of the flattened arrays affects only floating-point
+    recurrence uses only full sums, so the (pixel, magnitude) ordering of the flattened arrays affects only floating-point
     summation. Arrays are flattened explicitly (C order, as views) and weights
     are reshaped afterwards.
 
@@ -787,9 +786,8 @@ def prepare_integrated_forest_weights(
     ``full_sum_weights.solve`` (same update count, candidate,
     stopping decisions and record keys, except when ``rtol`` coincides with a
     stopping metric to within its rounding, ~1e-16 absolute) with full sums
-    that are more accurate than the central kernel's cumulative prefix sums
-    (about 1e-16 against n*eps relative, i.e. up to about 1e-12 at the 1e7
-    nodes of a production source). Compiled arithmetic does not trap
+    that differ from the central kernel's single-pass ``np.sum`` totals only
+    by summation-order rounding. Compiled arithmetic does not trap
     floating-point underflow.
     """
     if method != "early_lyaforecast":

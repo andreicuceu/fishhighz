@@ -450,7 +450,7 @@ def test_integrated_equals_central_for_constant_velocity_density(tmp_path):
     np.testing.assert_allclose(prepared.A, reference.A, **tolerance)
     np.testing.assert_allclose(prepared.P_pixel, reference.P_pixel, **tolerance)
     length = SPEED_LIGHT_KMS * np.log(1205.0 / 1040.0)
-    np.testing.assert_allclose(prepared.N1, length * reference.I1[-1], **tolerance)
+    np.testing.assert_allclose(prepared.N1, length * reference.I1, **tolerance)
     for row in prepared.weights:
         np.testing.assert_allclose(row, reference.weights, **tolerance)
 
@@ -612,7 +612,7 @@ def test_real_integrated_source_matches_central_normalisation():
     np.testing.assert_allclose(prepared.A, reference.A, **tolerance)
     np.testing.assert_allclose(prepared.P_pixel, reference.P_pixel, **tolerance)
     length = SPEED_LIGHT_KMS * np.log(rest_max / rest_min)
-    np.testing.assert_allclose(prepared.N1, length * reference.I1[-1], **tolerance)
+    np.testing.assert_allclose(prepared.N1, length * reference.I1, **tolerance)
     for row in prepared.weights:
         np.testing.assert_allclose(row, reference.weights, **tolerance)
     # The window is untruncated: z_eff is the mean absorption redshift of the bin.

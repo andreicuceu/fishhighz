@@ -140,9 +140,9 @@ def assert_matches_central(prepared, reference, n_pixel):
     tolerance = dict(rtol=1e-12, atol=0)
     np.testing.assert_allclose(prepared.A, reference.A, **tolerance)
     np.testing.assert_allclose(prepared.P_pixel, reference.P_pixel, **tolerance)
-    np.testing.assert_allclose(prepared.N1, LENGTH * reference.I1[-1], **tolerance)
-    np.testing.assert_allclose(prepared.N2, LENGTH * reference.I2[-1], **tolerance)
-    np.testing.assert_allclose(prepared.N3, LENGTH * reference.I3[-1], **tolerance)
+    np.testing.assert_allclose(prepared.N1, LENGTH * reference.I1, **tolerance)
+    np.testing.assert_allclose(prepared.N2, LENGTH * reference.I2, **tolerance)
+    np.testing.assert_allclose(prepared.N3, LENGTH * reference.I3, **tolerance)
     assert prepared.weights.shape == (n_pixel, len(MAGNITUDES))
     for row in prepared.weights:
         np.testing.assert_allclose(row, reference.weights, **tolerance)

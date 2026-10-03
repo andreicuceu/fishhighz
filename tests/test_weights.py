@@ -61,7 +61,7 @@ def prepare(**kwargs):
     Returns
     -------
     weights : ForestWeights
-        Converged source weights, cumulative integrals, noise coefficients and
+        Converged source weights, full-sample integrals, noise coefficients and
         convergence record.
     """
     args = dict(
@@ -123,7 +123,7 @@ def inject_forest_weights(
     Returns
     -------
     prepared : ForestWeights
-        Immutable weights with cumulative I1, I2, I3 in deg^-2 (km/s)^-1, A in
+        Immutable weights with full-sample I1, I2, I3 in deg^-2 (km/s)^-1, A in
         deg^2 and P_pixel in deg^2 km/s.
     """
     if bin_geometry is None:
@@ -156,9 +156,9 @@ def inject_forest_weights(
         signal=None,
         alias=None,
         weights=weights,
-        I1=first_moment,
-        I2=second_moment,
-        I3=noise_moment,
+        I1=float(first_moment),
+        I2=float(second_moment),
+        I3=float(noise_moment),
         A=float(aliasing_coefficient),
         P_pixel=float(pixel_power),
         convergence=None,
@@ -240,9 +240,6 @@ def test_immutable():
     forest_weights = prepare()
     for name in (
         "weights",
-        "I1",
-        "I2",
-        "I3",
         "rho",
         "variance",
         "magnitudes",
@@ -280,8 +277,8 @@ def test_zero_density_samples_do_not_contribute(r, v, method):
         forest_weights.weights[support_mask], supported.weights, rtol=5e-15
     )
     np.testing.assert_allclose(
-        [m[-1] for m in (forest_weights.I1, forest_weights.I2, forest_weights.I3)],
-        [m[-1] for m in (supported.I1, supported.I2, supported.I3)],
+        [forest_weights.I1, forest_weights.I2, forest_weights.I3],
+        [supported.I1, supported.I2, supported.I3],
         rtol=5e-15,
     )
     np.testing.assert_allclose(

@@ -18,9 +18,8 @@ accepted. The differences are
   evaluated on the fly in streaming passes; no weight array is stored until
   the final state is written out, and the extreme weight is c / (min(v) + c);
 * the full sums N1 = sum(mu w), N2 = sum(mu w^2) and N3 = sum(mu w^2 v) are
-  single-pass block-wise (pairwise-like) reductions instead of cumulative
-  prefix sums over the flattened array, which are accurate to about
-  n * eps (about 4e-13 relative for the 1e7 elements of a production source);
+  single-pass block-wise (pairwise-like) reductions over the flattened
+  array;
 * the normalized-shape metric multiplies by the reciprocal amplitude instead
   of dividing elementwise (a difference of one unit in the last place);
 * a candidate is kept without a pass over the arrays when the triangle

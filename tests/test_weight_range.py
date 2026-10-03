@@ -59,7 +59,7 @@ def oracle(rho, weights, variance):
     Returns
     -------
     reference : tuple of ndarray
-        Three cumulative density/weight integrals and the final alias/pixel
+        Three full-sample density/weight integrals and the final alias/pixel
         coefficients.
     """
     with localcontext() as context:
@@ -69,21 +69,18 @@ def oracle(rho, weights, variance):
         )
 
         # Decimal products retain contributions below float64 intermediate range.
-        prefixes = [
-            [
-                sum(
-                    decimal_density[j]
-                    * decimal_weights[j] ** power
-                    * (decimal_variance[j] if noise else 1)
-                    for j in range(i + 1)
-                )
-                for i in range(2)
-            ]
+        totals = [
+            sum(
+                decimal_density[j]
+                * decimal_weights[j] ** power
+                * (decimal_variance[j] if noise else 1)
+                for j in range(len(decimal_density))
+            )
             for power, noise in [(1, False), (2, False), (2, True)]
         ]
-        alias_coefficient = prefixes[1][-1] / prefixes[0][-1] ** 2
-        pixel_coefficient = prefixes[2][-1] / prefixes[0][-1] ** 2
-        return np.array(prefixes, dtype=float), np.array(
+        alias_coefficient = totals[1] / totals[0] ** 2
+        pixel_coefficient = totals[2] / totals[0] ** 2
+        return np.array(totals, dtype=float), np.array(
             [alias_coefficient, pixel_coefficient], dtype=float
         )
 
@@ -103,7 +100,7 @@ def test_r1_mixed_underflow_and_normalization(reverse):
         pixel_variance = np.array([1e-150, 1e300])
         if reverse:
             source_weights, pixel_variance = source_weights[::-1], pixel_variance[::-1]
-        prefixes, coefficients = oracle([1, 1], source_weights, pixel_variance)
+        totals, coefficients = oracle([1, 1], source_weights, pixel_variance)
         assert coefficients[1] == pytest.approx(1e-100, rel=5e-13, abs=0)
         if scale == 1:
             with pytest.raises(FloatingPointError, match="underflow"):
@@ -111,7 +108,7 @@ def test_r1_mixed_underflow_and_normalization(reverse):
         else:
             result = prepare([1, 1], source_weights, pixel_variance)
             np.testing.assert_allclose(
-                [result.I1, result.I2, result.I3], prefixes, rtol=5e-13, atol=0
+                [result.I1, result.I2, result.I3], totals, rtol=5e-13, atol=0
             )
             np.testing.assert_allclose(
                 [result.A, result.P_pixel], coefficients, rtol=5e-13, atol=0
@@ -149,10 +146,10 @@ def test_exact_zero_contributions_with_positive_total(rho, w, v, reverse):
     """
     if reverse:
         rho, w, v = rho[::-1], w[::-1], v[::-1]
-    prefixes, coefficients = oracle(rho, w, v)
+    totals, coefficients = oracle(rho, w, v)
     result = prepare(rho, w, v)
     np.testing.assert_allclose(
-        [result.I1, result.I2, result.I3], prefixes, rtol=5e-13, atol=0
+        [result.I1, result.I2, result.I3], totals, rtol=5e-13, atol=0
     )
     np.testing.assert_allclose(
         [result.A, result.P_pixel], coefficients, rtol=5e-13, atol=0

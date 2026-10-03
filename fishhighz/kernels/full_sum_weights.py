@@ -43,7 +43,7 @@ def seed(inputs):
 
 
 def moments(inputs, weights):
-    """Integrate the cumulative density-weight and noise moments.
+    """Integrate the full-sample density-weight and noise moments.
 
     Parameters
     ----------
@@ -56,13 +56,14 @@ def moments(inputs, weights):
 
     Returns
     -------
-    first_moment, second_moment, noise_moment : ndarray of shape (n_magnitude,)
-        Cumulative I1, I2, and I3 in deg^-2 (km/s)^-1.
+    first_moment, second_moment, noise_moment : float
+        Full-sample totals I1, I2, and I3 in deg^-2 (km/s)^-1.
 
     Notes
     -----
-    The multiplication and cumulative reduction order are the literal legacy
-    order. I2 and I3 use squared weights; I3 also includes pixel variance.
+    Each total is a single ``np.sum`` over the magnitude grid (pairwise
+    summation). I2 and I3 use squared weights; I3 also includes pixel
+    variance.
     """
     density, magnitude_weights, pixel_variance = (
         inputs.density,
@@ -70,9 +71,9 @@ def moments(inputs, weights):
         inputs.variance,
     )
     return (
-        np.cumsum(density * weights * magnitude_weights),
-        np.cumsum(density * weights**2 * magnitude_weights),
-        np.cumsum(density * weights**2 * pixel_variance * magnitude_weights),
+        np.sum(density * weights * magnitude_weights),
+        np.sum(density * weights**2 * magnitude_weights),
+        np.sum(density * weights**2 * pixel_variance * magnitude_weights),
     )
 
 
@@ -105,15 +106,13 @@ def update(inputs, weights, variant):
 
     Notes
     -----
-    The full-sample totals are the last elements of the cumulative reductions
-    of ``moments``. Floating-point failures propagate so the caller can retain the last finite
-    state; there is no positivity replacement or weight normalization.
+    The full-sample totals are those of ``moments``. Floating-point failures
+    propagate so the caller can retain the last finite state; there is no positivity replacement or weight normalization.
     """
     if variant not in VARIANTS:
         raise ValueError(f"unknown compatibility weighting variant: {variant}")
     with np.errstate(divide="raise", invalid="raise", over="raise"):
         first_moment, second_moment, _ = moments(inputs, weights)
-        first_moment, second_moment = first_moment[-1], second_moment[-1]
         signal = inputs.signal
         if variant == "sum_aliasing":
             signal = signal + inputs.p1d * second_moment / (
@@ -157,9 +156,7 @@ def coefficients(inputs, weights):
     No positivity substitution is applied to signed compatibility inputs.
     """
     with np.errstate(divide="raise", invalid="raise", over="raise"):
-        first_moment, second_moment, noise_moment = (
-            a[-1] for a in moments(inputs, weights)
-        )
+        first_moment, second_moment, noise_moment = moments(inputs, weights)
         denominator = first_moment**2 * inputs.length
         result = np.array(
             [
@@ -396,7 +393,7 @@ def solve(
 
 
 def _integrals(r, w, variance, length, pixel):
-    """Integrate cumulative weight moments and normalize forest-noise terms.
+    """Integrate full-sample weight moments and normalize forest-noise terms.
 
     Parameters
     ----------
@@ -412,8 +409,8 @@ def _integrals(r, w, variance, length, pixel):
 
     Returns
     -------
-    first_moment, second_moment, noise_moment : ndarray of shape (n_magnitude,)
-        Cumulative density times weight, weight squared, and weight squared
+    first_moment, second_moment, noise_moment : float
+        Totals of density times weight, weight squared, and weight squared
         times variance; each has units deg^-2 (km/s)^-1.
     aliasing_coefficient : float
         Coefficient multiplying one-dimensional forest power, in deg^2.
@@ -434,15 +431,11 @@ def _integrals(r, w, variance, length, pixel):
         squared_weight_density = weighted_density * w
         noise_weighted_density = squared_weight_density * variance
 
-    first_moment = np.cumsum(weighted_density)
-    second_moment = np.cumsum(squared_weight_density)
-    noise_moment = np.cumsum(noise_weighted_density)
+    first_moment = np.sum(weighted_density)
+    second_moment = np.sum(squared_weight_density)
+    noise_moment = np.sum(noise_weighted_density)
 
     # Sequential divisions avoid squaring the total density.
-    aliasing_coefficient = (
-        second_moment[-1] / first_moment[-1] / first_moment[-1] / length
-    )
-    pixel_power = (
-        noise_moment[-1] / first_moment[-1] / first_moment[-1] * pixel / length
-    )
+    aliasing_coefficient = second_moment / first_moment / first_moment / length
+    pixel_power = noise_moment / first_moment / first_moment * pixel / length
     return first_moment, second_moment, noise_moment, aliasing_coefficient, pixel_power
