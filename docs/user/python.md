@@ -33,6 +33,7 @@ constraints. Its arguments are Python options, not INI keys:
 | `batch_size` | `2048` | Integration batch size. |
 | `step_scale` | `None` | Multiplier of parameter finite-difference steps; `None` uses INI `ap_step / 0.001`. |
 | `numerical` | `False` | Force numerical model derivatives when true, rather than using available analytic derivatives. |
+| `individuals` | `True` | Calculate the individual-spectrum constraints in addition to the joint ones; the CLI flag `--joint-only` sets `False`. |
 
 The native registry has fiducial `ap=at=1` in each bin and reference parameter
 steps `0.001`. Thus the default effective AP step is the INI `ap_step`.
@@ -70,11 +71,12 @@ match the configuration. The template must implement the spectrum evaluation
 contract used by `KaiserModel`, not merely expose metadata.
 
 The reader mapping must cover exactly the configured field IDs. Each value is a
-mapping with `density` and, for forests, `snr`. Density adapters expose `sample`
-or `query`; forest SNR adapters expose `sample` or `variance`. They must also
-provide the input structure needed to partition magnitude integration. Using
-the supplied reader classes retains those conventions; arbitrary arrays are
-not substitutes for reader objects. Input provenance labels injected objects
+mapping with `density` and, for forests, `snr`. Density readers expose `sample`
+or `query`; forest S/N readers expose `sample` or `variance`. They must also
+provide the input structure needed to partition magnitude integration. The
+`fishhighz.survey_tables` classes (`DensityTable`, `SNRTable`, `SourceDensity`,
+`ForestSNR`) implement these conventions; arbitrary arrays are not substitutes
+for reader objects. Input provenance labels injected objects
 and factories separately and retains known hashes without reopening their files.
 
 ## Lower-level scientific API
@@ -87,9 +89,10 @@ preparation belongs to `prepare_bin` or `Forecast.prepare()`.
 
 For models, selections, parameters or noise beyond the native schema, assemble
 `BinSpec` objects and use `prepare_bin` and `run_forecast` directly. The
-[research baseline](../research/RESEARCH_BASELINE.md) explains these choices in
-physical terms. Its synthetic example is available as a
-{download}`Python script <../../examples/research_bao_forecast.py>` and requires
-`fishhighz[templates]`. Historical compatibility examples additionally require
-the optional lyaforecast reference installation; they are separate from the
-native interface.
+synthetic example
+{download}`research_bao_forecast.py <../../examples/research_bao_forecast.py>`
+requires `fishhighz[templates]`. The forest weights are described in the
+[forest-weighting note](../methods/forest-weighting.md); the Python-only
+`weights.prepare_forest_weights(..., method="mcdonald")` selects the McDonald
+recurrence. Arbitrary P3D models are supplied through the
+[external-model interface](../methods/external.md).

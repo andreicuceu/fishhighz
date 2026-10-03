@@ -1,30 +1,27 @@
 # Getting started
 
-FishHighz computes Fourier-space Gaussian covariances and Fisher constraints for
-high-redshift surveys. Python 3.11 or newer is required. From the package checkout,
-install the dependencies for the native survey interface:
+FishHighz requires Python 3.11 or newer. NumPy, SciPy and Numba are installed
+with the package. From the package checkout:
 
 ```bash
-python -m pip install -e '.[camb,templates,survey]'
+python -m pip install -e '.[camb,templates]'
 ```
 
-NumPy is the only unconditional runtime dependency. The `camb` extra prepares the
-background, `templates` reads and interpolates the signed FITS power template,
-and `survey` reads the density and SNR tables. The bundled native calculation
-requires neither lyaforecast nor Vega. The separate `cosmology` extra supports
-the optional Astropy background adapter; `compiled` enables compiled Fisher
-support. These extras serve distinct preparation or execution paths.
+The `camb` extra computes the background and growth, and `templates` reads the
+signed FITS power template. The `cosmology` extra provides an optional Astropy
+background for the Python API. The native calculation needs neither lyaforecast
+nor Vega.
 
-Constructing a forecast parses and validates its configuration:
+Constructing a forecast parses and validates the configuration:
 
 ```python
 from fishhighz import Forecast
 
-forecast = Forecast()  # bundled DESI Run-2 accuracy INI
+forecast = Forecast()  # bundled DESI-2 accuracy INI
 config = forecast.config
 ```
 
-When ready to perform the calculation, prepare the inputs and run:
+To calculate, prepare the inputs and run:
 
 ```python
 prepared = forecast.prepare()
@@ -32,17 +29,15 @@ result = forecast.run()
 result.save("accuracy-desi2")  # destination must not already exist
 ```
 
-`prepare()` performs CAMB, template, survey and fixed-covariance preparation;
-`run()` also prepares automatically when needed. These are real numerical
-calculations, not configuration checks. On shared computing systems use an
-execution environment appropriate to the calculation and local policy.
+`prepare()` runs CAMB, reads the template and survey tables, computes the forest
+weights and noise, and factors the fixed covariance. `run()` prepares
+automatically when needed. Both perform real numerical calculations; run them on
+a compute node at NERSC.
 
-The bundled recipe selects three QSO/forest spectra in bin 1 and all 15 spectra
-in bins 2–6. Its [research prescription](research/RESEARCH_BASELINE.md) specifies
-the scientific assumptions and qualification limits. Changing survey inputs or
-numerical settings requires assessing the resulting calculation separately.
-
-For a custom survey, download the [annotated INI](user/ini.md), edit a local
-copy, and pass its path to `Forecast("my-survey.ini")`. Continue with the
+The bundled recipe selects three QSO-forest spectra in bin 1 and all 15 spectra in
+bins 2-6. Its forest weights are the adaptive `early_lyaforecast` prescription
+([note](methods/forest-weighting.md)). For a custom survey, copy the
+{download}`annotated INI <../examples/desi2_accuracy_annotated.ini>`, edit it,
+and pass its path to `Forecast("my-survey.ini")`. Continue with the
 [INI reference](user/ini.md), [Python lifecycle](user/python.md),
-[result interpretation](user/results.md), or [command line](user/cli.md).
+[results](user/results.md) or [command line](user/cli.md).

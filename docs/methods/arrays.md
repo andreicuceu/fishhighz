@@ -102,11 +102,11 @@ and `(node,pair,local)`, respectively. Signed cross powers and derivatives are
 preserved; complex, bool, object/string, nonfinite, and mismatched outputs fail.
 
 P3D returns clustering before instrument response and known sampling noise.
-The provider/adapter owns AP and cosmological physics and handles any preexisting
+The provider owns AP and cosmological physics and handles any preexisting
 response/noise explicitly to prevent double counting. P1D is independent:
 `p1d(theta_local, z, k_parallel_velocity)` uses s/km inputs and km/s outputs,
 validated by `validate_p1d`. Custom P3D never implies or requires custom P1D.
-Adapters own unit conversions, keeping h_fid fixed when physical h varies.
+The provider owns unit conversions, keeping h_fid fixed when physical h varies.
 
 The Fisher convention keeps covariance and survey weights fixed at
 the fiducial model and differentiate only the predicted mean. Parameter changes

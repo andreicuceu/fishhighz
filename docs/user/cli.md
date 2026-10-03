@@ -17,6 +17,7 @@ fishhighz-forecast --output accuracy-desi2
 | --- | --- | --- |
 | `ini` | Optional | Native INI path; omitted means the bundled recipe. |
 | `--output` | Required | New result directory. Existing directories are rejected. |
+| `--joint-only` | Optional | Skip the individual-spectrum constraints (`run(individuals=False)`). |
 | `-h`, `--help` | Optional | Display usage and exit. |
 
 The command prepares and runs a real forecast, then writes the
@@ -29,5 +30,5 @@ syntax without a forecast, call `parse_survey_ini()` from Python.
 Relative external resource paths are resolved against the INI directory.
 `package:` resources resolve inside the installed package. The output path is
 relative to the command's current directory. The native calculation needs the
-`camb`, `templates` and `survey` extras described in
+`camb` and `templates` extras described in
 [Getting started](../getting-started.md).

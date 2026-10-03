@@ -70,9 +70,9 @@ of every source table. Retain external inputs separately for reproducibility.
 For direct Python analyses, `FisherResult` keeps data and prior information
 separate and exposes named fixing, marginalization and rank diagnostics. Bounds
 and derivative steps are not priors. A converged forest iteration does not
-establish quadrature convergence or physical accuracy; consult the
-[research prescription](../research/RESEARCH_BASELINE.md) for the qualified
-calculation and remaining limitations.
+establish quadrature convergence or physical accuracy; see the
+[forest-weighting note](../methods/forest-weighting.md) for the open points of
+the weighting prescription.
 
 ## BAO constraints with marginalized nuisances
 

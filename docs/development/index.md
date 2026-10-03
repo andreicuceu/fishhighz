@@ -4,5 +4,4 @@
 :maxdepth: 1
 
 contributing
-documentation-checks
 ```

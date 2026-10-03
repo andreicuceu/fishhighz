@@ -48,69 +48,69 @@ callables must be deterministic and must not be externally mutated between
 preparation and runs. Changing the fiducial/model requires fresh preparation;
 callable internals are not deep-copied, hashed, or serialized.
 
-Install `fishhighz[survey]` for the lazy SciPy readers in
-`fishhighz.adapters.legacy_inputs`; normalized arrays and external models need
-only NumPy. Standalone reader signatures are:
+`fishhighz.survey_tables` reads the raw survey tables (SciPy is a core
+dependency); normalized arrays and external models do not need it. Two layers
+are provided. `DensityTable` and `SNRTable` validate and retain the tables and
+raise on any query outside their domains. `SourceDensity` and `ForestSNR` wrap
+them with the boundary conventions of the native INI path (below). Signatures:
 
-- `DensityReader(path, *, semantics='cell_count_per_deg2', target_density=...,
+- `DensityTable(path, *, semantics='cell_count_per_deg2', target_density=...,
   z_norm_min=..., magnitude_bounds=None, redshift_widths=None, width_policy=None,
-  label='density')`. The semantics argument
-  is required. Set target and threshold explicitly to `None` for no normalization
-  and whole-grid selection. Inclusive raw magnitude masks precede the strict
-  `z > z_norm_min` raw count sum. Divide each row by Delta_z[i]*dm exactly once;
-  later magnitude quadrature is separate. Supply `redshift_widths` as a positive
-  (n_z,) vector aligned with reconstructed sorted redshifts for physical cell
-  measures, including irregular centres. Widths are owned and immutable; no
-  physical widths are inferred from centres or forecast bins. Without widths,
-  the default (`width_policy=None` or `'uniform'`) requires uniform redshifts.
-  Explicit `width_policy='legacy_first_spacing'` uses z[1]-z[0] for every row,
-  including irregular tables, solely as the labeled legacy conversion. It is
-  never selected automatically. Widths and compatibility policies conflict.
-  Provenance retains axes, effective widths, their ordering and policy label. `query(z, magnitudes)` returns ordered differential
-  density. `local_galaxy_density(geometry, magnitudes, quadrature)` explicitly
-  chooses the local z_eval approximation, without an area multiplier.
-- `SNRReader(paths, *, smoothing, label='SNR')` parses header magnitudes and
-  metadata, sorts files, and requires identical grids. `smoothing='legacy'` uses
-  sigma=10 **sample indices**, reflect boundaries and truncate=4 on wavelength
-  only; `'none'` explicitly disables smoothing. Linear interpolation follows.
-  `query(*, z_source, magnitudes, wavelength)` returns SNR per Angstrom.
-  `variance(..., pixel_width_angstrom, exposure_count, exposure_time=None)` returns
-  dimensionless delta-flux variance `1/(SNR²*Delta_lambda*N_exp/N_exp_file)`.
-  Explicit exposure time must match file EXPTIME.
-- `sample_forest_readers(density, snr, geometry, response, *, z_source,
+  label='density')`. `semantics` is required. Set target and threshold
+  explicitly to `None` for no normalization and whole-grid selection. Inclusive
+  raw magnitude masks precede the strict `z > z_norm_min` raw count sum. Each
+  row is divided by Delta_z[i]*dm exactly once; the later magnitude quadrature is
+  separate. `redshift_widths` is a positive (n_z,) vector aligned with the sorted
+  redshifts, giving physical cell measures including irregular centres. Without
+  widths, `width_policy=None` or `'uniform'` requires uniform redshifts, and
+  `'legacy_first_spacing'` divides every row by z[1]-z[0] (the convention of the
+  bundled recipe; it is recorded in the provenance and never selected
+  automatically). The density is constant on centre +/- width/2 cells, which must
+  tile each axis to within 64*eps64*max(1, max|axis|); gaps or overlaps raise
+  `ValueError`. `query(z, magnitudes)` returns the ordered differential density;
+  `local_galaxy_density(geometry, magnitudes, quadrature)` chooses the local
+  z_eval approximation, without an area multiplier.
+- `SNRTable(paths, *, smoothing, label='SNR')` parses header magnitudes and
+  metadata, sorts the files and requires identical grids. `smoothing='legacy'`
+  applies a Gaussian filter with sigma=10 **sample indices**, reflect boundaries
+  and truncate=4 along wavelength; `'none'` disables smoothing. Interpolation is
+  linear in magnitude, source redshift and observed wavelength.
+  `query(*, z_source, magnitudes, wavelength)` returns S/N per angstrom and
+  `variance(..., pixel_width_angstrom, exposure_count, exposure_time=None)` the
+  dimensionless delta-flux variance `1/(SNR^2 Delta_lambda N_exp/N_exp_file)`.
+  An explicit exposure time must match the file EXPTIME.
+- `SourceDensity(table)` returns $10^{-20}$ outside the cell edges and keeps
+  zero and positive in-table cells. `ForestSNR(table)` clamps magnitudes brighter
+  than the table at the brightest tabulated one, floors the scaled S/N at
+  $10^{-10}$ and assigns the variance $10^{20}$ outside the table. These
+  conventions are those of lyaforecast.
+- `sample_forest_tables(density, snr, geometry, response, *, z_source,
   magnitudes, pixel_width_angstrom, exposure_count, exposure_time=None)` returns
-  immutable `rho`, `variance`, and plain `provenance`. Both readers use z_source;
-  observed wavelength uses z_eval. It verifies the pixel velocity width using
-  c=299792.458 km/s. Pass these arrays in `ForestInput.weight_options` with explicit
-  quadrature, forest velocity length, and the Step 10 weighting settings.
-  `ForestInput` also requires an independent P1D callable, binding and state.
-  Optional `auxiliary_coordinates=(k_t_deg,k_p_velocity)` selects one auto/P1D
-  query for `legacy`, `early_lyaforecast`, or `mcdonald` weights; supplied and
-  inverse-variance weights bypass auxiliary calls.
+  immutable `rho`, `variance` and plain `provenance`. Both tables use z_source;
+  the observed wavelength uses z_eval. The velocity pixel width is checked with
+  c=299792.458 km/s. Pass these arrays in `ForestInput.weight_options` together
+  with the explicit quadrature, forest velocity length and `method`
+  (`early_lyaforecast` or `mcdonald`). `ForestInput` also requires an independent
+  P1D callable, binding and state. Optional
+  `auxiliary_coordinates=(k_t_deg, k_p_velocity)` selects one auto-P3D/P1D query
+  that supplies S and B; otherwise pass `signal` and `alias`.
 
-Readers retain resolved paths, SHA-256 hashes, owned tables, domains, units,
-normalization/exposure settings and interpolation provenance. They reject
-extrapolation, negative spline overshoot, irregular magnitude grids, inconsistent
-SNR grids and unrepresentable arithmetic. Uniform-axis checks allow only
-64*eps64*max(1,max(abs(axis))) absolute coordinate roundoff. There are no floors,
-bright caps, population averaging or automatic resource lookup. Nonuniform raw
-redshifts without explicit widths or legacy_first_spacing fail with an actionable
-error. With the default `interpolation='piecewise_constant'` the cells must also
-tile each axis: a gap or overlap between `centre + width/2` and the next lower
-edge larger than the same roundoff tolerance (for example rounded centres under
-`legacy_first_spacing`) raises `ValueError`; contiguous explicit nonuniform
-widths and the spline are accepted. Normalization remains a raw count sum before cell-width division; its
-measure is distinct from the later magnitude integral.
-Live readers never enter the prepared forecast or derivative loops. Adapted
-interpolation conventions retain lyaforecast GPLv3/source provenance in the module.
+Tables retain resolved paths, SHA-256 hashes, units, normalization and
+interpolation provenance, and reject extrapolation (in the strict classes),
+irregular magnitude grids, inconsistent S/N grids and unrepresentable
+arithmetic. Uniform-axis checks allow only 64*eps64*max(1, max|axis|) absolute
+coordinate roundoff. Nonuniform raw redshifts without explicit widths or
+`legacy_first_spacing` fail. Normalization is a raw count sum before cell-width
+division, a measure distinct from the later magnitude integral. Live tables never
+enter the prepared forecast or derivative loops. The interpolation conventions are
+adapted from lyaforecast (GPLv3).
 
 Run `python examples/survey_forecast.py` for generated raw fixtures, two distinct
 forests plus a galaxy, two unequal independent bins with explicit non-midpoint
 evaluation redshifts, shared target/distinct nuisances,
 repeated runs and explicit prior/error diagnostics. Its outputs are synthetic,
 not DESI-2 forecasts. The native `Forecast` interface described in the [API reference](../api/forecast.md) provides
-INI configuration, a CLI and JSON/NPZ output; unchanged lyaforecast INIs are not
-translated.
+INI configuration, a CLI and JSON/NPZ output.
 
 Input snapshots preserve non-object ndarray dtypes and values until scientific
 validation. Complex, Boolean, string and object scientific arrays are rejected
@@ -155,21 +155,19 @@ Refinement of the orders is tested by the order ladder in
 `scripts/check_integrated_forest_refinement.py`, which also compares N1-N3 with a
 high-resolution midpoint rule; the 0.1 per cent BAO-error target applies.
 
-Inputs. Density is the piecewise-constant table (the spline is rejected) queried
-on the `y` nodes by `LegacyDensity.sample_grid` or `DensityReader.query_grid`;
-the pixel variance is queried on (z_q, lambda, magnitude) by
-`LegacySNR.variance_grid` or `SNRReader.variance_grid` (legacy sentinel, bright
-clamp and floor, or strict domain errors, as for the scalar queries, with fallback
-counts recorded in the provenance). Queries are chunked to at most 2**20 points.
+Inputs. Density is the piecewise-constant table queried on the `y` nodes by
+`SourceDensity.sample_grid`; the pixel variance is queried on
+(z_q, lambda, magnitude) by `ForestSNR.variance_grid` (sentinel, bright clamp and
+floor as for the scalar queries, with counts recorded in the provenance). Queries are chunked to at most 2**20 points.
 The pixel width in angstrom is `Delta_v lambda/c` with the fixed velocity width of
 the bin response.
 
-No coverage. If no source redshift in the window has density above the legacy
-floor (for example the density table ends below the window), preparation raises
+No coverage. If no source redshift in the window has density above the
+$10^{-20}$ floor (for example the density table ends below the window), preparation raises
 `ValueError` naming the field and bin; no floor is applied. If the density covers
-the window but all pixels fall outside the S/N table, the legacy adapter's sentinel
-variance gives `N1 ~ 0` instead of an error, as in the central legacy path.
+the window but all pixels fall outside the S/N table, the sentinel variance gives
+`N1 ~ 0` instead of an error, as in the central mode.
 
 Cost. The weight solve runs on `n_pixel * n_magnitude` nodes (about 11 million for
 the default orders of one DESI-2 bin), roughly 1.5 minutes per field and bin on one
-login-node thread; reduce the orders for quick tests.
+single thread; reduce the orders for quick tests.

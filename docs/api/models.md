@@ -4,7 +4,7 @@ External providers return intrinsic clustering `(node, required_pair)` before
 instrument response and known sampling noise. Their Jacobians have axes
 `(node, pair, local_parameter)`. P1D is an independent callable with velocity
 wavenumber in s/km and power in km/s. Explicit output validators below are part
-of the callable boundary; internal validation-study modules are not public API.
+of the callable boundary.
 See [external models](../methods/external.md), [templates](../methods/templates.md),
 and [Kaiser/BAO](../methods/kaiser.md) for ownership and complete examples.
 

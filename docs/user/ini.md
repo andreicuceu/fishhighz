@@ -40,12 +40,14 @@ Overrides are recorded in saved effective settings. The prescription revision
 identifies its starting defaults and does not establish independent numerical
 qualification of altered inputs. Two revisions are accepted:
 `early-lyaforecast-2026-10-01` (default; piecewise-constant source-density
-cells) and the historical `early-lyaforecast-2026-09-18` (quadratic spline,
-`RectBivariateSpline_kx2_ky2_s0`). They differ only in the default
-`density_interpolation` and its paired `magnitude_partition`; neither changes the
-bundled density tables or redshift edges. The opt-in integrated forest-source
-mode ([below](#integrated-forest-sources)) adds the revision
-`early-lyaforecast-integrated-2026-10-02`. Other revision strings are rejected.
+cells; central forest sources) and, with
+`[input policies] forest_source_integration = integrated`
+([below](#integrated-forest-sources)),
+`early-lyaforecast-integrated-2026-10-02`. Other revision strings, including
+`early-lyaforecast-2026-09-18`, and the quadratic-spline density interpolation
+(`RectBivariateSpline_kx2_ky2_s0`) are rejected. The forest weights are the adaptive
+`early_lyaforecast` recurrence ([methods note](../methods/forest-weighting.md));
+it is the only weighting available from the INI.
 
 ## `[schema]`
 
@@ -334,8 +336,6 @@ Resolution rules, all violations raising `ValueError`:
   implies `integrated`. Both together are accepted.
 - `central` with the integrated revision, or `integrated` with another explicit
   revision, is a conflict. The integrated mode requires a `[prescription]` section.
-- The integrated mode requires piecewise-constant density cells, so
-  `density_interpolation` must not be the spline.
 - `forest_zq_order`, `forest_lambda_order`, `forest_lambda_panels`,
   `min_zq_forest` and `max_zq_forest` are rejected in the central mode, and the
   two limits on galaxy fields.
@@ -347,8 +347,7 @@ revision, orders and requested limits) only in the integrated mode.
 `PreparedForecast.provenance["bins"][i]["forest_source_integration"]` (also
 `result.prepared.provenance`) holds, per forest field ID, `z_eff` (weight-averaged
 pixel redshift), `N1`, `A`, `P_pixel`, the node counts `n_zq_nodes` and `n_pixel`,
-the source-redshift limits and window, and the fallback counts of the legacy grid
-queries. The numerical cost scales with the number of pixel nodes times the
+the source-redshift limits and window, and the counts of out-of-table queries. The numerical cost scales with the number of pixel nodes times the
 magnitude nodes; the weight solve dominates preparation.
 
 ## Compact installed recipe
@@ -361,6 +360,6 @@ independent of the checkout directory.
 :language: ini
 ```
 
-For physical interpretation see the
-[research baseline](../research/RESEARCH_BASELINE.md); for running and saving
+For the weighting prescription see the
+[forest-weighting note](../methods/forest-weighting.md); for running and saving
 see the [Python guide](python.md) and [results guide](results.md).

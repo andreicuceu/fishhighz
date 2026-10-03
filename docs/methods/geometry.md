@@ -76,13 +76,10 @@ Instrument conversion helpers have deliberately distinct meanings:
 | `gaussian_sigma_angstrom_to_velocity(sigma, *, lambda_obs_angstrom)` | c*sigma_lambda/lambda_obs |
 | `gaussian_fwhm_velocity_to_sigma(fwhm_velocity)` | FWHM/(2*sqrt(2*log(2))) |
 | `resolving_power_fwhm_to_sigma(resolving_power_fwhm)` | c/(R_FWHM*2*sqrt(2*log(2))) |
-| `legacy_resolving_power_to_sigma(resolving_power_legacy)` | c/R_legacy, explicitly interpreted as sigma |
 
 Wavelength inputs are Angstrom and use the local narrow-width approximation.
 Supply observed wavelength explicitly; the Lyα convention is
-`lambda_obs = 1215.67*(1+z_eval)` Angstrom. FWHM converts once. The labeled legacy
-helper uses the new c=299792.458; lyaforecast used 299800, so their values differ
-by the known ratio. Direct velocity sigma has no light-speed conversion.
+`lambda_obs = 1215.67*(1+z_eval)` Angstrom. FWHM converts once, with c=299792.458 km/s. Direct velocity sigma has no light-speed conversion.
 
 `fishhighz.models.p1d.default_p1d(theta_local, z, k_parallel_velocity)` is a
 plain-compatible intrinsic PD2013 callable. Its local vector must be empty;

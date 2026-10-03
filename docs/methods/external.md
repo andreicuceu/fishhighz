@@ -4,8 +4,11 @@ Run `python examples/external_forecast.py` for a standalone synthetic galaxy/for
 forecast. It explicitly applies supplied fixed responses and noise, factors the
 covariance once, and compares analytic and numerical Fisher matrices and named
 marginalized errors at three steps. Its independent P1D example uses velocity
-units. Production survey preparation, built-in models and real external-package
-validation remain later work.
+units. `python examples/builtin_forecast.py` does the same for the built-in
+Kaiser/template BAO and common-AP-plus-f models. An external P3D model enters
+through the callable protocols of `fishhighz.models.protocols`
+(`P3D`, `P1D`, `P3DJacobian`) wrapped in `P3DProvider`; the native INI path uses
+the built-in model only.
 
 Use `BoundParameters(registry, local_names, bindings)` from
 `fishhighz.models.external` to create an existing `ParameterBinding` together

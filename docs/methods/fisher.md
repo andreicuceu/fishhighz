@@ -99,25 +99,12 @@ fixing or a finite prior may resolve the degeneracy. Nonfinite arithmetic fails
 rather than producing apparently reliable errors.
 
 
-## Optional Fisher contraction compilation
+## Fisher contraction kernel
 
-NumPy remains the default and the only required runtime dependency. For repeated
-Fisher contractions, install `fishhighz[compiled]` (Numba and SciPy) and explicitly
-set `FISHHIGHZ_FISHER_BACKEND=numba`. The default is
-`FISHHIGHZ_FISHER_BACKEND=numpy`. Numba is imported only on an explicitly requested
-float64 contraction. If it is unavailable, or inputs require dtype conversion,
-the NumPy reference executes. Explicit NumPy underflow warning/error policies also
-use the reference, since compiled loops do not implement `numpy.seterr`. Invalid
-backend names raise `ValueError`.
-
-The optional kernel uses one Fourier cell of solve workspace, float64, no
-fastmath and no parallel loops. Numerical failures are replayed through the
-NumPy reference for the original cell/parameter diagnostic. Cold compilation is
-paid separately for each encountered array signature; no compilation cache is
-written. Keep `OMP_NUM_THREADS=OPENBLAS_NUM_THREADS=MKL_NUM_THREADS=1` for bounded
-login-node checks. External model callables retain their Python interface.
-
-Step 12 revision 4 timings and limitations are recorded in
-the Step 12 revision 4 performance report (removed from the tree). These synthetic
-measurements do not establish real-forecast timing or forest convergence.
-
+The covariance factorization and the contraction $F_{ab}=\sum D_a^T C^{-1}D_b$
+are Numba-compiled float64 kernels (no fastmath, no parallel loops, one Fourier
+cell of solve workspace). Numerical failures are replayed through a NumPy
+routine to report the original cell and parameter context. Cold compilation is
+paid for each array signature; no compilation cache is written. Keep
+`OMP_NUM_THREADS=OPENBLAS_NUM_THREADS=MKL_NUM_THREADS=1` for bounded checks.
+External model callables retain their Python interface.

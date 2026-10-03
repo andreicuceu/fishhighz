@@ -2,8 +2,8 @@
 
 Entries are selected explicitly and grouped by scientific operation. The native
 forecast interface is exported from `fishhighz`; lower-level operations are
-imported from the modules shown here. Internal kernels and historical validation
-studies are not stable user interfaces. Units, array ordering and ownership are
+imported from the modules shown here. Internal kernels (`fishhighz.kernels`) are not stable user
+interfaces. Units, array ordering and ownership are
 shared with the [scientific methods](../methods/index.md).
 
 Native preparation helpers in `fishhighz.accuracy` and `fishhighz.magnitude`,

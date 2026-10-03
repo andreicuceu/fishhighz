@@ -13,6 +13,5 @@ getting-started
 user/index
 methods/index
 api/index
-research/index
 development/index
 ```

@@ -1,149 +1,107 @@
 # FishHighz
 
-[![Documentation Status](https://readthedocs.org/projects/fishhighz/badge/?version=latest)](https://fishhighz.readthedocs.io/en/latest/)
-
-FishHighz computes Fourier-space Gaussian covariances and Fisher forecasts for
-high-redshift galaxy and Lyman-alpha forest surveys. It retains covariance
-between selected auto- and cross-power spectra and supports external models,
-Kaiser/BAO signals, survey geometry, instrumental response, and sampling noise.
-
-Two interfaces serve different calculations:
-
-- The native INI interface prepares and runs the implemented BAO accuracy
-  prescription from survey tables and bundled or user-supplied inputs.
-- The scientific Python API exposes fields, parameters, models, derivatives,
-  integration grids, covariance, and Fisher assembly for more general studies.
-
-[Documentation](https://fishhighz.readthedocs.io/en/latest/) · [Getting started](https://fishhighz.readthedocs.io/en/latest/getting-started.html) ·
-[INI reference](https://fishhighz.readthedocs.io/en/latest/user/ini.html) · [API reference](https://fishhighz.readthedocs.io/en/latest/api/index.html)
+Fourier-space Gaussian covariances and Fisher forecasts for Lyman-alpha forest
+and galaxy clustering. FishHighz retains the full covariance between selected
+auto- and cross-power spectra of the tracers in a redshift bin, with survey
+geometry, instrumental response, aliasing and pixel noise for the forest, and
+Kaiser/BAO or external P3D signal models. The documentation is built from `docs/`
+(see below).
 
 ## Installation
 
-Python 3.11 or newer is required. From this repository:
+Python 3.11 or newer. NumPy, SciPy and Numba are required and installed
+automatically. From this directory:
 
 ```bash
-python -m pip install .
+python -m pip install -e .
+python -m pip install -e '.[camb,templates]'   # bundled DESI-2 recipe
 ```
-
-NumPy is the only unconditional runtime dependency. Install optional preparation
-dependencies for the bundled standalone DESI Run-2 example with:
-
-```bash
-python -m pip install '.[camb,templates,survey]'
-```
-
-Optional extras are selected by the operation being performed:
 
 | Extra | Purpose |
 | --- | --- |
-| `templates` | FITS template input and spline preparation (Astropy/SciPy) |
-| `cosmology` | Optional Astropy cosmology preparation |
-| `camb` | CAMB background and growth preparation |
-| `survey` | Survey-table interpolation with SciPy |
-| `compiled` | Numba Fisher contractions, used by default when installed |
-| `docs` | Sphinx documentation builds |
-| `dev` | Tests, Ruff checks, and distribution builds |
+| `camb` | CAMB background, sigma8(z) and f(z) |
+| `templates` | Astropy, to read the FITS power templates |
+| `cosmology` | Astropy cosmology as an alternative background (Python API) |
+| `dev` | pytest, Ruff, build |
+| `docs` | Sphinx documentation build |
 
-With `compiled` installed, Fisher contractions use the Numba kernel;
-`FISHHIGHZ_FISHER_BACKEND=numpy` forces the NumPy reference loop. The
-integrated forest-source mode (about 1e7 pixel-magnitude nodes per forest field
-and bin at the default orders) uses a dedicated weight recurrence with Numba
-streaming passes; `FISHHIGHZ_INTEGRATED_BACKEND=numpy` selects its NumPy
-implementation, and `FISHHIGHZ_SNR_GRID=interpolator` the generic SciPy S/N
-grid query in place of the separable one. The CAMB
-transfer solve (about a minute on one thread for the bundled Planck18 ini) is
-only needed for sigma8(z) and f(z)sigma8(z); these are cached in
-`$FISHHIGHZ_CACHE_DIR/camb` (default `~/.cache/fishhighz/camb`), keyed by the
-ini bytes, redshifts and CAMB version. H and D_M are recomputed exactly on a
-cache hit. Set `FISHHIGHZ_CAMB_CACHE=0` to disable the cache.
+The CAMB transfer solve is cached in `$FISHHIGHZ_CACHE_DIR/camb` (default
+`~/.cache/fishhighz/camb`); set `FISHHIGHZ_CAMB_CACHE=0` to disable the cache.
+Neither Vega nor lyaforecast is needed.
 
-The native interface uses packaged inputs and does not require Vega or
-lyaforecast installations. Historical compatibility examples have separate
-reference-package requirements, described in the documentation.
+## Quick start
 
-Source densities dN/(dz dm deg^2) are piecewise constant within each table
-cell by default (`density_interpolation = piecewise_constant_cells`), following
-lyaforecast's `Histogram2DInterpolator`. Integrals over cells therefore
-reproduce the normalized table counts, and queries outside the outer cell edges
-return 1e-20. Set `density_interpolation = RectBivariateSpline_kx2_ky2_s0` in
-`[input policies]` to recover the legacy quadratic spline; in Python, use
-`DensityReader(..., interpolation="spline")`. The historical validation code
-and saved evidence use the spline explicitly. Piecewise-constant cells must tile
-each table axis (regular tables and contiguous explicit widths pass; tables with
-rounded centres are rejected). The bundled LBG/LAE tables and redshift edges are
-the regular-grid DESI-2 SRD v2 versions (edges 2.26 to 3.41).
+Command line (omit the INI to use the bundled DESI-2 recipe):
 
-The native INI prescription revision is `early-lyaforecast-2026-10-01` by
-default (piecewise-constant cells). Stating the historical
-`[prescription] revision = early-lyaforecast-2026-09-18` selects the spline pair
-by default instead; the validation profiles keep the historical identity.
+```bash
+fishhighz-forecast my-survey.ini --output my-forecast
+fishhighz-forecast --output accuracy-desi2 --joint-only
+```
 
-## Minimal forecast
-
-The bundled recipe is accessible from an installed package:
+Python:
 
 ```python
 from fishhighz import Forecast
 
-result = Forecast("desi2_accuracy.ini").run()
-result.save("accuracy-desi2")
+result = Forecast("my-survey.ini").run()   # Forecast() loads the bundled recipe
+result.save("accuracy-desi2")              # new directory: settings.json + results.npz
 ```
 
-The equivalent command is:
+`result.joint` and `result.individual` give the constraints per bin on the two BAO
+parameters, with the joint covariance of the selected spectra and with each
+spectrum alone. Start a custom survey from
+[`examples/desi2_accuracy_annotated.ini`](examples/desi2_accuracy_annotated.ini).
+Long calculations belong on compute nodes, with `OMP_NUM_THREADS=1`.
+
+## Forecast modes
+
+`[model] mode` in the INI selects the parameters:
+
+- `bao` (default): per-bin AP dilation parameters `ap` and `at`
+  (parallel and transverse) of the wiggle component; biases and weights fixed.
+- `bao_marginalized`: $(\alpha_{\rm iso},\phi)$ with the tracer biases and the Lyα
+  beta marginalized.
+- `full_shape`: independent dilation of the wiggle and smooth components and
+  $f\sigma_8$, with the nuisances marginalized, over $k_{\min}<k<k_{\max}$.
+
+The prescription `[prescription] name = accuracy` has revisions
+`early-lyaforecast-2026-10-01` (default; source density piecewise constant in the
+table cells, forest sources at one representative redshift per bin) and
+`early-lyaforecast-integrated-2026-10-02`
+(`[input policies] forest_source_integration = integrated`; integration over
+source redshift and forest pixel inside the bin).
+
+## Forest weighting
+
+Forest weights follow the adaptive `early_lyaforecast` recurrence with full-sample
+magnitude moments, iterated to a confirmed convergence ($10^{-5}$ relative in the
+INI default). The McDonald & Eisenstein alternative is available through the
+Python API (`weights.prepare_forest_weights(..., method="mcdonald")`). See
+[`docs/methods/forest-weighting.md`](docs/methods/forest-weighting.md).
+
+## External P3D models
+
+Any package can supply the intrinsic P3D, an independent P1D and an optional
+Jacobian as plain callables (`fishhighz.models.protocols`), wrapped in
+`models.external.P3DProvider`. Covariance, mean derivatives (analytic, numerical
+or mixed) and the Fisher matrix are then computed with the same machinery as the
+built-in models. See [`examples/external_forecast.py`](examples/external_forecast.py)
+and [`examples/builtin_forecast.py`](examples/builtin_forecast.py).
+
+## Development
 
 ```bash
-fishhighz-forecast desi2_accuracy.ini --output accuracy-desi2
+python -m pip install -e '.[dev,docs,templates,camb,cosmology]'
+./scripts/check.sh                 # pytest, ruff check, ruff format --check
+make -C docs html                  # strict Sphinx build, then scripts/check_docs.py
 ```
 
-Choose a new output directory. Saved results include individual and joint
-constraints, effective configuration, and input provenance.
-
-To define another survey, start from the
-[annotated INI](examples/desi2_accuracy_annotated.ini) and consult the
-[configuration guide](https://fishhighz.readthedocs.io/en/latest/user/ini.html). Numerical overrides or changed inputs
-require their own assessment; a prescription name does not qualify a modified
-calculation automatically.
-
-The [Python guide](https://fishhighz.readthedocs.io/en/latest/user/python.html) explains preparation, supplied models
-and readers, execution controls, and results. The
-[synthetic research example](examples/research_bao_forecast.py) demonstrates
-explicit scientific API choices without running a real-survey study.
-
-## Scientific scope and active research
-
-Calculations use independent redshift bins, a common volume per bin, and
-fiducial covariance and weights held fixed during mean derivatives. Selecting
-only some spectra does not remove spectra needed to construct their covariance.
-
-The [research baseline](https://fishhighz.readthedocs.io/en/latest/research/RESEARCH_BASELINE.html) defines the adopted
-S2–S4 prescription and its numerical qualification. The
-[weighting decision](https://fishhighz.readthedocs.io/en/latest/research/FOREST_WEIGHTING_DECISION.html) records the
-accepted early-lyaforecast recurrence and retained alternative; the
-[deferred tests](https://fishhighz.readthedocs.io/en/latest/research/DEFERRED_SCIENTIFIC_TESTS.html) describe remaining
-scientific questions. Finite-refinement and iteration checks do not establish
-physical accuracy of reconstruction assumptions or a continuum limit.
-
-The bundled DESI recipe retains only the QSO/lya(qso) spectra in bin 1 and all
-15 spectra in bins 2–6. Historical studies retain their original selections
-and conclusions in the [development and validation archives](https://fishhighz.readthedocs.io/en/latest/archive/index.html).
-
-## Development and documentation
-
-Contributor setup, quick checks, and distribution instructions are in the
-[development guide](https://fishhighz.readthedocs.io/en/latest/development/contributing.html). Build the HTML manual with:
-
-```bash
-python -m pip install -e '.[docs]'
-python -m sphinx -n -W --keep-going -b html docs docs/_build/html
-```
-
-Read the local build at `docs/_build/html/index.html`, or browse the
-[published documentation](https://fishhighz.readthedocs.io/en/latest/).
-Real-survey validation and scheduler actions are separate from ordinary
-documentation and synthetic checks.
+Contributor notes are in [`AGENTS.md`](AGENTS.md) and
+`docs/development/contributing.md`; the HTML manual is written to
+`docs/_build/html/index.html`.
 
 ## License
 
-See [LICENSE](LICENSE) for the GNU General Public License, version 3. Bundled
-scientific input provenance and accompanying license notices are recorded in
-[the data README](fishhighz/data/README.md) and its linked notices.
+GNU General Public License, version 3 ([LICENSE](LICENSE)). The provenance and
+licenses of the bundled survey tables and templates are recorded in
+[`fishhighz/data/README.md`](fishhighz/data/README.md).

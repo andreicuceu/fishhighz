@@ -7,10 +7,11 @@ parses configuration; `prepare()` returns a cached `PreparedForecast`, and
 or factories replace the corresponding default preparation stages. Factories
 receive `(config)`, `(config, background)`, and `(config)`, respectively.
 
-`run(batch_size=2048, step_scale=None, numerical=False)` retains joint and
+`run(batch_size=2048, step_scale=None, numerical=False, individuals=True)` retains joint and
 individual constraints. Individual spectra use their own covariance; they are
 not blocks of an inverse joint covariance. With `step_scale=None`, the configured
-AP step is divided by 0.001 to obtain the derivative multiplier. Prepared arrays
+AP step is divided by 0.001 to obtain the derivative multiplier in BAO mode
+(1 in the other modes). Prepared arrays
 and fiducial weights remain fixed during differentiation.
 
 `SurveyResult.individual`, `.joint`, and `.excluded` preserve explicit constraint
@@ -26,8 +27,8 @@ underlying file/import errors. Scientific domain and shape errors are not
 silently repaired. Bundled resource paths obtained with `bundled_path` or
 `bundled_paths` are context-managed and valid within their context.
 
-The default CAMB background requires the `camb` extra, FITS templates the
-`templates` extra, and raw survey readers the `survey` extra. Install the required extras together for native survey preparation. CAMB distances use Mpc, H uses km/s/Mpc, and growth
+The default CAMB background requires the `camb` extra and FITS templates the
+`templates` extra; install both for native survey preparation. CAMB distances use Mpc, H uses km/s/Mpc, and growth
 rates and sigma8 are dimensionless; the fixed `h_fid` defines forecast units.
 
 ## `fishhighz.public`
@@ -132,3 +133,17 @@ rates and sigma8 are dimensionless; the fixed `h_fid` defines forecast units.
 .. autofunction:: fishhighz.cosmology.prepare_camb_background
 ```
 
+
+## `fishhighz.forecast`
+
+```{eval-rst}
+.. autofunction:: fishhighz.forecast.prepare_bin
+```
+
+```{eval-rst}
+.. autofunction:: fishhighz.forecast.run_bin
+```
+
+```{eval-rst}
+.. autofunction:: fishhighz.forecast.run_forecast
+```

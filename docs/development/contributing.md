@@ -5,16 +5,20 @@ Use Python 3.11 or newer and an isolated environment from the package root:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e '.[dev,docs,templates]'
-export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+python -m pip install -e '.[dev,docs,templates,camb,cosmology]'
 ./scripts/check.sh
 ```
 
-The runner invokes pytest, Ruff lint, and Ruff formatting checks. It does not
-install tools or rewrite formatting. Tests should be self-contained and use
-synthetic inputs; real-survey studies and scheduler actions require separate
-explicit authorization. Source uses a direct `fishhighz/` layout, NumPy-style
-public docstrings, four-space indentation, and an 88-character Ruff line length.
+`scripts/check.sh` sets single-threaded BLAS/OpenMP and runs pytest, Ruff lint
+and the Ruff format check; it neither installs tools nor rewrites files. Tests
+are self-contained and use synthetic inputs. Source uses a direct `fishhighz/`
+layout, NumPy-style docstrings, four-space indentation and an 88-character line
+length. Numba kernels under `fishhighz/kernels/` define the reference
+arithmetic of the forecast; changes to them need an accompanying comparison of
+saved results (see `AGENTS.md`).
+
+The environment variables `FISHHIGHZ_CAMB_CACHE` (set to `0` to disable the CAMB
+background cache) and `FISHHIGHZ_CACHE_DIR` (cache location) control caching.
 
 ## Documentation
 
@@ -23,37 +27,23 @@ python -m sphinx -n -W --keep-going -b html docs docs/_build/html
 python scripts/check_docs.py docs/_build/html
 ```
 
-Alternatively, run `make -C docs html`. Open `docs/_build/html/index.html`.
-The documentation CI and Read the Docs configuration use the same strict HTML
-build. Hosting configuration does not itself publish or connect a project.
+`make -C docs html` runs both. Open `docs/_build/html/index.html`.
 
-Edit narrative pages in MyST Markdown. Include existing examples with
-`literalinclude` and download links rather than copying their contents. Select
-API members explicitly; wrap autodoc and autosummary directives in `eval-rst`
-blocks so their generated reStructuredText is parsed correctly. The HTML check
-requires API object and member anchors and rejects raw Python-domain directives.
-Never execute forecasts during documentation builds.
-Add new pages to a toctree and keep units, array ordering, default values, and
-scientific qualifications consistent with source and tests.
+Narrative pages are MyST Markdown. Include existing examples with
+`literalinclude` and download links instead of copying them. Select API members
+explicitly and wrap autodoc and autosummary directives in `eval-rst` blocks;
+`scripts/check_docs.py` requires a rendered signature and anchor for every
+documented object and member. Never execute forecasts during a documentation
+build. Add new pages to a toctree and keep units, array ordering and defaults
+consistent with the source.
 
-Historical records belong in the archives. Preserve scientific claims and dated
-commands, distinguish historical proposals from current interfaces, and label
-local-only evidence rather than creating links to unavailable files.
-
-## Distributions and import checks
+## Distributions
 
 ```bash
 python -m build
 ```
 
-Documentation sources and examples ship in the source distribution. Generated
-HTML and research/development archives are not runtime wheel contents. The base
-package requires only NumPy; documentation dependencies are optional.
-
-Install the built wheel in an isolated environment and import it from outside
-the checkout when checking packaging. A successful import from the checkout
-alone does not establish that the wheel is complete. Read package versions with
-`importlib.metadata.version("fishhighz")`; `pyproject.toml` is authoritative.
-
-Earlier distribution-validation commands and machine-local helper paths are
-no longer maintained and not required for routine contributor checks.
+Documentation sources and examples ship in the source distribution; generated
+HTML does not. Verify packaging by installing the wheel in a clean environment
+and importing it from outside the checkout. `pyproject.toml` is authoritative
+for dependencies and extras.

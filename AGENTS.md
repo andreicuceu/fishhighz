@@ -1,325 +1,104 @@
-# FishHighz agent guidance
+# FishHighz contributor guide
 
-## Project and authoritative documents
+FishHighz is a standalone Fourier-space covariance and Fisher forecasting package
+for Lyα forest and galaxy clustering. The forecast formalism is documented in
+`docs/methods/`; read the relevant page before changing scientific code.
 
-FishHighz is a standalone Fourier-space covariance/Fisher forecasting package.
-Steps 01–11 are accepted for progression; Step 12 evidence repair passed review,
-while historical accuracy forecasts remain scientifically unaccepted.
+## Layout
 
-On 2026-09-17 the user marked **Step 13 and W12 done**, closed the entire
-previous weighting diagnostic plan, and directed that these assignments not be
-resumed. W12's bounded fixed-reference accuracy-profile review passed; preserve
-its implementation. Step 13's continuum conclusion remains unresolved in the
-historical evidence. Deferred W01 repairs and the old W13 proposal are retired.
+- `fishhighz/` (direct layout, no `src/`): `public.py` (`Forecast`, results),
+  `cli.py`, `survey_config.py` (INI parser and preparation), `accuracy.py`
+  (prescription defaults), `forecast.py` and `survey.py` (`BinSpec`, `prepare_bin`,
+  `run_forecast`), `geometry.py`, `response.py`, `weights.py`, `noise.py`,
+  `covariance.py`, `derivatives.py`, `fisher.py`, `results.py`, `fields.py`,
+  `parameters.py`, `grids.py`, `forest_integration.py`, `full_shape.py`,
+  `bao_marginalized.py`, `cosmology.py`, `magnitude.py`, `resources.py`.
+- `fishhighz/survey_tables.py`: source-density and forest S/N tables
+  (`DensityTable`, `SNRTable`, `SourceDensity`, `ForestSNR`, `CellHistogram2D`,
+  `sample_forest_tables`).
+- `fishhighz/models/`: `protocols.py` and `external.py` (external P3D/P1D
+  providers), `kaiser.py`, `templates.py`, `p1d.py`, `biases.py`.
+- `fishhighz/kernels/`: array-only numerical kernels (covariance, Fisher,
+  derivatives, response, Kaiser, templates, full-sum and integrated forest
+  weights); the Fisher contraction and the integrated forest-weight passes are
+  Numba-compiled. Numba and SciPy are required dependencies.
+- `fishhighz/data/`: bundled INI, CAMB configurations, FITS templates, DESI-2
+  density and S/N tables; provenance and licenses in `fishhighz/data/README.md`
+  and `fishhighz/data/licenses/`.
+- `tests/`, `examples/`, `docs/` (MyST Markdown, Sphinx), `scripts/`
+  (`check.sh`, `check_docs.py`, `check_integrated_forest_refinement.py`).
 
-Current planning update, 2026-09-18: the five-stage compatibility weighting
-study and additional grid-to-BAO check are complete. `docs/research/FOREST_WEIGHTING_DECISION.md`
-records the accepted early-lyaforecast baseline and retained McDonald alternative.
-S1–S3 now implement full-compatibility, fixed-compatibility and updated accuracy,
-qualify all six revised-accuracy bins within the stated finite-refinement tests,
-and complete the selected six-bin DESI-2 comparison. Astra (light) implementations
-and Sol (high) independent scientific reviews are recorded in `docs/archive/reviews/s1.md`,
-`docs/archive/reviews/s2.md`, `docs/archive/reviews/s3.md` and their `-review.md` reports; all three reviews
-pass with no consequential correction requested. S4 attribution is also complete with a passing Sol scientific review:
-`docs/archive/reviews/s4.md`, `docs/archive/reviews/s4-impact-table.md`, `docs/archive/reviews/s4-profile-inventory.md`
-and `docs/archive/reviews/s4-review.md`. Scientific acceptance remains with the user;
-S5 reassessment began on 2026-09-21 as a joint planning discussion. The user
-requested an evidence summary, interpretation and proposed next work; that
-initial request authorized planning only. The later S5 execution authorization
-below now governs implementation and review. The user
-confirmed a research-ready Python API as the first S5 milestone and the tested
-S2–S4 accuracy recipe as its research baseline, retaining mixed-pair damping and
-full wiggle AP derivatives. The reference-mode comparison is now a separate
-later study in `docs/research/DEFERRED_SCIENTIFIC_TESTS.md`; S5 covers only prescription
-documentation, Python API documentation/examples, and validation. No further
-scientific decision is pending before implementation within that scope. The
-legacy weighting reference remains in use, with a 1% BAO-error attribution
-trigger and 0.1% numerical-refinement target.
+## Invariants
 
-For every future forecast, exclude bin-1 correlations involving LBG or LAE
-galaxies. Bin-1 correlations involving lya(lbg) are permitted (updated
-2026-10-01); the six lya(qso), QSO and lya(lbg) auto- and cross-spectra may be
-retained in bin 1, including their joint covariance. Bins 2–6 retain all 15
-spectra. This is a forecast selection, not a plot cut; preserve historical files
-and their original selection, including the historical three-spectrum bin-1
-selection.
+- Kernels accept explicit float64 arrays, scalars and integer indices, with no
+  filesystem access, logging or configuration objects in numerical loops. Keep
+  their arithmetic order stable: no fastmath, no reordering of reductions, no
+  parallel loops. A change that alters results at the rounding level is a
+  scientific change and must be documented as such.
+- Covariance, forest weights and noise are fiducial and fixed during mean
+  derivatives; no covariance-derivative information is added.
+- The forest moments $I_1,I_2,I_3$ are full-sample sums over magnitude; the
+  cumulative magnitude-prefix recurrence of lyaforecast is not supported. Adaptive
+  weights raise if convergence is not confirmed; never substitute the last
+  iterate or another prescription.
+- Bundled data and templates keep their provenance and license notices; do not
+  alter them or add data without recording origin, version and license.
+- Numerical tolerances (`rtol`, finite-difference steps, quadrature orders,
+  roundoff thresholds) are not changed silently; each change states the reason
+  and the effect on the forecasts below.
+- Keep dependencies minimal; heavy or optional ones (CAMB, Astropy) are
+  imported lazily and live in extras.
 
-The completed validation study implements five fixed-count variants and opt-in
-full-sum forest-auto adaptive stopping. Its trajectory, BAO and magnitude-grid
-results and independent reviews are linked from the weighting decision. Iteration
-convergence does not establish magnitude-grid convergence or physical accuracy.
-The historical extra grid-to-BAO check covers bins 2–6 only; S2 adds the retained
-three-spectrum bin-1 check. W12's explicit implementation is retained. Revised
-accuracy uses its own fiducial per-field P/B, response and magnitude quadrature,
-with frozen weights in BAO derivatives. Its maximum tested individual/joint
-BAO-error refinement changes are 0.0011411%/0.0012685%. S3 finds material
-accuracy/fixed differences, triggering the completed S4 study. Its 364 controlled calculations identify
-mixed forest–galaxy damping as the dominant isolated reduction, partly opposed
-by the grouped AP derivative change. Maximum endpoint mismatch is 0.000129%;
-maximum tested error refinement is 0.010783%. These quantify model assumptions
-and numerical behavior, not scientific acceptance of the reconstruction physics.
-Execution authorization, 2026-09-18: the user subsequently authorized the
-coordinator to dispatch Astra (light) implementation agents and Sol (high)
-scientific reviewers, check results and progress through S1–S3 inclusive.
-Reviews should request changes only when likely to affect scientific conclusions.
-The user subsequently authorized S4 attribution with the same agent roles and
-scientific review criterion, including a report table of all scientifically
-meaningful profile changes and their joint BAO effects. This includes the scoped
-S2/S3 and S4 real forecasts; it did not itself authorize S5 calculations, commits,
-pushes or Slurm actions. S5 now has its separate authorization below. The user explicitly directed login-node
-execution for these short forecasts. Use one numerical thread and bounded runs.
-The remaining standing review controls apply; scientific acceptance stays with
-the user.
+## Validating a change to scientific code
 
-- [Archived scientific design](docs/archive/planning/FISHHIGHZ_DESIGN.md): historical scientific conventions and API
-  context; dated former assignments are historical.
-- [Archived implementation roadmap](docs/archive/planning/FISHHIGHZ_IMPLEMENTATION_PLAN.md): historical
-  sequence and status; it does not authorize current work.
-- [Archived compatibility weighting test plan](docs/archive/planning/FISHHIGHZ_COMPATIBILITY_WEIGHTING_PLAN.md):
-  completed study and evidence, including the five variants, individual/joint
-  plots and historical plotting cut for uncertainties above 0.2.
-- [Deferred scientific tests](docs/research/DEFERRED_SCIENTIFIC_TESTS.md): later, non-critical
-  studies with agreed and proposed statuses kept distinct.
-- [Archived closed diagnostic plan](docs/archive/planning/FISHHIGHZ_WEIGHTING_DIAGNOSTICS_PLAN.md): historical closure
-  record and link to its full archive.
-- `docs/archive/notes/IMPLEMENTATION_STEP.md` and `docs/archive/notes/WEIGHTING_DIAGNOSTIC_STEP.md` retain retired
-  assignments; neither authorizes implementation or dispatch. New detailed
-  assignments require a user request. Do not follow their historical pending-work
-  instructions as current tasks.
+1. Run `./scripts/check.sh` (pytest, `ruff check`, `ruff format --check`) on a
+   compute node with single-threaded BLAS (the script sets `OMP_NUM_THREADS=1`).
+2. For changes that can affect numerical output, rerun four representative
+   forecasts from the same environment and CAMB version as the saved reference,
+   and compare `results.npz` and `settings.json` against the reference run:
+   - DESI-2 SRD `lya_qso_lbg_lae` 15x2pt, central forest sources
+     (bundled recipe), and with `forest_source_integration = integrated`;
+   - a `full_shape` INI and a `bao_marginalized` INI from
+     `/global/cfs/cdirs/desicollab/users/acuceu/vega_dev/forecasts/full_shape`
+     and `.../forecasts/bao`.
+   Expect bit-identical arrays and effective settings. If not, report the
+   maximum relative difference of each Fisher matrix and BAO error, and the
+   reason, before accepting the change.
+3. Add focused regression tests for bug fixes, with synthetic inputs.
 
-This file supplies standing context and working rules. Keep step-specific tasks,
-acceptance criteria, and feedback in the current-step file, not here. Follow the
-user's latest explicit instructions if they change a document's requirements;
-report inconsistencies so the planning agent can reconcile the documents.
+## Forecast selection rule
 
-### S5 execution authorization, 2026-09-21
+For every forecast, exclude bin-1 correlations involving LBG or LAE galaxies.
+Bin-1 correlations involving lya(lbg) are permitted: the six lya(qso), QSO and
+lya(lbg) auto- and cross-spectra may be retained in bin 1, including their joint
+covariance. Bins 2-6 retain all 15 spectra. This is a forecast selection, not a
+plot cut; keep existing result files with their original selection.
 
-The user has now explicitly requested S5 implementation, with **Sol (medium)**
-implementation agents and **Sol (high)** independent review agents. The coordinator
-controls dispatch and checks results. S5 reviews cover scientific correctness,
-software and documentation. This supersedes the earlier planning-only status
-and narrower review scope for this assignment. Implement the roadmap's three
-S5 parts, including bounded synthetic/example, focused-test and installed-package
-checks. Keep the adopted numerical recipe and historical evidence unchanged;
-report any consequential correction before expanding numerical scope. D1/D2,
-new real-survey studies, commits, pushes and Slurm actions remain outside scope.
+## Code style
 
-### S5 completion, 2026-09-21
+- Four-space indentation, `snake_case` functions, modules and variables,
+  `PascalCase` classes, NumPy-style docstrings for public objects, pytest, and
+  the configured Ruff rules (line length 88).
+- Use explicit float64 for scientific calculations and inspect numerical
+  conditioning. Do not regularize singular Fisher matrices or covariance blocks;
+  report rank and null directions instead.
+- Separate file and configuration handling and validation from numerical
+  functions. Prefer small functional interfaces and batched, vectorized
+  evaluation; optimize measured bottlenecks only. No abstraction for
+  hypothetical future use.
+- Use scientific names (`k_grid`, `mu_grid`, `redshift_mask`), state units and
+  array shapes in docstrings, and comment non-obvious numerical choices and
+  physical assumptions.
+- Tests are self-contained, deterministic and independent of NERSC paths; use
+  analytic limits, finite-difference convergence and synthetic arrays.
 
-S5 is complete with a passing Sol (high) scientific, software and documentation
-review. `docs/research/RESEARCH_BASELINE.md` defines the adopted S2–S4 recipe;
-`examples/research_bao_forecast.py` demonstrates the standalone Python API with
-synthetic inputs. `docs/archive/reviews/s5.md` and `docs/archive/reviews/s5-review.md` record 101 focused
-tests, two installed checks, direct covariance reconstruction and unchanged
-numerical code/evidence. Only package docstrings and three validation error-message
-occurrences changed in existing source. The guide and examples ship in the source
-distribution. D1/D2 remain deferred; no next step is authorized by this completion.
+## NERSC execution
 
-## Roles and review control
-
-The user chooses and prompts implementation agents and retains control over plan
-review, implementation review, acceptance, and progression. An instruction to
-implement the current step includes its quick tests. The real full validation
-suite requires an explicit user request; a general implementation, testing,
-review, or step-completion request does not authorize it. Complete the bounded
-assignment and quick checks, report evidence, and stop for review; do not ask for
-extra permission to run already authorized quick tests.
-
-Do not advance the roadmap, write future detailed steps, or treat passing tests
-as user acceptance. Do not spawn or dispatch other agents unless the user
-explicitly requests delegation. Do not edit planning/governance documents during
-an implementation assignment unless the user authorizes that revision. Report
-necessary scope or design changes rather than silently expanding the step.
-
-A review assignment assesses code and test evidence against the identified plan
-revision. Report findings with concrete file references and missing or failing
-checks. Do not silently implement fixes during a review-only assignment. The
-planning/review agent incorporates feedback into the same step when asked; only
-the user's acceptance and request for the next step permit advancement.
-
-## Minimal diagnostic implementation and scientific review
-
-For forest-weighting diagnostics, use only the minimum source, code and tests
-needed to answer the assigned scientific question. A report, derivation and tiny
-standalone check can be sufficient. Do not require full suites, fresh wheels or
-environments, generalized validators or hypothetical provenance hardening unless
-they are needed to resolve a concrete scientific ambiguity in the assignment.
-These diagnostic-specific instructions supersede broader routine validation
-requirements below; they do not alter historical package-step evidence.
-
-During review, propose further changes only if they are likely to affect the
-scientific conclusion or its justified scope. For each proposed correction,
-identify the evidence, smallest necessary check and possible scientific impact.
-Prefer a justified narrower conclusion or explicit uncertainty when sufficient.
-Do not generate optional cleanup/hardening lists. Begin the review with a short
-scientific summary explaining how proposed changes could affect the conclusion,
-or state that no scientifically consequential changes are needed. Preserve user
-feedback, control of approval/dispatch/acceptance and the stop after each step.
-
-## Scientific invariants
-
-- Forecast 2D P(k,mu), as confirmed on 2026-09-11, with model/noise evaluation
-  on a 2D grid and independent Fourier-cell covariance blocks. Multipole
-  compression is not required. Correlation functions, sampling likelihoods,
-  and samplers are outside scope.
-- Treat redshift bins as independent and use a common volume across fields in
-  each bin. Preserve covariance between different spectra within a bin.
-- Distinguish physical tracers from observed samples. Forests measured through
-  QSO and LBG spectra can share physics but have different noise and response.
-- Preserve the spectra required to construct covariance even when those spectra
-  are not selected as forecast observables.
-- Accept arbitrary external callable models; automatic differentiation is
-  optional. Never require an external model to depend on FishHighz or JAX.
-- The built-in template loader reads Vega-format K/PK/PKSB: no-wiggle is PKSB,
-  wiggle is PK-PKSB. Do not regenerate a decomposition in the forecasting path.
-- Built-in forest Kaiser factors use b and nuisance beta; galaxy factors use
-  b+f*mu², with a shared growth-rate target in each bin.
-- BAO broadening affects wiggles only. Per-tracer parallel/transverse widths are
-  fixed inputs; cross widths squared are the mean of the two squared auto widths.
-  Varying f never changes these input widths.
-- Wiggle and no-wiggle scaling can be separate or tied, using the three confirmed
-  parameterizations. Follow the design's Fourier mapping and normalization.
-- k_min/k_max define fixed observed-coordinate cuts for a run. Model-domain
-  padding for rescaling must not alter those cuts or mode counts.
-- Preserve lyaforecast's default P1D formula and low-k treatment. External P3D
-  does not imply replacement P1D; model response/noise ownership must be explicit
-  to avoid counting smoothing or noise twice.
-
-The user confirmed NumPy with dedicated Numba-friendly kernels as the starting
-backend on 2026-09-11. Validate NumPy reference calculations before targeted
-compilation; a JAX backend is not an initial requirement. On 2026-09-11 the user
-confirmed Gauss–Legendre quadrature in mu on [0,1] and within user-supplied k-bin
-edges, with custom nodes/weights supported, and fixed fiducial covariance and
-survey weights for the initial Fisher calculation. Differentiate the predicted
-mean; do not add covariance-derivative information. Other proposed contracts
-remain subject to the user's plan review. Read the design
-rather than inferring scientific choices from similar code in a neighboring
-package.
-
-## Structure and implementation practice
-
-Keep file/configuration handling, validation, names, units, adapter setup, and
-caching separate from intensive numerical functions. Kernels accept explicit
-arrays/scalars and integer indices, with no filesystem access, logging, dynamic
-plugin lookup, or configuration objects in numerical loops.
-
-Prefer small, functional interfaces and batched evaluations. Preserve useful
-NumPy/vectorized operations; optimize measured bottlenecks rather than rewriting
-for style. Use explicit float64 for scientific calculations and inspect numerical
-conditioning. Do not silently change tolerances, regularize singular results, or
-enable aggressive fastmath. Keep dependencies minimal and optional integrations
-out of package import. Do not add an abstraction solely for possible future use.
-
-The user confirmed optional Astropy/SciPy template preparation on 2026-09-12.
-Astropy reads FITS; SciPy prepares spline coefficients. Keep both in the
-`templates` extra with lazy imports. Repeated template evaluation uses dedicated
-NumPy kernels, and the external-model base installation requires only NumPy.
-On 2026-09-13 the user also confirmed an optional Astropy cosmology adapter for
-Step 09, integrated bin volumes, and explicit sigma/FWHM instrument conversions
-with separately labeled legacy compatibility. The cosmology extra
-keeps Astropy/SciPy optional; supplied-background preparation remains NumPy-only.
-On 2026-09-13 the user confirmed prepared-array inputs for weighting/noise,
-explicit legacy cumulative iterations plus caller-supplied weights, and explicit
-independent sampling or supplied full noise. Keep per-field weights consistent
-across pairs; overlap-derived noise remains deferred. For Step 11 the user
-confirmed a Python API and standalone raw readers, deferring INI/CLI/serialization.
-A labeled optional SciPy survey adapter preserves explicit legacy density/SNR
-interpolation and normalization settings with strict domain/value errors; no
-legacy floors or clamps. Keep the normalized-array forecast path NumPy-only.
-The user also confirmed nonuniform redshift support with explicit raw cell widths
-and a separately labeled legacy first-spacing conversion. Forecast-bin bounds
-and raw source-table cells are separate; do not infer physical widths from centres.
-For Step 12 the user confirmed wiggle-only BAO ap/at validation, a separately
-labeled legacy input floor/clamp adapter, and a real lyaforecast intrinsic-P3D
-example. A negative interpolated-density floor is an explicitly labeled extension
-beyond exact legacy behavior. Strict reader defaults stay unchanged; retain
-fallback provenance and keep real full-suite execution explicitly opt-in.
-The user-authorized Step 12 revision-2 full comparison has been attempted and
-preserved: seven reference cases, both profiles and bounded diagnostic studies.
-The subsequent 15x2pt-only revision-3 repair was archived during performance-only
-revision 4. Revision 5 used the restored scientific assignment on the reviewed r4
-baseline. Preserve its saved 15x2pt primaries, diagnostics and weighting diagnosis.
-Revision 6 completes the reviewed synthetic/offline evidence repair. Step 13's
-normalized-limit investigation is now closed; preserve its diagnostic and saved
-results without resuming its former assignment. In the new compatibility study,
-retain amplitude in nonlinear updates and distinguish iteration from grid
-sensitivity. The planned 15×2pt execution needs its own explicit assignment;
-do not run the other six cases or recapture NewForecast. Preserve r4 optimizations
-and regression tests. Further weighting/input-policy adoption requires the user's
-scientific decision.
-The literal legacy estimator path
-is validation-only. The accuracy profile preserves existing-model scope and
-retained input policies with sensitivity tests; neither changes strict defaults.
-
-Use four-space indentation, snake_case functions/modules, PascalCase classes,
-NumPy-style public docstrings, pytest, and the package's configured Ruff rules.
-Use a direct `fishhighz/` source directory under this repository root, as requested
-by the user; do not add an intervening `src/`. Restrict package discovery to the
-intended import package and retain isolated installed-wheel checks outside the
-checkout so working-directory imports cannot mask packaging defects. Read
-development commands from the current README/pyproject rather than assuming
-planned scripts already exist.
-
-## Reference packages and validation
-
-`../lyaforecast` is the scientific survey/noise reference; `../vega` supplies
-template format and selected model conventions. Treat both as read-only during
-FishHighz steps unless the user explicitly expands scope. Read a reference
-package's own AGENTS.md before any work that runs its tests or changes it.
-Do not alter authoritative example INIs, FITS templates, or existing outputs.
-Retain provenance and applicable license notices for any copied scientific code;
-do not invent a package license or redistribute assets without checking rights.
-
-Capture the seven authoritative DESI-2 baselines before numerical implementation,
-as scheduled in the roadmap. Record inputs, versions, source state, hashes, logs,
-outputs, and timings. A scaffold-only step does not require a forecast baseline.
-Existing baselines are reference evidence, not assumed-current results. Match
-the environment for numerical comparisons and explain expected differences from
-the legacy BAO recipe rather than forcing agreement by changing physics.
-
-Run only quick checks by default: fast ordinary tests, relevant one-case reference
-checks, and offline validation of saved bundles. Execute the real full suite only
-when the user explicitly asks for that run, including at final step/review
-checkpoints. Failures, relevant changes, or a missing/incompatible baseline do not
-authorize automatic full execution or fallback. A request for one full run does
-not authorize later full reruns. Synthetic tests of full-mode orchestration are
-allowed in the quick suite because they do not run real forecasts.
-
-Do not routinely ask for a full run or hold an otherwise complete review handoff
-pending one. Report an unrequested full run as not run under the user's policy;
-do not call it a failed or outstanding acceptance check. Report any actual quick
-validation failure or blocked comparison separately.
-Reuse accepted immutable reference evidence for FishHighz comparisons when its
-provenance remains applicable. Rerunning unchanged reference code alone does not
-test newly implemented FishHighz behavior; future steps need their own focused
-numerical tests and comparisons.
-
-Tests should be self-contained, deterministic, and independent of NERSC paths or
-neighboring installed packages. Use synthetic arrays and small generated
-fixtures for ordinary tests; keep local cross-package comparisons as explicitly
-identified validation. Prefer analytic limits, finite-difference convergence,
-normalization checks, and observable behavior over tests that repeat the code.
-
-Implement the current step's tests, run its required checks, and report actual
-commands/results, failures, and limitations. Keep generated artifacts separate
-from concise review reports; tie evidence to the code and plan revision reviewed.
-Do not describe planned or skipped tests as passed. After a revision, rerun the
-affected tests and agreed regression checks without unrelated test expansion.
-
-## Workspace operations
-
-Follow the parent NERSC guidance. Use bounded searches and keep writes inside
-this package and explicitly authorized artifact locations. Keep source and test
-changes local; do not modify shared environments or sibling repositories.
-
-Use isolated environments where practical. Lightweight development checks run
-on the login node with OMP_NUM_THREADS=1, OPENBLAS_NUM_THREADS=1, and
-MKL_NUM_THREADS=1. Follow lyaforecast's own guidance for its small DESI-2 reference
-runs. Long, memory-intensive, MPI, or accelerator jobs require appropriate
-resources and explicit user authorization for any Slurm action; do not launch
-them merely because a performance step exists in the roadmap.
-
-Never overwrite unrelated user changes, delete unverified paths, or expose
-credentials. Do not commit, push, publish, or create remote resources unless the
-user requests it. Reference code, data, and command outputs must not be sent to
-third-party services independently.
+Run pytest, forecasts and the integrated-source weight solve (about 1e7
+pixel-magnitude nodes per forest field and bin) on a compute node, not on a
+login node, with `OMP_NUM_THREADS=OPENBLAS_NUM_THREADS=MKL_NUM_THREADS=1`.
+Slurm submission requires the user's explicit approval. Write outputs to
+`$SCRATCH`. The CAMB solve (about a minute) is cached in
+`$FISHHIGHZ_CACHE_DIR/camb`; `FISHHIGHZ_CAMB_CACHE=0` disables the cache. Treat
+CFS reference forecasts as read-only. Build the documentation with
+`make -C docs html`.
