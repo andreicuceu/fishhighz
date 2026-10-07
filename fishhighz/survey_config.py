@@ -49,6 +49,7 @@ from .response import (
     resolving_power_fwhm_to_sigma,
 )
 from .survey import BinSpec, ForestInput, freeze
+from .survey_tables import density_discontinuity_edges
 from .weights import density_per_velocity
 
 SCHEMA_NAME = "fishhighz-native-survey"
@@ -1695,8 +1696,15 @@ def _integrated_source(
     Notes
     -----
     The slice is [lya_rest (1+z_min), lya_rest (1+z_max)] of the bin bounds, not
-    the evaluation redshift. Breakpoints in ln(1+z_q) are the density-table
-    redshift cell edges and the S/N-table source redshifts. The pixel variance
+    the evaluation redshift. Breakpoints in ln(1+z_q) are the S/N-table source
+    redshifts and the density-table redshift cell edges at which the sampled
+    cell density changes (``survey_tables.density_discontinuity_edges`` applied
+    to the adapter's ``cell_density``; every edge if the adapter exposes no
+    cell values). Edges between identical rows are not discontinuities of the
+    integrand, so dropping them changes the integral only at the quadrature
+    error level, and a table without identical adjacent rows yields the same
+    nodes bit for bit. ``info`` records ``n_density_edges`` and
+    ``n_density_edges_kept``. The pixel variance
     is queried at (z_q, lambda, pixel width l_pix lambda/c in angstrom) with
     the field's exposure count, the arguments of the central path except for
     the coordinates.
@@ -1704,10 +1712,18 @@ def _integrated_source(
     label = f"field {item.observed.id}, bin {bin_config.index}"
     density_axis = getattr(getattr(density, "reader", density), "z_edges", None)
     snr_axis = getattr(getattr(snr, "reader", snr), "z", None)
+
+    # Density cell edges are panel boundaries only where the sampled cell
+    # density changes: an edge between identical rows is not a non-smooth point
+    # of the integrand. Adapters without cell values keep every edge.
+    cell_density = getattr(density, "cell_density", None)
+    density_breaks = density_axis
+    if density_axis is not None and cell_density is not None:
+        density_breaks = density_discontinuity_edges(density_axis, cell_density)
     breaks = np.concatenate(
         [
             np.asarray(axis, dtype=float).ravel()
-            for axis in (density_axis, snr_axis)
+            for axis in (density_breaks, snr_axis)
             if axis is not None
         ]
     )
@@ -1749,6 +1765,10 @@ def _integrated_source(
     )
     info = {
         "zq_limits": [float(zq_limits[0]), float(zq_limits[1])],
+        "n_density_edges": 0 if density_axis is None else int(np.size(density_axis)),
+        "n_density_edges_kept": (
+            0 if density_breaks is None else int(np.size(density_breaks))
+        ),
         "n_zq_nodes": int(len(nodes.zq_nodes)),
         "n_pixel": int(len(nodes.lam_obs)),
         "nodes": dict(nodes.info),
@@ -1784,7 +1804,9 @@ def _integration_bin_record(spec_id, integration_record):
     -------
     record : dict
         ``spec_id`` and, per quantity, a mapping from field ID to value:
-        ``n_zq_nodes``, ``n_pixel``, ``zq_limits``, ``zq_window`` and
+        ``n_zq_nodes``, ``n_pixel``, ``zq_limits``, ``zq_window``,
+        ``n_density_edges`` and ``n_density_edges_kept`` (all and
+        panel-boundary density-table redshift cell edges) and
         ``fallback_counts`` of the legacy grid queries. The effective redshift,
         ``N1``, ``A`` and ``P_pixel`` are added by
         ``PreparedForecast.provenance`` once the weights exist.
@@ -1796,6 +1818,12 @@ def _integration_bin_record(spec_id, integration_record):
         "zq_limits": {k: v["zq_limits"] for k, v in integration_record.items()},
         "zq_window": {
             k: v["nodes"]["window_zq"] for k, v in integration_record.items()
+        },
+        "n_density_edges": {
+            k: v["n_density_edges"] for k, v in integration_record.items()
+        },
+        "n_density_edges_kept": {
+            k: v["n_density_edges_kept"] for k, v in integration_record.items()
         },
         "fallback_counts": {
             k: v["fallback_counts"] for k, v in integration_record.items()

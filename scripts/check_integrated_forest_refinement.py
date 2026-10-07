@@ -297,10 +297,11 @@ def midpoint_check(spec, field_id, alias, readers, config, *, n_y, n_u):
     The weights are the pixel-local seed of the recurrence, w = (B/Delta_v) /
     ((B/Delta_v) + v) with the pixel variance v of each node, so that the check
     isolates the (z_q, lambda) quadrature from the weight solve. The panel
-    boundaries (window ends, overlap kinks, density-table edges and S/N
+    boundaries (window ends, overlap kinks, all density-table edges and S/N
     source-redshift nodes inside the window) are rebuilt here from the
-    configuration, not taken from the production nodes; the midpoint rule is
-    second-order accurate on every panel. The magnitude nodes are those of the
+    configuration, not taken from the production nodes, which keep only the
+    density edges where the cell density changes; the finer partition is a valid
+    reference, and the midpoint rule is second-order accurate on every panel. The magnitude nodes are those of the
     production source.
     """
     source = spec.forests[field_id].integrated

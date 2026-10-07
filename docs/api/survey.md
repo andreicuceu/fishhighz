@@ -176,3 +176,7 @@ magnitude and a $10^{20}$ variance outside the table).
 ```{eval-rst}
 .. autofunction:: fishhighz.survey_tables.sample_forest_tables
 ```
+
+```{eval-rst}
+.. autofunction:: fishhighz.survey_tables.density_discontinuity_edges
+```

@@ -167,8 +167,10 @@ def integration_nodes(
         Source-redshift limits (the field's min/max forest source redshift).
     zq_breaks : array_like
         Source redshifts at which the density or S/N tables are non-smooth
-        (density cell edges, S/N z_q nodes); those inside the window become
-        panel boundaries. May be empty.
+        (S/N z_q nodes and the density cell edges at which the cell density
+        changes, see survey_tables.density_discontinuity_edges); those inside
+        the window become panel boundaries. Order and duplicates are
+        irrelevant. May be empty.
     zq_order : int
         Gauss-Legendre order per y panel.
     lambda_order : int

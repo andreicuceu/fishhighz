@@ -347,8 +347,10 @@ revision, orders and requested limits) only in the integrated mode.
 `PreparedForecast.provenance["bins"][i]["forest_source_integration"]` (also
 `result.prepared.provenance`) holds, per forest field ID, `z_eff` (weight-averaged
 pixel redshift), `N1`, `A`, `P_pixel`, the node counts `n_zq_nodes` and `n_pixel`,
-the source-redshift limits and window, and the counts of out-of-table queries. The numerical cost scales with the number of pixel nodes times the
-magnitude nodes; the weight solve dominates preparation.
+the source-redshift limits and window, the numbers of density-table redshift cell
+edges `n_density_edges` and of those kept as panel boundaries
+`n_density_edges_kept`, and the counts of out-of-table queries. The numerical cost
+scales with the number of pixel nodes times the magnitude nodes; the weight solve dominates preparation.
 
 ## Compact installed recipe
 

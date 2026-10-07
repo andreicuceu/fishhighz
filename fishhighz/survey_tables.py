@@ -523,6 +523,59 @@ class CellHistogram2D:
         return self._padded[z_index, magnitude_index]
 
 
+def density_discontinuity_edges(z_edges, cell_density):
+    """Select the redshift cell edges at which a cell density is discontinuous.
+
+    Parameters
+    ----------
+    z_edges : array_like
+        Strictly increasing redshift cell edges, shape (n_z + 1,).
+    cell_density : array_like
+        Piecewise-constant cell density dN/(dz dm dOmega), shape
+        (n_z, n_magnitude); row i holds the density on [z_edges[i],
+        z_edges[i + 1]).
+
+    Returns
+    -------
+    edges : ndarray
+        New float64 array, shape (n_kept,) with 2 <= n_kept <= n_z + 1, of the
+        outer edges and of the interior edges separating cells whose density
+        rows differ, in the input order and with the input values.
+
+    Raises
+    ------
+    ValueError
+        If z_edges is not one-dimensional with at least two entries, or
+        cell_density is not two-dimensional with len(z_edges) - 1 rows.
+
+    Notes
+    -----
+    The outer edges are always kept: outside them the sampled density drops to
+    DENSITY_FLOOR. An interior edge between cells i - 1 and i is a
+    discontinuity of the density in redshift unless the two rows are equal in
+    every magnitude column; it is then not a non-smooth point of the integrand
+    and need not be a quadrature panel boundary. Rows are compared with exact
+    float64 equality and no tolerance: the density is piecewise constant, so
+    any difference, however small, is a genuine jump, and keeping it can only
+    add a panel. Edge values are copied unchanged, never recomputed, so that a
+    table without equal adjacent rows returns every edge bit for bit.
+    """
+    z_edges = np.asarray(z_edges, dtype=np.float64)
+    cell_density = np.asarray(cell_density, dtype=np.float64)
+    if z_edges.ndim != 1 or len(z_edges) < 2:
+        raise ValueError("z_edges must be one-dimensional with at least two edges")
+    if cell_density.ndim != 2 or cell_density.shape[0] != len(z_edges) - 1:
+        raise ValueError(
+            f"cell_density must have shape (n_z, n_magnitude) with n_z = "
+            f"{len(z_edges) - 1} rows, got {cell_density.shape}"
+        )
+
+    # Interior edge i separates rows i - 1 and i; the outer edges are kept.
+    row_changes = np.any(cell_density[1:] != cell_density[:-1], axis=1)
+    keep_mask = np.concatenate([[True], row_changes, [True]])
+    return np.array(z_edges[keep_mask], dtype=np.float64)
+
+
 @dataclass(frozen=True, init=False, eq=False)
 class DensityTable:
     """Source-density table of explicit cell counts per square degree.
@@ -1293,6 +1346,25 @@ class SourceDensity:
             ),
         )
 
+    @property
+    def cell_density(self):
+        """Forest-normalised cell densities sampled by this adapter.
+
+        Returns
+        -------
+        cell_density : ndarray
+            Read-only view of the in-domain cell values in deg^-2 redshift^-1
+            mag^-1, shape (n_z, n_magnitude), on the cells bounded by
+            ``reader.z_edges`` and ``reader.magnitude_edges``. These are the
+            values returned by ``sample`` and ``sample_grid`` inside the cell
+            edges (magnitude mask and target normalisation applied); they can
+            differ from ``reader.density`` at the rounding level because of the
+            reference normalisation reduction order.
+        """
+        view = np.asarray(self._histogram.values).view()
+        view.flags.writeable = False
+        return view
+
     def sample(self, z, magnitudes):
         """Evaluate the cell density with the exterior floor.
 
@@ -1871,6 +1943,7 @@ __all__ = [
     "ForestSNR",
     "SNRTable",
     "SourceDensity",
+    "density_discontinuity_edges",
     "sample_forest_tables",
     "snr_grid_separable",
     "snr_grid_values",

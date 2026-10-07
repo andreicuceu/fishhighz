@@ -19,6 +19,11 @@ from fishhighz.forest_integration import integrated_forest_source, integration_n
 from fishhighz.geometry import SPEED_LIGHT_KMS
 from fishhighz.models.templates import prepare_template
 from fishhighz.public import PreparedForecast
+from fishhighz.survey_tables import (
+    DensityTable,
+    SourceDensity,
+    density_discontinuity_edges,
+)
 from fishhighz.weights import (
     density_per_velocity,
     prepare_forest_weights,
@@ -798,3 +803,270 @@ def test_survey_refinement_ladder_bao_errors_converge(tmp_path):
     relative = np.abs(sigma[2] / sigma[1] - 1)
     assert np.all(relative < 1e-3)
     assert np.all(np.isfinite(sigma)) and np.all(sigma > 0)
+
+
+# ---------------------------------------------------------------------------
+# Density breakpoints only at genuine cell-density discontinuities.
+# ---------------------------------------------------------------------------
+
+
+def test_discontinuity_edges_drop_repeated_rows_and_keep_jumps():
+    """Edges between equal rows are dropped; jumps and outer edges are kept."""
+    z_edges = np.array([1.0, 1.1, 1.2, 1.3, 1.4, 1.5])
+    row_a, row_b = [1.0, 2.0, 3.0], [1.5, 2.0, 3.0]
+    cell_density = np.array([row_a, row_a, row_b, row_b, row_b])
+    kept = density_discontinuity_edges(z_edges, cell_density)
+    assert kept.dtype == np.float64
+    np.testing.assert_array_equal(kept, [1.0, 1.2, 1.5])
+
+    # A uniform table keeps only the outer edges, beyond which the density
+    # drops to the exterior floor.
+    uniform = np.ones((5, 3))
+    np.testing.assert_array_equal(
+        density_discontinuity_edges(z_edges, uniform), [1.0, 1.5]
+    )
+
+
+def test_discontinuity_edges_keep_single_column_change():
+    """A difference in one magnitude column, even at roundoff, is a jump."""
+    z_edges = np.array([2.0, 2.1, 2.2])
+    cell_density = np.array([[1.0, 2.0], [1.0, np.nextafter(2.0, 3.0)]])
+    np.testing.assert_array_equal(
+        density_discontinuity_edges(z_edges, cell_density), z_edges
+    )
+
+
+def test_discontinuity_edges_without_repeats_return_all_edges():
+    """Distinct adjacent rows return every edge, bit for bit, as a new array."""
+    z_edges = np.linspace(1.9, 3.4, 31)
+    cell_density = np.random.default_rng(3).uniform(0.5, 2.0, size=(30, 4))
+    kept = density_discontinuity_edges(z_edges, cell_density)
+    assert kept is not z_edges and not np.shares_memory(kept, z_edges)
+    np.testing.assert_array_equal(kept, z_edges)
+
+
+def test_discontinuity_edges_single_cell_keeps_both_edges():
+    """A one-cell table has no interior edge; both outer edges are kept."""
+    z_edges = np.array([2.0, 2.5])
+    np.testing.assert_array_equal(
+        density_discontinuity_edges(z_edges, np.ones((1, 3))), z_edges
+    )
+
+
+@pytest.mark.parametrize(
+    "z_edges, cell_density",
+    [
+        (np.array([1.0]), np.ones((0, 2))),
+        (np.ones((3, 1)), np.ones((2, 2))),
+        (np.array([1.0, 1.1, 1.2]), np.ones((3, 2))),
+        (np.array([1.0, 1.1, 1.2]), np.ones(2)),
+    ],
+)
+def test_discontinuity_edges_reject_inconsistent_shapes(z_edges, cell_density):
+    """Edges must be 1D with n_z + 1 entries and the density (n_z, n_m)."""
+    with pytest.raises(ValueError):
+        density_discontinuity_edges(z_edges, cell_density)
+
+
+@pytest.mark.parametrize(
+    "z_norm_min, magnitude_bounds",
+    [(None, None), (2.02, (None, 21.5))],
+)
+def test_source_density_cell_density_is_the_sampled_array(
+    tmp_path, z_norm_min, magnitude_bounds
+):
+    """SourceDensity.cell_density holds the in-domain values of sample_grid.
+
+    A Delta z = 0.01 table with dN/dz constant in two blocks of five cells keeps
+    equal rows equal after normalisation, with or without a normalisation
+    threshold and a magnitude mask, so only the block boundary survives.
+    """
+    z_centres = 2.005 + 0.01 * np.arange(10)
+    magnitude_centres = np.array([20.0, 21.0, 22.0])
+    block_counts = np.repeat([3.0, 7.0], 5)
+    rows = [
+        (z, magnitude, count * (1 + index))
+        for z, count in zip(z_centres, block_counts, strict=True)
+        for index, magnitude in enumerate(magnitude_centres)
+    ]
+    path = tmp_path / "density.txt"
+    np.savetxt(path, np.array(rows))
+    table = DensityTable(
+        path,
+        semantics="cell_count_per_deg2",
+        target_density=100.0,
+        z_norm_min=z_norm_min,
+        magnitude_bounds=magnitude_bounds,
+    )
+    density = SourceDensity(table)
+
+    cell_density = density.cell_density
+    assert cell_density.shape == (10, 3) and not cell_density.flags.writeable
+    sampled = density.sample_grid(z_centres, magnitude_centres)["values"]
+    np.testing.assert_array_equal(cell_density, sampled)
+    kept = density_discontinuity_edges(table.z_edges, cell_density)
+    np.testing.assert_array_equal(kept, table.z_edges[[0, 5, 10]])
+
+
+class _FineCellDensity(_ConstantVelocityDensity):
+    """dn/dz piecewise constant on Delta z = 0.01 cells, without cell values.
+
+    Parameters
+    ----------
+    cell_steps : array_like of shape (150,)
+        Redshift dependence of each cell; the density is
+        cell_steps[cell] * _amplitude(m).
+    """
+
+    z_edges = np.linspace(1.9, 3.4, 151)
+
+    def __init__(self, cell_steps):
+        self._cell_steps = np.asarray(cell_steps, dtype=float)
+
+    def sample_grid(self, z, magnitudes):
+        """Return the cell density on a (z, magnitude) grid."""
+        cell = np.searchsorted(self.z_edges, np.asarray(z), side="right") - 1
+        cell = np.clip(cell, 0, len(self._cell_steps) - 1)
+        values = self._cell_steps[cell][:, None] * _amplitude(magnitudes)[None, :]
+        return {"values": values, "provenance": {"counts": {}}}
+
+
+class _FineCellDensityWithCells(_FineCellDensity):
+    """_FineCellDensity exposing its cell values, as SourceDensity does."""
+
+    @property
+    def cell_density(self):
+        """Cell densities on the magnitude axis, shape (150, 2)."""
+        return self._cell_steps[:, None] * _amplitude(MAGNITUDE_AXIS)[None, :]
+
+
+class _NodeOnlySNR(_MagnitudeOnlySNR):
+    """Magnitude-only variance with the S/N source-redshift nodes of _TableSNR."""
+
+    z = _TableSNR.z
+
+
+# Five target-like blocks of identical rows (cells 0-24, 25-59, 60-99, 100-149)
+# and the equivalent table with every adjacent row distinct.
+REPEATED_STEPS = np.repeat([0.6, 1.0, 1.7, 1.1], [25, 35, 40, 50])
+DISTINCT_STEPS = 1.0 + 0.01 * np.arange(150)
+
+
+def _fine_cell_source(tmp_path, density):
+    """Integrated lya(qso) source and bin record of the one-bin survey.
+
+    Parameters
+    ----------
+    tmp_path : pathlib.Path
+        Directory receiving the INI.
+    density : _FineCellDensity
+        Density adapter of the forest field.
+
+    Returns
+    -------
+    source : IntegratedForestSource
+        Integrated source of lya(qso) in the single bin.
+    record : dict
+        Per-bin ``forest_source_integration`` provenance block.
+    """
+    config = _small_config(
+        tmp_path,
+        integrated=True,
+        extra={
+            "numerical": {
+                "forest_zq_order": "4",
+                "forest_lambda_order": "8",
+                "forest_lambda_panels": "1",
+            },
+            "field lya(qso)": {"min_zq_forest": "1.9"},
+        },
+    )
+    readers = _readers(config)
+    readers["lya(qso)"]["density"] = density
+    readers["lya(qso)"]["snr"] = _NodeOnlySNR()
+    survey = fishhighz.prepare_survey(
+        config, background=_Background(), template=_template(), readers=readers
+    )
+    source = survey.bins[0].forests["lya(qso)"].integrated
+    record = survey.provenance["bins"][0]["forest_source_integration"]
+    return source, record
+
+
+def _fixed_weight_first_moment(source):
+    """N1 = sum(measure w) at fixed weights w = c / (c + variance), c = 10."""
+    measure, variance = source.measure.ravel(), source.variance.ravel()
+    coefficient = 10.0
+    return np.sum(measure * coefficient / (coefficient + variance))
+
+
+def test_survey_drops_repeated_density_edges(tmp_path):
+    """Repeated-row edges are not panels; jumps, S/N nodes and moments survive.
+
+    The density is constant across a dropped edge and the overlap length and
+    (1+z_q) factor are smooth there, so the measure sum and a fixed-weight N1
+    agree with the all-edges construction at the quadrature-error level.
+    """
+    reduced, reduced_record = _fine_cell_source(
+        tmp_path, _FineCellDensityWithCells(REPEATED_STEPS)
+    )
+    full, full_record = _fine_cell_source(tmp_path, _FineCellDensity(REPEATED_STEPS))
+    assert reduced_record["n_density_edges"]["lya(qso)"] == 151
+    assert reduced_record["n_density_edges_kept"]["lya(qso)"] == 5
+    assert full_record["n_density_edges_kept"]["lya(qso)"] == 151
+    assert reduced.info["n_density_edges_kept"] == 5
+
+    info = reduced.info["nodes"]
+    y_breakpoints = np.asarray(info["y_breakpoints"])
+    window = info["window_zq"]
+    z_edges = _FineCellDensity.z_edges
+    jumps = z_edges[[25, 60, 100]]
+    for z_break in np.r_[jumps, _NodeOnlySNR.z]:
+        if window[0] < z_break < window[1]:
+            assert np.min(np.abs(y_breakpoints - np.log1p(z_break))) < 1e-12
+
+    # Interior repeated-row edges away from any S/N node are not panel bounds.
+    repeated = np.delete(z_edges, [0, 25, 60, 100, 150])
+    inside = repeated[(repeated > window[0]) & (repeated < window[1])]
+    away = inside[
+        np.min(np.abs(inside[:, None] - _NodeOnlySNR.z[None, :]), axis=1) > 1e-9
+    ]
+    assert len(away) > 50
+    for z_break in away:
+        assert np.min(np.abs(y_breakpoints - np.log1p(z_break))) > 1e-9
+    assert info["n_y_panels"] < full.info["nodes"]["n_y_panels"]
+
+    np.testing.assert_allclose(
+        np.sum(reduced.measure), np.sum(full.measure), rtol=1e-10, atol=0
+    )
+    np.testing.assert_allclose(
+        _fixed_weight_first_moment(reduced),
+        _fixed_weight_first_moment(full),
+        rtol=1e-10,
+        atol=0,
+    )
+
+
+def test_survey_without_repeated_rows_is_bit_identical(tmp_path):
+    """Distinct adjacent rows: nodes, measure and variance are unchanged."""
+    reduced, reduced_record = _fine_cell_source(
+        tmp_path, _FineCellDensityWithCells(DISTINCT_STEPS)
+    )
+    full, _ = _fine_cell_source(tmp_path, _FineCellDensity(DISTINCT_STEPS))
+    assert reduced_record["n_density_edges_kept"]["lya(qso)"] == 151
+    assert reduced.info["nodes"] == full.info["nodes"]
+    for name in (
+        "zq_nodes",
+        "zq_weights",
+        "y_index",
+        "z_q",
+        "lam_obs",
+        "velocity_weights",
+        "geom",
+        "z_pix",
+    ):
+        np.testing.assert_array_equal(
+            getattr(reduced.nodes, name), getattr(full.nodes, name)
+        )
+    assert reduced.nodes.bin_length_velocity == full.nodes.bin_length_velocity
+    np.testing.assert_array_equal(reduced.measure, full.measure)
+    np.testing.assert_array_equal(reduced.variance, full.variance)

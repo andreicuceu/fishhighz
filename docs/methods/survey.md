@@ -144,12 +144,37 @@ so that the sums of the central mode, `L*I1` etc., become `N1 = sum(mu w)`, `N2`
 and constant `dn/dv_q`, `N1` equals `(b-a) K` and the central `L*I1`.
 
 Quadrature. Composite Gauss-Legendre in `y` with panel boundaries at the window
-ends, the overlap kinks `u1-a` and `u2-b`, all density-table redshift cell edges
-and all S/N-table source-redshift nodes inside the window (boundaries closer than
-64 eps are merged); the overlap length is piecewise linear and integrated exactly,
-and the piecewise-constant density and piecewise-linear S/N are smooth inside each
-panel. Within each overlap, `forest_lambda_panels` equal wavelength panels each
-carry a `forest_lambda_order` rule; `forest_zq_order` is the order per `y` panel.
+ends, the overlap kinks `u1-a` and `u2-b`, the density-table redshift cell edges
+at which the cell density changes and all S/N-table source-redshift nodes inside
+the window (boundaries closer than 64 eps are merged); the overlap length is
+piecewise linear and integrated exactly, and the piecewise-constant density and
+piecewise-linear S/N are smooth inside each panel. Within each overlap,
+`forest_lambda_panels` equal wavelength panels each carry a `forest_lambda_order`
+rule; `forest_zq_order` is the order per `y` panel.
+
+Density breakpoints. A density cell edge is a panel boundary only if the
+normalised cell densities (`SourceDensity.cell_density`, the values sampled on the
+`y` nodes) of the two adjacent cells differ in at least one magnitude column
+(`survey_tables.density_discontinuity_edges`); the two outer edges are always
+kept. Rows are compared with exact float64 equality: for a piecewise-constant
+density any difference is a genuine jump. An edge between identical rows is not a
+discontinuity of the integrand, so merging the two cells into one panel leaves the
+integral unchanged and alters the moments only at the level of the quadrature
+error. Tables without identical adjacent rows give bit-identical nodes. The rule
+matters for the DESI-2 SRD LBG and LAE matched tables, written on a uniform
+`Delta z = 0.01` grid (115 cells) with dN/dz constant within each of five target
+bins: 110 of the 114 interior edges separate identical rows. In the SRD 15x2pt
+integrated forecast with these tables, keeping every edge gives 364 lya(lbg) `y`
+panels summed over the six bins and a peak memory of 16.5 GB; keeping only the
+discontinuities gives 39 panels and 4.8 GB. The BAO errors change by at most
+2.0e-5 (single spectra) and 1.9e-6 (joint per bin) relative, the quadrature error
+of the merged rule at `forest_zq_order = 16`: the all-edges result agrees with the
+merged rule at `forest_zq_order = 32` to 1.2e-6 and 1.2e-7. To recover the
+all-edges quadrature, pass a density adapter without `cell_density`, or raise
+`forest_zq_order` for a finer rule. Readers that expose cell edges but no
+`cell_density` keep every edge. The per-bin provenance records
+`n_density_edges` and `n_density_edges_kept` for each forest field.
+
 The geometry identity `sum(w_y overlap) = (b-a)(u2-u1)` holds to roundoff.
 Refinement of the orders is tested by the order ladder in
 `scripts/check_integrated_forest_refinement.py`, which also compares N1-N3 with a
