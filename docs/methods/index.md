@@ -12,6 +12,7 @@ arrays
 covariance
 fisher
 external
+eft
 templates
 kaiser
 geometry
