@@ -13,6 +13,7 @@ covariance
 fisher
 external
 eft
+primordial_features
 templates
 kaiser
 geometry
