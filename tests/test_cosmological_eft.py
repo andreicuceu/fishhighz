@@ -146,3 +146,26 @@ def test_scientific_production_guards():
         make(p, order="tree", feature=FeatureTemplate("log", 15.0))
     with pytest.raises(ValueError, match="independent AP"):
         CosmologicalEFTAdapter(p, 2.5, ["F"], ["f"], {"f": 0.97}, objects)
+
+
+def test_inactive_tracers_need_no_fictitious_bias_coefficients():
+    p = Provider()
+    defaults = {**p.defaults, "bF": -0.14, "beF": 0.2, "bG": 3.0}
+    adapter = CosmologicalEFTAdapter(
+        p,
+        2.5,
+        ["F", "G", "unavailable", "F"],
+        list(defaults),
+        defaults,
+        objects,
+        order="tree",
+        no_ir_resummation=True,
+    )
+    theta = np.array([adapter.defaults[n] for n in adapter.names])
+    k = np.array([0.02, 0.08])
+    mu = np.array([0.2, 0.7])
+    result = adapter(theta, 2.5, k, mu, np.array([[0, 0], [0, 1], [1, 1], [0, 3]]))
+    np.testing.assert_array_equal(result[:, 0], result[:, 3])
+    assert np.isfinite(result).all()
+    with pytest.raises(ValueError, match="requested pairs"):
+        adapter(theta, 2.5, k, mu, np.array([[2, 2]]))

@@ -110,8 +110,6 @@ class CosmologicalEFTAdapter:
         if km.ndim != 1:
             raise ValueError("require paired one-dimensional k and mu")
         objects = self.tracer_parameters(p, float(state.growth_rate[i]))
-        if not set(self.tracers) <= objects.keys():
-            raise ValueError("missing physical tracer coefficients")
         pairs = np.asarray(pairs, dtype=int)
         if (
             pairs.ndim != 2
@@ -120,6 +118,9 @@ class CosmologicalEFTAdapter:
             or np.any(pairs >= len(self.tracers))
         ):
             raise ValueError("invalid observed field pairs")
+        requested_tracers = {self.tracers[index] for index in pairs.ravel()}
+        if not requested_tracers <= objects.keys():
+            raise ValueError("missing physical tracer coefficients for requested pairs")
         if state.key not in self._power:
             self._power[state.key] = CubicSpline(
                 np.log(state.k_reference), state.pk_linear[i]
