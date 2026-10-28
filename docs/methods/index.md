@@ -13,6 +13,7 @@ covariance
 fisher
 external
 eft
+local_png
 templates
 kaiser
 geometry
