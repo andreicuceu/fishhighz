@@ -99,7 +99,6 @@ class EFTModelAdapter:
                 nmax=nmax,
                 tree_only=order == "tree",
                 add_stochastic_terms=False,
-                master_integrals="analytic",
             )
             self.models.append(model)
         self._growth = None

@@ -5,13 +5,20 @@
 eftkernels separately (or the optional `eft` extra); importing FishHighz itself
 does not import it. The native INI model remains the existing built-in route.
 
-The adapter explicitly selects `master_integrals="analytic"`: the bundled
-scalar master tables use a frequency spacing different from the current
-FFTLog grid. Analytic masters are evaluated at the actual prepared exponents.
-The legacy table option and its frozen numerical answers remain untouched.
-Independent smooth halo SPT tests pass at 1e-4 of linear power; remaining
-forest selection-operator differences and high-k validity are documented in
-the study report, and its forest/joint forecasts remain exploratory.
+This route requires the companion [eftkernels PR #1](https://github.com/andreicuceu/eftkernels/pull/1)
+branch, including the local analytic-only API changes that remove the
+`master_integrals` keyword. Scalar masters are evaluated analytically at the
+runtime FFTLog exponents, with supported resolutions `nmax=128`, `256`, and
+`512`. No master-integral tables or selection option are needed.
+
+The EFT branch also corrects eight forest P13 factors. These corrections
+propagate directly into the adapter's loop spectra; earlier forest forecasts
+are not unchanged numerical references. See eftkernels'
+`documents/forest_p13_correction.md` and `documents/scalar_master_integrals.md`,
+with the scalar-master and halo SPT checks in `tests/test_master_integrals.py`
+and `tests/test_analytic_masters.py`. Adapter regression agreement does not
+establish FFTLog convergence or physical validity at high k; the forest and
+joint forecasts remain exploratory.
 
 The adapter supplies the ordinary external provider signature with paired
 `k, mu` nodes and `(node, pair)` output. Fields are F=0 and G=1. It uses
