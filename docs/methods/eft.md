@@ -53,3 +53,57 @@ Run with single-threaded BLAS; install matplotlib to build the companion
 technical report. The study's sample is not a validated DESI forecast. High-k
 model validity and remaining independent FFTLog loop residuals must be assessed
 from the delivered report; regression agreement alone does not settle them.
+
+## Reproducing the study and report
+
+Run the following from the FishHighz checkout, with the companion eftkernels
+checkout at `../eftkernels` and its reviewed API described above installed.
+The commands below were checked against eftkernels commit
+`72dbe1e05a6071527963b87225bc98b9f49669ae`. The validation generator is part
+of that source checkout, rather than the installed wheel. It computes the
+independent SPT quadratures; no precomputed loop-sum JSON is required.
+
+```bash
+python -m pip install -e ../eftkernels -e . matplotlib
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMBA_NUM_THREADS=1
+python examples/eft_3x2_study.py --output results/main
+python examples/eft_3x2_study.py --output results/refined --eft-mu 128 --output-k 840
+python examples/eft_3x2_study.py --output results/step_half --step-scale 0.5
+python examples/eft_3x2_study.py --output results/quadrature --k-order 20 --mu-order 32
+python examples/eft_3x2_study.py --output results/fft128 --nmax 128
+python ../eftkernels/tests/validate_halo_integrals.py
+python examples/eft_3x2_report.py --results results --output report
+```
+
+On PowerShell, replace the `export` line with
+`$env:OMP_NUM_THREADS=$env:OPENBLAS_NUM_THREADS=$env:MKL_NUM_THREADS=$env:NUMBA_NUM_THREADS='1'`.
+The main run uses radial/angular quadrature orders 14/20, 64 EFT angular
+samples, 420 output wavenumbers and FFTLog N=256. Each variant changes only
+the specified setting: interpolation resolution, derivative step, integration
+quadrature, or FFTLog resolution, respectively. These are numerical comparisons,
+not certification of convergence or validity at a given kmax.
+
+The halo validator writes `results/halo_integrals.json` and
+`results/halo_loop_sums.json` relative to the working directory. The latter is
+the report input. Each study writes `arrays.npz`, `forecasts.json` and
+`metadata.json`; regenerate older outputs because the report now also uses the
+saved whitened derivatives. The report checks all prerequisites before writing
+plots, LaTeX tables, `results/forecast_summary.csv` and
+`results/diagnostics.json`. It can be launched from another directory with
+explicit `--results` and `--output` paths; its study import is relative to the
+script. Singular higher-EFT-fixed fits record rank and null directions, with
+unidentifiable errors represented by JSON null and no regularization.
+
+The adapter caches the fiducial model set and reuses a separate working set
+for growth perturbations, avoiding all loop preparation on return to the
+fiducial growth rate. It does not share eftkernels' private preparation state
+between tracer models. AP coordinates and the volume factor use the same
+Kaiser helpers as the built-in model. This changes the last-bit AP arithmetic
+from the initial adapter, including exact isotropic boundary handling; it
+does not change the alpha/phi convention or numerical tolerances.
+
+Templates must supply `k`, `pk_full`, `pk_nw`, `growth_rate`, `rd_mpc_h` and
+`z_fiducial`. A FITS input to `read_template` must contain `PKNW`; the adapter
+does not silently replace it with `pk_smooth`. Paired nodes must have positive
+k and mu on [0, 1]; negative mu is rejected, since the real-valued provider
+does not represent odd-mu contributions.

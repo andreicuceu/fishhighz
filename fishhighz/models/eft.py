@@ -9,21 +9,32 @@ half-sum cross prescription in eftkernels. No covariance is differentiated.
 import numpy as np
 from scipy.interpolate import CubicSpline, RectBivariateSpline
 
+from fishhighz.kernels.kaiser import _coordinates, _scales
+
 
 def component_coordinates(k, mu, alpha, phi):
     """Map paired fiducial nodes using the FishHighz alpha/phi convention.
 
-    k is in h/Mpc; mu, alpha and phi are dimensionless. Return mapped k, mu
-    and the volume Jacobian. alpha=sqrt(q_parallel*q_perpendicular), rather
-    than the volume-averaged dilation alpha_iso.
+    Parameters
+    ----------
+    k, mu : ndarray of shape (n_node,)
+        Paired wavenumbers in h/Mpc and direction cosines on [0, 1].
+    alpha, phi : float
+        Positive dimensionless dilations. Here
+        alpha=sqrt(q_parallel*q_perpendicular), rather than alpha_iso.
+
+    Returns
+    -------
+    mapped_k, mapped_mu : ndarray of shape (n_node,)
+        Dilated wavenumbers in h/Mpc and dimensionless direction cosines.
+    jacobian : float
+        Dimensionless inverse dilation volume.
     """
-    if alpha <= 0 or phi <= 0:
-        raise ValueError("alpha and phi must be positive")
-    q_parallel, q_perpendicular = alpha / np.sqrt(phi), alpha * np.sqrt(phi)
-    parallel = k * mu / q_parallel
-    transverse = k * np.sqrt(1 - mu**2) / q_perpendicular
-    mapped_k = np.hypot(parallel, transverse)
-    return mapped_k, parallel / mapped_k, 1 / (q_parallel * q_perpendicular**2)
+    if not np.isfinite([alpha, phi]).all() or alpha <= 0 or phi <= 0:
+        raise ValueError("alpha and phi must be finite and positive")
+    q_parallel, q_perpendicular, jacobian = _scales((alpha, phi), 1)
+    mapped_k, mapped_mu, _, _ = _coordinates(k, mu, q_parallel, q_perpendicular)
+    return mapped_k, mapped_mu, jacobian
 
 
 class EFTModelAdapter:
@@ -32,8 +43,9 @@ class EFTModelAdapter:
     Parameters
     ----------
     fiducial : mapping
-        Explicit k, pk_full, pk_nw, growth_rate and rd_mpc_h, as returned by
-        eftkernels.read_template. Power is (Mpc/h)^3, k is h/Mpc.
+        Required keys: k, pk_full, pk_nw, growth_rate, rd_mpc_h and z_fiducial.
+        Power is (Mpc/h)^3, k is h/Mpc. For eftkernels.read_template inputs,
+        the FITS template must include PKNW; pk_smooth is not substituted.
     parameter_names : sequence of str
         Local vector order. ``f`` changes the prepared cosmology. ``alpha_s``,
         ``phi_s``, ``alpha_w`` and ``phi_w`` dilate smooth/wiggle separately.
@@ -73,10 +85,16 @@ class EFTModelAdapter:
         nmax=256,
         k_natural=1.0,
     ):
-        from eftkernels import EFTModel
-
         if order not in ("tree", "loop"):
             raise ValueError("order must be tree or loop")
+        required = {"k", "pk_full", "pk_nw", "growth_rate", "rd_mpc_h", "z_fiducial"}
+        missing = required.difference(fiducial)
+        if missing:
+            raise ValueError(
+                "EFT fiducial missing required keys: "
+                + ", ".join(sorted(missing))
+                + ". A read_template FITS input must include PKNW for pk_nw."
+            )
         self.fiducial = fiducial
         self.names = tuple(parameter_names)
         self.defaults, self.scales = dict(defaults), dict(scales or {})
@@ -85,26 +103,12 @@ class EFTModelAdapter:
             np.geomspace(0.005, 1.12, 420) if k_output is None else k_output,
             dtype=np.float64,
         )
-        self.models = []
-        forest, galaxy = (
-            dict(name="F", type="continuous"),
-            dict(name="G", type="discrete"),
-        )
+        self._num_mu, self._nmax = num_mu, nmax
         self.pairs = ((0, 0), (0, 1), (1, 1))
-        for a, b in ((forest, forest), (forest, galaxy), (galaxy, galaxy)):
-            model = EFTModel(
-                a,
-                b,
-                num_mu=num_mu,
-                nmax=nmax,
-                tree_only=order == "tree",
-                add_stochastic_terms=False,
-            )
-            self.models.append(model)
         self._growth = None
+        self._fiducial_models = None
+        self._working_models = None
         self.update_growth(fiducial["growth_rate"])
-        for model in self.models:
-            model.set_output_grid(self.k, num_mu)
         self.mu = self.models[0].muk_grid[:, 0].copy()
         self._tree_splines = {}
         if order == "tree":
@@ -119,26 +123,118 @@ class EFTModelAdapter:
                     np.vstack((angular(0.0), matter, angular(1.0))),
                 )
 
+    def _prepare_models(self, growth):
+        """Prepare one serial model set through the public EFT API."""
+        from eftkernels import EFTModel
+
+        models = []
+        forest, galaxy = (
+            dict(name="F", type="continuous"),
+            dict(name="G", type="discrete"),
+        )
+        for first, second in ((forest, forest), (forest, galaxy), (galaxy, galaxy)):
+            model = EFTModel(
+                first,
+                second,
+                num_mu=self._num_mu,
+                nmax=self._nmax,
+                tree_only=self.order == "tree",
+                add_stochastic_terms=False,
+            )
+            self._update_model(model, growth)
+            model.set_output_grid(self.k, self._num_mu)
+            models.append(model)
+        return models
+
+    def _update_model(self, model, growth):
+        """Install this adapter's fixed template at a new growth rate."""
+        template = self.fiducial
+        model.update_fiducial(
+            template["k"],
+            template["pk_full"],
+            template["pk_nw"],
+            growth,
+            template["rd_mpc_h"],
+        )
+
     def update_growth(self, growth):
-        """Update loop kernels and IR damping through the explicit EFT API."""
+        """Update loop kernels and IR damping through the public EFT API.
+
+        Parameters
+        ----------
+        growth : float
+            Finite dimensionless logarithmic growth rate, at fixed input power.
+
+        Returns
+        -------
+        None
+
+        Notes
+        -----
+        Keep the fiducial model set cached so returning from a growth stencil
+        does no FFTLog work. A second set is reused for nonfiducial growth,
+        bounding memory independently of the number of stencil points. This
+        avoids assigning eftkernels' private cosmology-dependent state. Tree
+        IR damping deliberately remains fixed at the fiducial growth rate.
+        """
+        if not np.isfinite(growth):
+            raise ValueError("growth must be finite")
         if growth == self._growth or (
             self.order == "tree" and self._growth is not None
         ):
             return
-        d = self.fiducial
-        for model in self.models:
-            model.update_fiducial(
-                d["k"], d["pk_full"], d["pk_nw"], growth, d["rd_mpc_h"]
-            )
+        if self._fiducial_models is None:
+            self._fiducial_models = self._prepare_models(growth)
+            self.models = self._fiducial_models
+        elif growth == self.fiducial["growth_rate"]:
+            self.models = self._fiducial_models
+        else:
+            if self._working_models is None:
+                self._working_models = self._prepare_models(growth)
+            else:
+                for model in self._working_models:
+                    self._update_model(model, growth)
+            self.models = self._working_models
         self._growth = growth
 
     def __call__(self, theta_local, z, k, mu, pairs):
-        """Return signed clustering means with shape (node, requested pair)."""
+        """Evaluate signed clustering means, excluding observational noise.
+
+        Parameters
+        ----------
+        theta_local : array_like of shape (n_parameter,)
+            Local parameter values in the order and units of parameter_names.
+        z : float
+            Dimensionless template redshift.
+        k, mu : ndarray of shape (n_node,)
+            Paired positive wavenumbers in h/Mpc and direction cosines on [0, 1].
+        pairs : sequence of (int, int)
+            Requested field pairs, with F=0, G=1. Reversed pairs are equivalent.
+
+        Returns
+        -------
+        output : ndarray of float64, shape (n_node, n_pair)
+            Signed mean power in (Mpc/h)^3, including pair stochasticity.
+
+        Raises
+        ------
+        ValueError
+            If redshift or nodes are invalid, or AP maps outside the output grid.
+        """
+        k, mu = np.asarray(k, dtype=np.float64), np.asarray(mu, dtype=np.float64)
+        if (
+            k.ndim != 1
+            or mu.shape != k.shape
+            or not np.isfinite(k).all()
+            or not np.isfinite(mu).all()
+            or np.any(k <= 0)
+            or np.any((mu < 0) | (mu > 1))
+        ):
+            raise ValueError("k must be positive paired nodes and mu must be on [0, 1]")
         if abs(z - self.fiducial["z_fiducial"]) > 1e-12:
             raise ValueError("EFT adapter requires the supplied template redshift")
         parameters = dict(self.defaults)
         parameters.update(zip(self.names, theta_local))
-        self.update_growth(parameters.get("f", self.fiducial["growth_rate"]))
         physical = {
             name: value * self.scales.get(name, 1.0)
             for name, value in parameters.items()
@@ -153,16 +249,23 @@ class EFTModelAdapter:
                     parameters.get("phi_" + suffix, 1.0),
                 )
             )
+        for mapped_k, _, _ in query:
+            if np.any(mapped_k < self.k[0]) or np.any(mapped_k > self.k[-1]):
+                raise ValueError("AP query outside padded EFT output grid")
+        self.update_growth(parameters.get("f", self.fiducial["growth_rate"]))
         output = np.empty((len(k), len(pairs)), dtype=np.float64)
+        pair_power = {}
         for column, pair in enumerate(pairs):
-            index = self.pairs.index(tuple(sorted(pair)))
+            canonical_pair = tuple(sorted(pair))
+            if canonical_pair in pair_power:
+                output[:, column] = pair_power[canonical_pair]
+                continue
+            index = self.pairs.index(canonical_pair)
             model = self.models[index]
             output[:, column] = 0.0
             for component, (mapped_k, mapped_mu, jacobian) in zip(
                 ("smooth", "wiggle"), query
             ):
-                if np.any(mapped_k < self.k[0]) or np.any(mapped_k > self.k[-1]):
-                    raise ValueError("AP query outside padded EFT output grid")
                 if self.order == "tree":
                     growth = parameters.get("f", self.fiducial["growth_rate"])
                     kernels = (
@@ -195,4 +298,5 @@ class EFTModelAdapter:
                     + mapped_mu**2 * physical.get(f"stoch_{label}_mu2", 0.0)
                 )
             )
+            pair_power[canonical_pair] = output[:, column]
         return output

@@ -30,17 +30,28 @@ PAIR_NAMES = ("FF", "FG", "GG")
 
 
 def configuration():
-    d = read_template()
-    d = {
+    """Return the z=2.3 template, local fiducials, physical scales and sigma8.
+
+    Returns
+    -------
+    template : dict
+        EFT template with k in h/Mpc and power in (Mpc/h)^3.
+    values, scales : dict of str to float
+        Dimensionless local fiducials and conversions to physical EFT units.
+    sigma8 : float
+        Dimensionless normalization at the template redshift.
+    """
+    template = read_template()
+    template = {
         key: np.asarray(value, dtype=float) if isinstance(value, np.ndarray) else value
-        for key, value in d.items()
+        for key, value in template.items()
     }
     values = dict(
         alpha_w=1.0,
         phi_w=1.0,
         alpha_s=1.0,
         phi_s=1.0,
-        f=d["growth_rate"],
+        f=template["growth_rate"],
         bias_F=-0.14,
         bias_eta_F=-0.21,
         bias_G=2.4,
@@ -80,7 +91,7 @@ def configuration():
         Path(__import__("eftkernels").__file__).parent / "templates/Planck18_z2.3.fits"
     ) as hd:
         sigma8 = float(hd[1].header["SIGMA8_ZREF"])
-    return d, values, scales, sigma8
+    return template, values, scales, sigma8
 
 
 def identifiable_errors(design, tolerance=1e-9):
@@ -89,7 +100,29 @@ def identifiable_errors(design, tolerance=1e-9):
     SVD is applied to column-normalized, whitened mean derivatives. Solves on
     the identifiable subspace supply variances only for estimable coordinates;
     a null direction never becomes a finite error via a pseudoinverse.
+
+    Parameters
+    ----------
+    design : ndarray of shape (n_observation, n_parameter)
+        Whitened mean derivatives, in inverse local parameter units.
+    tolerance : float, default=1e-9
+        Relative cutoff on column-normalized singular values.
+
+    Returns
+    -------
+    errors : ndarray of shape (n_parameter,)
+        Marginal errors in local units; infinity for unidentifiable coordinates.
+    rank : int
+        Number of retained singular directions.
+    null : ndarray of shape (n_null, n_parameter)
+        Unit null directions in local parameter coordinates.
+    singular : ndarray
+        Singular values of the column-normalized design.
     """
+    # Economy SVD otherwise omits null directions when there are fewer rows
+    # than parameters. Zero rows complete the basis without forming a huge U.
+    if design.shape[0] < design.shape[1]:
+        design = np.pad(design, ((0, design.shape[1] - design.shape[0]), (0, 0)))
     norm = np.linalg.norm(design, axis=0)
     norm = np.where(norm > 0, norm, 1.0)
     _, s, vh = np.linalg.svd(design / norm, full_matrices=False)
@@ -130,13 +163,29 @@ def marginal_pca(design, names):
 
 
 def run(args):
-    t = time.perf_counter()
+    """Write idealized tree/loop forecasts and numerical diagnostics.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Output directory, quadrature orders, EFT resolutions and dimensionless
+        finite-difference step multiplier, as specified by the command line.
+
+    Returns
+    -------
+    None
+        Writes arrays.npz, forecasts.json and metadata.json under args.output.
+    """
+    started = time.perf_counter()
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=True)
-    d, values, scales, sigma8 = configuration()
+    template, values, scales, sigma8 = configuration()
     names = list(values)
     grid = gauss_legendre_grid(
-        [0.02] + KMAX, k_order=args.k_order, mu_order=args.mu_order, h_fid=d["H0"] / 100
+        [0.02] + KMAX,
+        k_order=args.k_order,
+        mu_order=args.mu_order,
+        h_fid=template["H0"] / 100,
     )
     fields = [
         ObservedField("F", "forest", "F", "idealized"),
@@ -144,7 +193,7 @@ def run(args):
     ]
     all_selection = PairSelection(fields)
     loop = EFTModelAdapter(
-        d,
+        template,
         names,
         values,
         scales,
@@ -154,7 +203,7 @@ def run(args):
     )
     k, mu = grid.k_flat, grid.mu_flat
     fid = np.array([values[n] for n in names])
-    signal = loop(fid, d["z_fiducial"], k, mu, all_selection.required_pairs)
+    signal = loop(fid, template["z_fiducial"], k, mu, all_selection.required_pairs)
     noise = np.tile([100.0, 0.0, 5000.0], (len(k), 1))
     total = signal + noise
     field_corr = total[:, 1] / np.sqrt(total[:, 0] * total[:, 2])
@@ -181,7 +230,7 @@ def run(args):
             loop
             if order == "loop"
             else EFTModelAdapter(
-                d,
+                template,
                 order_names,
                 values,
                 scales,
@@ -198,11 +247,11 @@ def run(args):
             [P3DProvider("eft", model, binding, all_selection.required_pairs)],
         )
         deriv = evaluate_derivatives(
-            prepared, registry.fiducials, d["z_fiducial"], k, mu
+            prepared, registry.fiducials, template["z_fiducial"], k, mu
         )
         arrays[order + "_power"] = deriv.power
         arrays[order + "_jacobian"] = deriv.jacobian
-        print(order, "derivatives completed", time.perf_counter() - t, flush=True)
+        print(order, "derivatives completed", time.perf_counter() - started, flush=True)
         for data, selected in [
             ("FF", [("F", "F")]),
             ("GG", [("G", "G")]),
@@ -231,6 +280,9 @@ def run(args):
             factors = factor_covariance(covariance)
             jac = deriv.jacobian[:, chosen, :][:, :, active]
             white = np.linalg.solve(factors, jac)
+            # Retain the design rather than reconstructing it from F=J.T@J;
+            # the report needs its null space when higher EFT biases are fixed.
+            arrays[f"{order}_{data}_whitened"] = white
             for cut in KMAX:
                 mask = k <= cut
                 design = white[mask].reshape(-1, len(active))
@@ -279,10 +331,10 @@ def run(args):
         (output / "forecasts.json").write_text(json.dumps(summaries, indent=2))
     metadata = dict(
         volume_mpc_h3=20e9,
-        z=d["z_fiducial"],
+        z=template["z_fiducial"],
         sigma8=sigma8,
-        f=d["growth_rate"],
-        fsigma8=d["growth_rate"] * sigma8,
+        f=template["growth_rate"],
+        fsigma8=template["growth_rate"] * sigma8,
         noise_F=100.0,
         galaxy_density=2e-4,
         defaults=values,
@@ -290,7 +342,7 @@ def run(args):
         settings=vars(args),
         python=platform.python_version(),
         max_field_correlation=float(np.max(np.abs(field_corr))),
-        seconds=time.perf_counter() - t,
+        seconds=time.perf_counter() - started,
     )
     (output / "metadata.json").write_text(json.dumps(metadata, indent=2))
     print("completed", metadata["seconds"], flush=True)
