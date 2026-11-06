@@ -30,6 +30,10 @@ for Lyα forest and galaxy clustering. The forecast formalism is documented in
 
 ## Invariants
 
+- All future forecasts that use FFTLog must use resolution `N >= 256`
+  (`nmax >= 256` in the EFT adapter). `N=128` is for tests and convergence
+  diagnostics only, not forecasts. This minimum does not replace convergence
+  checks for the actual forecast configuration.
 - Kernels accept explicit float64 arrays, scalars and integer indices, with no
   filesystem access, logging or configuration objects in numerical loops. Keep
   their arithmetic order stable: no fastmath, no reordering of reductions, no
