@@ -40,6 +40,17 @@ are independent polynomial coefficients, separate from known observational
 noise; the legacy half-sum cross prescription is disabled. The example leaves
 these residuals free under its bias/counterterm prior studies.
 
+This stochastic basis belongs to the adapter. Each pair p in {FF, FG, GG} adds
+`stoch_p_0 + (k/k_natural)**2 * (stoch_p_k2 + mu**2 * stoch_p_mu2)`, with
+`k_natural=1` h/Mpc by default. Here k and mu are the smooth-component AP-mapped
+coordinates, and the polynomial is multiplied by the smooth-component Jacobian.
+The adapter builds every `EFTModel` with
+`add_stochastic_terms=False`, so eftkernels' `Pshot, a0, a2, a4` templates and
+their normalization `k_nl` do not enter, and their defaults have no effect
+here. The adapter has no `mu**4` stochastic term. Without priors on the
+residual coefficients, `k_natural` only rescales `stoch_p_k2` and `stoch_p_mu2`
+(`stoch_p_0` is unaffected). It matters once priors are placed on them.
+
 The tree option uses the EFT tree matter components with fixed fiducial IR
 damping, multiplied by the exact varying K1 kernels. Growth information from
 an assumed damping width is excluded. Consequently forest-only tree spectra
@@ -59,7 +70,7 @@ from the delivered report; regression agreement alone does not settle them.
 Run the following from the FishHighz checkout, with the companion eftkernels
 checkout at `../eftkernels` and its reviewed API described above installed.
 The commands below were checked against eftkernels commit
-`72dbe1e05a6071527963b87225bc98b9f49669ae`. The validation generator is part
+`f305d5ba153446e4ec02252b968cd3121d973bed`. The validation generator is part
 of that source checkout, rather than the installed wheel. It computes the
 independent SPT quadratures; no precomputed loop-sum JSON is required.
 
