@@ -5,7 +5,8 @@
 eftkernels separately (or the optional `eft` extra); importing FishHighz itself
 does not import it. The native INI model remains the existing built-in route.
 
-This route requires the companion [eftkernels PR #1](https://github.com/andreicuceu/eftkernels/pull/1)
+This route requires eftkernels 0.2.0 or later, the version set by the companion
+[eftkernels PR #1](https://github.com/andreicuceu/eftkernels/pull/1)
 branch, including the local analytic-only API changes that remove the
 `master_integrals` keyword. Scalar masters are evaluated analytically at the
 runtime FFTLog exponents, with supported resolutions `nmax=128`, `256`, and
