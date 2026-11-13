@@ -34,6 +34,58 @@ jobs:
       - run: python -m ruff check --output-format=github .
       - run: python -m ruff format --check .
 
+  eft:
+    # The main test job does not install eftkernels, so the adapter tests are
+    # skipped there. This job installs it and fails if it cannot be imported.
+    name: EFT adapter (eftkernels)
+    runs-on: ubuntu-latest
+    # Repository secrets are not available to pull requests from forks.
+    if: github.event.pull_request.head.repo.fork != true
+    env:
+      # eftkernels 0.2.0 on the companion branch (andreicuceu/eftkernels#1);
+      # replace with a release tag once one exists.
+      EFTKERNELS_REF: 7a7bffcaa8657abb4a6a2ea2db6f1072070d964b
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Configure read access to the private eftkernels repository
+        env:
+          EFTKERNELS_DEPLOY_KEY: ${{ secrets.EFTKERNELS_DEPLOY_KEY }}
+        run: |
+          if [ -z "$EFTKERNELS_DEPLOY_KEY" ]; then
+            echo "::error::Secret EFTKERNELS_DEPLOY_KEY is not set"
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "$EFTKERNELS_DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+      - name: Install FishHighz, eftkernels and matplotlib
+        run: >-
+          python -m pip install -e ".[dev]" matplotlib
+          "eftkernels @ git+ssh://git@github.com/andreicuceu/eftkernels.git@${EFTKERNELS_REF}"
+      - name: Require the optional dependencies of the EFT tests
+        run: python -c "import eftkernels, matplotlib; print(eftkernels.__version__)"
+      - name: Run the EFT adapter and example tests with coverage
+        run: >-
+          python -m pytest tests/test_eft_adapter.py tests/test_eft_examples.py
+          -rs
+          --cov=fishhighz
+          --cov-report=xml
+          --cov-report=term
+      - name: Upload coverage to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage.xml
+          flags: eft
+          fail_ci_if_error: false
+
   tests:
     name: Tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
