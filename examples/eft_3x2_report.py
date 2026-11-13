@@ -41,10 +41,29 @@ def selected(data, order, prior, source):
     ]
 
 
+def target_errors(row):
+    """Return the marginal errors of the target parameters, selected by name.
+
+    Parameters
+    ----------
+    row : dict
+        Forecast record with parameter ``names`` and their ``errors`` in
+        local units; an unidentifiable error is stored as None.
+
+    Returns
+    -------
+    ndarray of shape (n_target,)
+        Errors in the order of ``study.TARGETS``; NaN where unidentifiable.
+    """
+    return np.array(
+        [row["errors"][row["names"].index(name)] for name in study.TARGETS], float
+    )
+
+
 def relative_errors(row, metadata):
     """Return five target errors in percent, with fractional fsigma8 error."""
-    errors = np.array(row["errors"][:5], float)
-    errors[4] *= metadata["sigma8"] / metadata["fsigma8"]
+    errors = target_errors(row)
+    errors[study.TARGETS.index("f")] *= metadata["sigma8"] / metadata["fsigma8"]
     return errors * 100
 
 
@@ -83,14 +102,27 @@ def fixed_higher_forecast(row, whitened, k_grid, sigma8):
         Finite errors in local units, null for unidentifiable coordinates,
         rank, singular values and null directions; fsigma8 is dimensionless.
     """
-    count = 5 + sum(name in ("bias_F", "bias_eta_F", "bias_G") for name in row["names"])
-    design = whitened[k_grid <= row["kmax"], :, :count].reshape(-1, count)
+    # Keep the targets and the linear biases; every other coefficient is fixed.
+    retained = [
+        index
+        for index, name in enumerate(row["names"])
+        if name in study.TARGETS or name in ("bias_F", "bias_eta_F", "bias_G")
+    ]
+    count = len(retained)
+    # np.take returns a C-contiguous array, so the reductions below keep the
+    # summation order (and rounding) of a contiguous column slice.
+    design = np.take(whitened[k_grid <= row["kmax"]], retained, axis=2).reshape(
+        -1, count
+    )
     errors, rank, null, singular = study.identifiable_errors(design)
+    growth_error = errors[[row["names"][index] for index in retained].index("f")]
     return {
         "data": row["data"],
         "kmax": row["kmax"],
         "errors": [float(value) if np.isfinite(value) else None for value in errors],
-        "fsigma8_error": float(errors[4] * sigma8) if np.isfinite(errors[4]) else None,
+        "fsigma8_error": float(growth_error * sigma8)
+        if np.isfinite(growth_error)
+        else None,
         "rank": rank,
         "nparameters": count,
         "singular_values": singular.tolist(),
@@ -311,8 +343,8 @@ def build_report(results, report):
         comp = []
         for rr in runs[variation]:
             baseline_row = base[signature(rr)]
-            errors = np.array(rr["errors"][:5], float)
-            baseline_errors = np.array(baseline_row["errors"][:5], float)
+            errors = target_errors(rr)
+            baseline_errors = target_errors(baseline_row)
             rel = np.abs(errors / baseline_errors - 1)
             comp.append(
                 {"signature": signature(rr), "max_target_change": float(np.nanmax(rel))}
@@ -445,7 +477,7 @@ def build_report(results, report):
         for r in rows:
             writer.writerow(
                 [r["order"], r["data"], r["kmax"], r["prior"]]
-                + r["errors"][:5]
+                + [r["errors"][r["names"].index(name)] for name in study.TARGETS]
                 + [r["fsigma8_error"], r["rank"], r["nparameters"]]
             )
 

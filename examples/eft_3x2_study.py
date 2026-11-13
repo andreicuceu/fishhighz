@@ -297,7 +297,7 @@ def run(args):
                         # Bias/counterterm priors only. Residual stochasticity stays free.
                         for j, n in enumerate(local_names):
                             if (
-                                j >= 5
+                                n not in TARGETS
                                 and n not in ("bias_F", "bias_eta_F", "bias_G")
                                 and not n.startswith("stoch_")
                             ):
@@ -306,6 +306,7 @@ def run(args):
                                 prior_rows.append(row)
                         augmented = np.vstack((design, prior_rows))
                     errors, rank, null, s = identifiable_errors(augmented)
+                    growth_error = errors[local_names.index("f")]
                     record = dict(
                         order=order,
                         data=data,
@@ -317,13 +318,15 @@ def run(args):
                         nparameters=len(active),
                         singular_values=s.tolist(),
                         null_directions=null.tolist(),
-                        fsigma8_error=float(errors[4] * sigma8)
-                        if np.isfinite(errors[4])
+                        fsigma8_error=float(growth_error * sigma8)
+                        if np.isfinite(growth_error)
                         else None,
                     )
                     if prior is None:
                         record["pca"] = (
-                            marginal_pca(design, local_names) if len(active) > 5 else []
+                            marginal_pca(design, local_names)
+                            if len(active) > len(TARGETS)
+                            else []
                         )
                         arrays[f"{order}_{data}_{cut}_fisher"] = information
                     summaries.append(record)
